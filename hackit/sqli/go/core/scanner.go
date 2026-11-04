@@ -25,6 +25,9 @@ type Result struct {
 	Prefix      string     `json:"prefix,omitempty"`
 	Suffix      string     `json:"suffix,omitempty"`
 	Columns     int        `json:"columns,omitempty"`
+	Database    string     `json:"database,omitempty"`
+	Schema      string     `json:"schema,omitempty"`
+	Table       string     `json:"table,omitempty"`
 	ColumnNames []string   `json:"column_names,omitempty"`
 	Rows        [][]string `json:"rows,omitempty"`
 }

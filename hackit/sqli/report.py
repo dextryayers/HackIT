@@ -31,6 +31,7 @@ FINDING_TYPES = {"boolean", "error", "time", "union", "stacked", "auth-bypass"}
 
 LIST_TYPES = {
     "list-dbs",
+    "list-schemas",
     "list-tables",
     "list-columns",
     "schema",
@@ -62,6 +63,7 @@ TYPE_LABELS = {
     "stacked": "Stacked query",
     "auth-bypass": "Authentication bypass",
     "list-dbs": "Databases",
+    "list-schemas": "Schemas",
     "list-tables": "Tables",
     "list-columns": "Columns",
     "schema": "Schema",

@@ -175,24 +175,28 @@ hackit vuln sqli -u "http://target.test/profile" -H "X-User-Id: 1" --level 3 --d
 | `--stealth` | Use low noise request pacing. |
 | `--time-secs` | Delay used by time based tests and extraction. |
 | `--extract-charset` | Character set for blind extraction. |
-| `--max-length` | Maximum length for blind extraction. |
+| `--max-length` | Maximum length for blind extraction. Default 4096. |
 
 ### Enumeration and extraction
 
 | Option | Description |
 | --- | --- |
+| `--deep` | Full automatic sweep: fingerprint, databases, schemas, tables, columns, row counts, sensitive dumps, then a shallow pass over everything else. |
 | `--dbs` | List databases. |
+| `--schemas` | List schemas inside each database. |
 | `--tables` | List tables. |
 | `--columns` | List columns. |
 | `--schema` | Show tables and column types. |
+| `--schema-name` | Schema to traverse for PostgreSQL, MSSQL, Oracle, Snowflake, DB2. |
 | `--count-rows` | Count rows per table. |
-| `--dump-table` | Dump one table. |
+| `--dump-table` | Dump one table. Accepts `table`, `db.table`, or `db.schema.table`. |
 | `--dump-all` | Dump every non-system table. |
+| `--dump-batch` | Rows fetched per request. Default 10. |
 | `--db` | Database name. |
 | `--table` | Table name. |
 | `--columns-csv` | Columns to dump, comma separated. |
 | `--rows`, `--limit`, `--offset` | Row limits and pagination. |
-| `--where` | Reserved for filtered dumps. Currently emits a warning. |
+| `--where` | WHERE fragment applied to dumps and row counts. |
 | `--search` | Search table and column names. |
 | `--sql-query` | Run a scalar SQL query. |
 | `--current-db` | Show the current database. |
@@ -225,7 +229,9 @@ clean for pipelines.
 
 ```text
 scan                         Fingerprint, enumerate databases, list tables
+deep                         Full sweep, including sensitive table dumps
 dbs                          List databases
+schemas [database]           List schemas
 tables <database>            List tables
 columns <database> <table>   List columns
 dump <database> <table>      Dump a table
@@ -240,6 +246,11 @@ exec --cmd <command>         Execute an OS command through the database
 report                       Generate a report from a scan or a JSON file
 gui                          Launch the desktop interface
 ```
+
+`deep` is the sqlmap-style automatic path: it fingerprints the session, lists
+databases and schemas, inventories tables and columns, counts rows, dumps the
+tables that usually hold credentials or personal data, then makes a shallow
+pass over the rest. `--dump-all` turns that shallow pass into a full dump.
 
 `crawl` is a composition of schema enumeration, column listing, row counts,
 and a full table dump. Use `--mode schema` to skip the data dump. The `--output`
@@ -411,8 +422,6 @@ extraction.
 
 ## Limitations
 
-- `--where` is not applied by the current row extractor. Use `--sql-query` for
-  filtered extraction.
 - `--file-write` is not implemented through the extraction path. Use
   `--sql-query` with a dialect specific statement when the account allows it.
 - Stacked query execution depends on the driver and is not available on every
@@ -422,6 +431,10 @@ extraction.
 - Blind extraction assumes the configured character set contains every
   character in the value. Increase `--extract-charset` or `--max-length` when a
   value is truncated.
+- Batched dumps rely on the DBMS row aggregation function. MySQL's
+  `group_concat_max_len` can truncate a batch; the extractor discards the
+  partial row and continues from the exact offset, falling back to one row per
+  request when needed.
 - The worker binary is not rebuilt automatically when it already exists.
   Rebuild it after changing Go code.
 

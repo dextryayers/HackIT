@@ -359,64 +359,32 @@ func looksLikeVersion(value string) bool {
 }
 
 // DetectUnionColumns determines the number of columns and the first
-// string-compatible column. It returns (columns, stringColumn, ok).
+// string-compatible column. The probe inserts a marker instead of trusting
+// error text: the column count is only accepted when the marker comes back.
 func (e *Engine) DetectUnionColumns(session *Session) (int, int, bool) {
 	if session == nil {
 		return 0, 0, false
 	}
 	exec := NewExecutor(e, session)
 	d := exec.Dialect
+	marker := d.Marker("'HACKIT'")
 
-	columns := 0
 	for n := 1; n <= 25; n++ {
-		fragment := fmt.Sprintf(" ORDER BY %d", n)
-		body, _, err := exec.Request(fragment)
-		if err != nil {
-			break
-		}
-		if isErrorLike(body, d.Name) {
-			columns = n - 1
-			break
-		}
-	}
-	if columns <= 0 {
-		for n := 1; n <= 15; n++ {
+		for col := 0; col < n; col++ {
 			nulls := make([]string, n)
 			for i := range nulls {
 				nulls[i] = "NULL"
 			}
-			for _, prefix := range []string{" UNION SELECT ", " UNION ALL SELECT "} {
-				fragment := prefix + strings.Join(nulls, ",")
-				body, _, err := exec.Request(fragment)
-				if err == nil && !isErrorLike(body, d.Name) {
-					columns = n
-					break
-				}
+			nulls[col] = marker
+			fragment := " UNION SELECT " + strings.Join(nulls, ",")
+			body, _, err := exec.Request(fragment)
+			if err != nil {
+				continue
 			}
-			if columns > 0 {
-				break
+			if strings.Contains(body, "~HACKIT~") {
+				return n, col, true
 			}
 		}
 	}
-	if columns <= 0 {
-		return 0, 0, false
-	}
-
-	for col := 0; col < columns; col++ {
-		marker := d.Marker("'HACKIT'")
-		nulls := make([]string, columns)
-		for i := range nulls {
-			nulls[i] = "NULL"
-		}
-		nulls[col] = marker
-		fragment := " UNION SELECT " + strings.Join(nulls, ",")
-		body, _, err := exec.Request(fragment)
-		if err != nil {
-			continue
-		}
-		if strings.Contains(body, "~HACKIT~") {
-			return columns, col, true
-		}
-	}
-	return columns, -1, false
+	return 0, 0, false
 }

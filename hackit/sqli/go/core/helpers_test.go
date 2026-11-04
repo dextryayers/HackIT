@@ -427,3 +427,199 @@ func TestDiscoverInjectionPointsRequiresInput(t *testing.T) {
 		t.Fatalf("expected an error when no injectable input exists")
 	}
 }
+
+func TestTableRefNameAndTarget(t *testing.T) {
+	cases := []struct {
+		ref        TableRef
+		wantName   string
+		wantTarget string
+	}{
+		{TableRef{Table: "users"}, "users", ""},
+		{TableRef{DB: "app", Table: "users"}, "app.users", "app"},
+		{TableRef{DB: "app", Schema: "app", Table: "users"}, "app.users", "app"},
+		{TableRef{DB: "app", Schema: "public", Table: "users"}, "app.public.users", "app.public"},
+		{TableRef{Schema: "public", Table: "users"}, "public.users", ".public"},
+	}
+	for _, c := range cases {
+		if got := c.ref.Name(); got != c.wantName {
+			t.Errorf("TableRef.Name() = %q, want %q", got, c.wantName)
+		}
+		if got := c.ref.Target(); got != c.wantTarget {
+			t.Errorf("TableRef.Target() = %q, want %q", got, c.wantTarget)
+		}
+	}
+}
+
+func TestTableQualificationPerDialect(t *testing.T) {
+	cases := []struct {
+		name string
+		ref  TableRef
+		want string
+	}{
+		{"mysql", TableRef{DB: "app", Table: "users"}, "`app`.`users`"},
+		{"mysql", TableRef{DB: "app", Schema: "other", Table: "users"}, "`other`.`users`"},
+		{"mysql", TableRef{Table: "users"}, "`users`"},
+		{"postgres", TableRef{Schema: "public", Table: "users"}, `"public"."users"`},
+		{"postgres", TableRef{Table: "users"}, `"users"`},
+		{"mssql", TableRef{Table: "users"}, `[dbo].[users]`},
+		{"mssql", TableRef{DB: "app", Table: "users"}, `[app].[dbo].[users]`},
+		{"oracle", TableRef{DB: "system", Table: "users"}, `"SYSTEM"."USERS"`},
+		{"oracle", TableRef{Table: "users"}, `"USERS"`},
+		{"snowflake", TableRef{Table: "users"}, `"PUBLIC"."users"`},
+		{"snowflake", TableRef{DB: "warehouse", Table: "users"}, `"warehouse"."PUBLIC"."users"`},
+		{"db2", TableRef{Schema: "APP", Table: "users"}, `"APP"."users"`},
+		{"db2", TableRef{Table: "users"}, `"users"`},
+		{"duckdb", TableRef{Schema: "main", Table: "users"}, `"main"."users"`},
+		{"sybase", TableRef{DB: "app", Table: "users"}, `[app]..[users]`},
+		{"bigquery", TableRef{DB: "proj", Schema: "ds", Table: "users"}, "`proj`.`ds`.`users`"},
+	}
+	for _, c := range cases {
+		exec := &Executor{Dialect: GetDialect(c.name)}
+		if exec.Dialect == nil {
+			t.Fatalf("dialect %q missing", c.name)
+		}
+		if got := exec.tableFor(c.ref); got != c.want {
+			t.Errorf("tableFor(%q, %+v) = %q, want %q", c.name, c.ref, got, c.want)
+		}
+	}
+}
+
+func TestDefaultSchemaFor(t *testing.T) {
+	cases := map[string]string{
+		"PostgreSQL":  "public",
+		"CockroachDB": "public",
+		"DuckDB":      "public",
+		"MSSQL":       "dbo",
+		"Sybase":      "dbo",
+		"Snowflake":   "PUBLIC",
+		"H2":          "PUBLIC",
+		"MySQL":       "",
+		"SQLite":      "",
+	}
+	for dbms, want := range cases {
+		if got := defaultSchemaFor(dbms); got != want {
+			t.Errorf("defaultSchemaFor(%q) = %q, want %q", dbms, got, want)
+		}
+	}
+}
+
+func TestWhereClauseNormalization(t *testing.T) {
+	cases := map[string]string{
+		"":                "",
+		"   ":             "",
+		"id=1":            " WHERE id=1",
+		"WHERE id=1":      " WHERE id=1",
+		"where  id=1 ;  ": " WHERE id=1",
+		"role='admin';":   " WHERE role='admin'",
+		"note LIKE '50%'": " WHERE note LIKE '50%'",
+	}
+	for input, want := range cases {
+		if got := whereClause(input); got != want {
+			t.Errorf("whereClause(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestDumpRowsExpressionUsesBatchSeparators(t *testing.T) {
+	cols := []string{"id", "name"}
+	ref := TableRef{DB: "app", Schema: "public", Table: "users"}
+
+	mysql := &Executor{Dialect: GetDialect("mysql")}
+	expr, ok := mysql.DumpRowsExpression(ref, cols, 10, 5, "id>1")
+	if !ok {
+		t.Fatalf("mysql batch expression should be supported")
+	}
+	for _, want := range []string{"GROUP_CONCAT(r SEPARATOR 0x1e)", "CONCAT_WS(0x1f,", "LIMIT 10,5", "WHERE id>1"} {
+		if !strings.Contains(expr, want) {
+			t.Errorf("mysql batch expression missing %q: %s", want, expr)
+		}
+	}
+
+	postgres := &Executor{Dialect: GetDialect("postgres")}
+	expr, ok = postgres.DumpRowsExpression(ref, cols, 10, 5, "")
+	if !ok {
+		t.Fatalf("postgres batch expression should be supported")
+	}
+	for _, want := range []string{"string_agg(r,chr(30))", "chr(31)", "LIMIT 5 OFFSET 10"} {
+		if !strings.Contains(expr, want) {
+			t.Errorf("postgres batch expression missing %q: %s", want, expr)
+		}
+	}
+
+	sqlite := &Executor{Dialect: GetDialect("sqlite")}
+	expr, ok = sqlite.DumpRowsExpression(TableRef{Table: "users"}, cols, 0, 2, "")
+	if !ok {
+		t.Fatalf("sqlite batch expression should be supported")
+	}
+	for _, want := range []string{"GROUP_CONCAT(r,char(30))", "char(31)", "LIMIT 2 OFFSET 0"} {
+		if !strings.Contains(expr, want) {
+			t.Errorf("sqlite batch expression missing %q: %s", want, expr)
+		}
+	}
+
+	bq := &Executor{Dialect: GetDialect("bigquery")}
+	expr, ok = bq.DumpRowsExpression(TableRef{Table: "users"}, cols, 0, 2, "")
+	if ok {
+		t.Errorf("bigquery should fall back to per-row extraction")
+	}
+	if !strings.Contains(expr, "STRING_AGG") {
+		t.Errorf("generic fallback should still build an aggregation: %s", expr)
+	}
+
+	if _, ok := mysql.DumpRowsExpression(ref, nil, 0, 5, ""); ok {
+		t.Errorf("empty column list must not produce a batch expression")
+	}
+	if _, ok := mysql.DumpRowsExpression(ref, cols, 0, 0, ""); ok {
+		t.Errorf("zero batch size must not produce a batch expression")
+	}
+}
+
+func TestSplitBatchRowsDiscardsTruncation(t *testing.T) {
+	rows := splitBatchRows("1\x1falice\x1e2\x1fbob\x1e", 2)
+	if len(rows) != 2 {
+		t.Fatalf("expected two complete rows, got %v", rows)
+	}
+	if rows[0][0] != "1" || rows[0][1] != "alice" || rows[1][0] != "2" || rows[1][1] != "bob" {
+		t.Fatalf("unexpected rows: %v", rows)
+	}
+
+	rows = splitBatchRows("1\x1falice\x1e2", 2)
+	if len(rows) != 1 || rows[0][1] != "alice" {
+		t.Fatalf("truncated trailing row should be discarded, got %v", rows)
+	}
+
+	rows = splitBatchRows("1\x1falice\x1e2\x1fbob", 3)
+	if len(rows) != 0 {
+		t.Fatalf("narrow row width should drop all rows, got %v", rows)
+	}
+
+	if rows := splitBatchRows("", 2); len(rows) != 0 {
+		t.Fatalf("empty batch should produce no rows, got %v", rows)
+	}
+	if rows := splitBatchRows("a\x1fb", 0); len(rows) != 1 {
+		t.Fatalf("width zero should keep rows without a width check, got %v", rows)
+	}
+}
+
+func TestSystemSchemaAndSensitiveTable(t *testing.T) {
+	for _, name := range []string{"information_schema", "PG_CATALOG", "pg_toast", "SYS", "crdb_internal", "performance_schema"} {
+		if !isSystemSchema(name) {
+			t.Errorf("%q should be a system schema", name)
+		}
+	}
+	for _, name := range []string{"public", "dbo", "app", "main"} {
+		if isSystemSchema(name) {
+			t.Errorf("%q should not be a system schema", name)
+		}
+	}
+	for _, name := range []string{"users", "admin_accounts", "api_keys", "secrets", "payment_cards", "wp_users", "customer_profiles"} {
+		if !isSensitiveTable(name) {
+			t.Errorf("%q should be sensitive", name)
+		}
+	}
+	for _, name := range []string{"products", "logs", "metrics", "inventory"} {
+		if isSensitiveTable(name) {
+			t.Errorf("%q should not be sensitive", name)
+		}
+	}
+}

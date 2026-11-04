@@ -21,9 +21,13 @@ FLAG_MAP = {
     'columns': '--column',
     'dump_table': '--dump-table',
     'list_dbs': '--list-dbs',
+    'list_schemas': '--list-schemas',
     'list_tables': '--list-tables',
     'list_columns': '--list-columns',
     'dump_all': '--dump-all',
+    'deep': '--deep',
+    'schema_name': '--schema-name',
+    'dump_batch': '--dump-batch',
     'risk_level': '--risk-level',
     'follow_redirect': '--follow-redirect',
     'randomize_case': '--randomize-case',
@@ -91,8 +95,8 @@ FLAG_MAP = {
 BOOL_FLAGS = frozenset({
     'follow_redirect', 'randomize_case', 'bypass_waf', 'fingerprint',
     'banner_grab', 'os_detect', 'waf_detect', 'smart_diff', 'baseline',
-    'tech_detect', 'list_dbs', 'list_tables', 'list_columns', 'schema',
-    'count_rows', 'dump_all', 'priv_esc', 'os_access', 'exfil_dns',
+    'tech_detect', 'list_dbs', 'list_schemas', 'list_tables', 'list_columns', 'schema',
+    'count_rows', 'dump_all', 'deep', 'priv_esc', 'os_access', 'exfil_dns',
     'exfil_http', 'no_color', 'crawl_extract', 'crawl_sensitive',
     'crawl_procs', 'crawl_views', 'crawl_indexes', 'crawl_system',
     'network_scan', 'auth_bypass', 'stealth',
@@ -108,14 +112,14 @@ STRING_FLAGS = frozenset({
     'scan_target', 'scan_ports', 'auth_user', 'auth_pass',
     'file_read', 'file_write', 'file_exec', 'oob_channel', 'oob_domain',
     'output_format', 'param', 'skip_param', 'prefix', 'suffix', 'sql_query',
-    'where', 'columns_csv',
+    'where', 'columns_csv', 'schema_name',
 })
 
 INT_FLAGS = frozenset({
     'timeout', 'risk_level', 'depth', 'threads', 'delay',
     'verbose', 'retry', 'crawl_depth', 'crawl_threads',
     'extract_workers', 'extract_batch', 'rows', 'limit', 'offset',
-    'max_length', 'time_secs',
+    'max_length', 'time_secs', 'dump_batch',
 })
 
 

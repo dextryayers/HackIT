@@ -73,17 +73,21 @@ type Options struct {
 	TechDetect  bool `json:"tech_detect,omitempty"`
 
 	ListDBs     bool   `json:"list_dbs,omitempty"`
+	ListSchemas bool   `json:"list_schemas,omitempty"`
 	ListTables  bool   `json:"list_tables,omitempty"`
 	ListColumns bool   `json:"list_columns,omitempty"`
 	Database    string `json:"database,omitempty"`
 	Table       string `json:"table,omitempty"`
 	Column      string `json:"column,omitempty"`
+	SchemaName  string `json:"schema_name,omitempty"`
 	Schema      bool   `json:"schema,omitempty"`
 	CountRows   bool   `json:"count_rows,omitempty"`
 	Search      string `json:"search,omitempty"`
 
 	DumpTable string `json:"dump_table,omitempty"`
 	DumpAll   bool   `json:"dump_all,omitempty"`
+	DumpBatch int    `json:"dump_batch,omitempty"`
+	Deep      bool   `json:"deep,omitempty"`
 
 	PrivEsc   bool `json:"priv_esc,omitempty"`
 	OSAccess  bool `json:"os_access,omitempty"`

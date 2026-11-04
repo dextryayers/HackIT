@@ -55,6 +55,7 @@ type Session struct {
 	Point       InjectionPoint `json:"point"`
 	DBMS        string         `json:"dbms"`
 	DBMSVersion string         `json:"dbms_version,omitempty"`
+	CurrentDB   string         `json:"current_db,omitempty"`
 	Technique   string         `json:"technique"`
 	Boundary    Boundary       `json:"boundary"`
 	Columns     int            `json:"columns,omitempty"`

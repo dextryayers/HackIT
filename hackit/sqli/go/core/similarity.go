@@ -83,11 +83,13 @@ func responsesSimilar(a, b string) bool {
 func isErrorLike(body string, dbms string) bool {
 	lower := strings.ToLower(body)
 	generic := []string{
-		"sql syntax", "syntax error", "unclosed quotation", "quoted string not properly terminated",
+		"sql syntax", "syntax error", "sql error", "sqlstate", "unclosed quotation",
+		"quoted string not properly terminated",
 		"mysql_fetch", "mysqli", "pg_query", "postgresql", "ora-", "oracle error",
 		"microsoft ole db", "sql server", "sqlite", "sqlite3", "db::exception",
 		"catalog error", "binder error", "dynamic sql error", "general error",
 		"warning: mysql", "division by zero", "invalid input syntax",
+		"no such table", "no such column", "out of range", "wrong number of",
 	}
 	for _, p := range generic {
 		if strings.Contains(lower, p) {

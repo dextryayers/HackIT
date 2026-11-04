@@ -24,9 +24,31 @@ if sys.platform == "win32":
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 
-BANNER = """HackIt SQL Injection Engine
-Version 4.0
+GREEN = "\033[92m"
+CYAN = "\033[96m"
+YELLOW = "\033[93m"
+RED = "\033[91m"
+BOLD = "\033[1m"
+RESET = "\033[0m"
+
+BANNER = f"""{GREEN}  ▄████████  ▄█   ▄█          ▄████████ ████████▄
+ ███    ███ ███  ███         ███    ███ ███   ▀███
+ ███    █▀  ███▌ ███         ███    █▀  ███    ███
+ ███        ███▌ ███        ▄███▄▄▄     ███    ███
+▀███████████ ███▌ ███       ▀▀███▀▀▀     ███    ███
+         ███ ███  ███         ███    █▀  ███   ▄███
+   ▄█    ███ ███  ██▌    ▄   ███    ███ ████████▀
+ ▄████████▀  █▀   ███▄▄██   ██████████
+{GREEN}─────────────────────────────────────────────────{RESET}
+{CYAN}  SQLi Exploit Engine v2.1 (2270 Payloads / 20 Engines){RESET}
+{YELLOW}  Developer  : AniipID{RESET}
+{GREEN}─────────────────────────────────────────────────{RESET}
+{YELLOW}  ⚠️  WARNING : Use only on systems you own or
+     have explicit written permission to test!{RESET}
+{GREEN}─────────────────────────────────────────────────{RESET}
 """
+
+EXAMPLE_URL = "e.g. https://example.com/index.php?cat=2"
 
 WARNING = (
     "Use this module only against systems you own or have explicit written "
@@ -62,14 +84,18 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
     "time_secs": 3,
     "extract_technique": "auto",
     "extract_charset": "common",
-    "max_length": 512,
+    "max_length": 4096,
     "list_dbs": False,
+    "list_schemas": False,
     "list_tables": False,
     "list_columns": False,
     "schema": False,
+    "schema_name": "",
     "count_rows": False,
     "dump_all": False,
     "dump_table": "",
+    "dump_batch": 10,
+    "deep": False,
     "database": "",
     "table": "",
     "column": "",
@@ -104,12 +130,14 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
 
 ACTION_KEYS = {
     "list_dbs",
+    "list_schemas",
     "list_tables",
     "list_columns",
     "schema",
     "count_rows",
     "dump_all",
     "dump_table",
+    "deep",
     "search",
     "sql_query",
     "current_db",
@@ -157,12 +185,16 @@ PASSTHROUGH_KEYS = {
     "extract_charset",
     "max_length",
     "list_dbs",
+    "list_schemas",
     "list_tables",
     "list_columns",
     "schema",
+    "schema_name",
     "count_rows",
     "dump_all",
     "dump_table",
+    "dump_batch",
+    "deep",
     "database",
     "table",
     "column",
@@ -246,6 +278,7 @@ def _default_scan(opts: Dict[str, Any]) -> Dict[str, Any]:
             current_user=True,
             list_dbs=True,
             list_tables=True,
+            deep=True,
         )
     return result
 
@@ -276,6 +309,8 @@ def _apply_crawl(opts: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _title_for(opts: Dict[str, Any]) -> str:
+    if opts.get("deep"):
+        return "Deep database dump"
     if opts.get("dump_all") or opts.get("dump_table"):
         return "Data extraction"
     if opts.get("sql_query"):
@@ -390,6 +425,9 @@ def _execute(opts: Dict[str, Any], default_scan: bool = False) -> int:
         url = "https://" + url
         options["url"] = url
 
+    if str(options.get("output_format") or "text") == "text":
+        click.echo(BANNER)
+
     _log("info", "target: %s" % url)
     results = _run_engine(options)
     if results is None:
@@ -462,14 +500,18 @@ def _execute(opts: Dict[str, Any], default_scan: bool = False) -> int:
     help="Force the extraction technique.",
 )
 @click.option("--extract-charset", default="common", help="Blind extraction character set.")
-@click.option("--max-length", default=512, type=int, help="Maximum blind extraction length.")
+@click.option("--max-length", default=4096, type=int, help="Maximum blind extraction length.")
+@click.option("--deep", is_flag=True, help="Full sweep: databases, schemas, tables, columns, counts, dumps.")
 @click.option("--dbs", "--list-dbs", "list_dbs", is_flag=True, help="List databases.")
+@click.option("--schemas", "--list-schemas", "list_schemas", is_flag=True, help="List schemas.")
 @click.option("--tables", "--list-tables", "list_tables", is_flag=True, help="List tables.")
 @click.option("--columns", "--list-columns", "list_columns", is_flag=True, help="List columns.")
 @click.option("--schema", is_flag=True, help="Dump table and column types.")
+@click.option("--schema-name", default="", help="Schema name for PostgreSQL, MSSQL, Oracle, Snowflake, DB2.")
 @click.option("--count-rows", is_flag=True, help="Count rows per table.")
 @click.option("--dump-all", is_flag=True, help="Dump every non-system table.")
 @click.option("--dump-table", default="", help="Dump one table.")
+@click.option("--dump-batch", default=10, type=int, help="Rows extracted per request.")
 @click.option("--db", "--database", "database", default="", help="Database name.")
 @click.option("--table", default="", help="Table name.")
 @click.option("--column", default="", help="Single column name.")
@@ -533,10 +575,29 @@ def scan(ctx: click.Context) -> None:
 
 @test_sqli.command()
 @click.pass_context
+def deep(ctx: click.Context) -> None:
+    """Full automatic sweep: enumerate everything and dump the data."""
+    options = dict(ctx.obj)
+    options["deep"] = True
+    ctx.exit(_execute(options))
+
+
+@test_sqli.command()
+@click.pass_context
 def dbs(ctx: click.Context) -> None:
     """List databases."""
     options = dict(ctx.obj)
     options["list_dbs"] = True
+    ctx.exit(_execute(options))
+
+
+@test_sqli.command()
+@click.argument("database", required=False, default="")
+@click.pass_context
+def schemas(ctx: click.Context, database: str) -> None:
+    """List schemas inside each database."""
+    options = dict(ctx.obj)
+    options.update(database=database, list_schemas=True)
     ctx.exit(_execute(options))
 
 
@@ -747,7 +808,9 @@ def gui() -> None:
 SHELL_HELP = """Commands:
   set <url>                     Set the current target.
   scan [url]                    Fingerprint and enumerate the target.
+  deep [url]                    Full sweep: schemas, tables, counts, dumps.
   dbs [url]                     List databases.
+  schemas [db] [url]            List schemas.
   tables <db> [url]             List tables in a database.
   columns <db> <table> [url]    List columns in a table.
   dump <db> <table> [url]       Dump a table.
@@ -855,9 +918,19 @@ def interactive_shell() -> None:
         if command == "scan":
             options["url"] = _shell_target(parts, 1, target)
             _shell_execute(options, default_scan=True)
+        elif command == "deep":
+            options["url"] = _shell_target(parts, 1, target)
+            options["deep"] = True
+            _shell_execute(options)
         elif command == "dbs":
             options["url"] = _shell_target(parts, 1, target)
             options["list_dbs"] = True
+            _shell_execute(options)
+        elif command == "schemas":
+            if len(parts) > 1 and not parts[1].startswith(("http://", "https://")):
+                options["database"] = parts[1]
+            options["url"] = _shell_target(parts, 2 if options["database"] else 1, target)
+            options["list_schemas"] = True
             _shell_execute(options)
         elif command == "tables":
             if len(parts) < 2:

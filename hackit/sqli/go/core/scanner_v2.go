@@ -41,7 +41,6 @@ func (e *Engine) StartV2() []Result {
 	if heuristicDBMS != "Unknown" {
 		e.Log.Info(fmt.Sprintf("heuristic DBMS fingerprint: %s", heuristicDBMS))
 	}
-
 	var results []Result
 	if e.Opts.WAFDetect {
 		name := "none"
@@ -76,7 +75,7 @@ func (e *Engine) StartV2() []Result {
 			Target:      e.Opts.URL,
 			Method:      point.Method,
 			Point:       point,
-			DBMS:        heuristicDBMS,
+			DBMS:        "Unknown",
 			Technique:   technique,
 			Boundary:    boundary,
 			Confidence:  0.9,
@@ -84,6 +83,9 @@ func (e *Engine) StartV2() []Result {
 			BaselineMS:  e.BaselineTime.Milliseconds(),
 			WAF:         waf.Name,
 		}
+		// A forced DBMS is authoritative. A heuristic fingerprint is only a
+		// hint: server banners lie and proxies rewrite headers, so the dialect
+		// still has to be proven through an actual extraction expression.
 		if e.Opts.DBMS != "" {
 			if dialect := GetDialect(e.Opts.DBMS); dialect != nil {
 				session.DBMS = dialect.Name
@@ -92,6 +94,12 @@ func (e *Engine) StartV2() []Result {
 			}
 		}
 		e.IdentifyDBMS(session)
+		if session.DBMS == "" || strings.EqualFold(session.DBMS, "Unknown") {
+			if heuristicDBMS != "Unknown" {
+				session.DBMS = heuristicDBMS
+				e.Log.Warning(fmt.Sprintf("DBMS could not be proven; falling back to heuristic '%s'", heuristicDBMS))
+			}
+		}
 
 		if session.Technique == "union" {
 			if cols, col, ok := e.DetectUnionColumns(session); ok {

