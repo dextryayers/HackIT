@@ -81,9 +81,11 @@ var dbFingerprints = []DBFingerprint{
 		ErrorPats: []string{"Sybase", "SQL Anywhere"},
 	},
 	{
+		// "H2" alone matches the h2 HTML tag and "General error" appears on
+		// unrelated PHP pages, so only product-specific strings score here.
 		Name: "H2", Priority: 2,
-		Patterns:  []string{"H2 JDBC Driver", "org.h2", "H2 Database"},
-		ErrorPats: []string{"H2", "General error", "Unique index or primary key violation"},
+		Patterns:  []string{"H2 JDBC Driver", "org\\.h2", "H2 Database Engine"},
+		ErrorPats: []string{"org.h2", "h2 database engine", "unique index or primary key violation"},
 	},
 }
 

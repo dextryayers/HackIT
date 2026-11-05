@@ -3,6 +3,7 @@ package core
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -134,6 +135,30 @@ func (e *Engine) StartV2() []Result {
 	}
 
 	if len(results) == 0 {
+		if blocked := atomic.LoadInt64(&e.blocked); blocked > 0 {
+			e.Log.Warning(fmt.Sprintf("%d payloads were rejected by a filter; the payload library scan is skipped", blocked))
+			e.Log.Warning("retry with --bypass-waf, --tamper space2comment, or a manual --prefix/--suffix")
+			return []Result{{
+				Parameter:  first.Name,
+				Type:       "blocked",
+				Payload:    fmt.Sprintf("%d SQL payloads rejected (HTTP 403/406/429/503)", blocked),
+				DBMS:       heuristicDBMS,
+				Details:    "a WAF or input filter is rejecting SQL syntax; no injection was confirmed",
+				Confidence: 0,
+				Location:   string(first.Location),
+			}}
+		}
+		if e.expired() {
+			e.outOfTime("injection detection")
+			return []Result{{
+				Parameter:  first.Name,
+				Type:       "fatal",
+				Payload:    "scan deadline reached before a boundary was confirmed",
+				Details:    "rerun with a larger --deadline or a forced --prefix/--suffix",
+				Confidence: 0,
+				Location:   string(first.Location),
+			}}
+		}
 		e.Log.Warning("no injectable parameter confirmed; falling back to payload library scan")
 		return e.Start()
 	}

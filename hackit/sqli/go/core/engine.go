@@ -52,6 +52,8 @@ type Options struct {
 	ColumnsCSV string `json:"columns_csv,omitempty"`
 	MaxLength  int    `json:"max_length,omitempty"`
 	TimeSecs   int    `json:"time_secs,omitempty"`
+	// Deadline bounds the whole run in seconds. Zero disables it.
+	Deadline int `json:"deadline,omitempty"`
 
 	// Metadata shortcuts.
 	CurrentDB   bool `json:"current_db,omitempty"`
@@ -155,6 +157,11 @@ type Engine struct {
 
 	lastCookieValue string
 	rateLimiter     *RateLimiter
+
+	// deadline is the absolute end of the run. blocked counts responses that
+	// look like a WAF rejecting the payload rather than the application.
+	deadline time.Time
+	blocked  int64
 }
 
 type RateLimiter struct {
@@ -277,6 +284,9 @@ func NewEngine(opts *Options) *Engine {
 		Perf:        utils.NewPerformanceManager(opts.Retry, time.Duration(opts.Delay)*time.Millisecond),
 		rateLimiter: NewRateLimiter(),
 	}
+	if opts.Deadline > 0 {
+		e.deadline = time.Now().Add(time.Duration(opts.Deadline) * time.Second)
+	}
 
 	if opts.BypassWAF {
 		e.Log.Info("WAF bypass mode engaged - using maximum evasion techniques")
@@ -287,4 +297,26 @@ func NewEngine(opts *Options) *Engine {
 
 func (e *Engine) GetLogger() *utils.Logger {
 	return e.Log
+}
+
+// expired reports whether the operator's --deadline has passed.
+func (e *Engine) expired() bool {
+	return !e.deadline.IsZero() && time.Now().After(e.deadline)
+}
+
+// outOfTime logs once when a phase stops because the deadline was reached.
+func (e *Engine) outOfTime(phase string) {
+	if e.Log != nil {
+		e.Log.Warning("deadline reached during " + phase + "; returning partial results")
+	}
+}
+
+// looksBlocked reports whether a response is a WAF rejection instead of the
+// application page. The size gate keeps real error pages out of the count.
+func looksBlocked(status int, bodyLen int) bool {
+	switch status {
+	case 403, 406, 418, 429, 503:
+		return bodyLen < 4096
+	}
+	return false
 }

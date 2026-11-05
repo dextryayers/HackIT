@@ -80,6 +80,7 @@ func main() {
 	flag.IntVar(&opts.MaxLength, "max-length", 4096, "Maximum blind extraction length")
 	flag.IntVar(&opts.DumpBatch, "dump-batch", 10, "Rows extracted per request")
 	flag.IntVar(&opts.TimeSecs, "time-secs", 3, "Time-based delay in seconds")
+	flag.IntVar(&opts.Deadline, "deadline", 900, "Overall scan deadline in seconds (0 disables)")
 
 	// Metadata shortcuts.
 	flag.BoolVar(&opts.CurrentDB, "current-db", false, "Show current database")

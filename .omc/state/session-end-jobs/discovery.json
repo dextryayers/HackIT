@@ -8,6 +8,11 @@
       "retryAt": "2026-11-03T01:03:48.658Z",
       "claimNonce": "017dafdf-2757-4b1c-82c9-50d0ccdb615a",
       "leaseExpiresAt": "2026-11-03T01:19:57.184Z"
+    },
+    {
+      "sessionId": "ea3d59d5-9657-48a2-a940-8f9eb103718c",
+      "attempts": 0,
+      "retryAt": "2026-11-03T06:18:42.803Z"
     }
   ]
 }

@@ -80,16 +80,36 @@ func responsesSimilar(a, b string) bool {
 	return similarity(a, b) >= similarityThreshold
 }
 
+// booleanDiffer is the comparison used by boolean oracles. Two branches of a
+// real oracle often differ by a small block of content, which the token set
+// still scores as similar, so a stable length delta also counts.
+func booleanDiffer(a, b string) bool {
+	if responsesDiffer(a, b) {
+		return true
+	}
+	la, lb := len(a), len(b)
+	if la == 0 || lb == 0 {
+		return false
+	}
+	largest := la
+	if lb > largest {
+		largest = lb
+	}
+	delta := la - lb
+	if delta < 0 {
+		delta = -delta
+	}
+	return float64(delta)/float64(largest) >= 0.005
+}
+
 func isErrorLike(body string, dbms string) bool {
 	lower := strings.ToLower(body)
 	generic := []string{
 		"sql syntax", "syntax error", "sql error", "sqlstate", "unclosed quotation",
 		"quoted string not properly terminated",
-		"mysql_fetch", "mysqli", "pg_query", "postgresql", "ora-", "oracle error",
-		"microsoft ole db", "sql server", "sqlite", "sqlite3", "db::exception",
-		"catalog error", "binder error", "dynamic sql error", "general error",
-		"warning: mysql", "division by zero", "invalid input syntax",
-		"no such table", "no such column", "out of range", "wrong number of",
+		"division by zero", "invalid input syntax",
+		"no such table", "no such column", "db::exception", "catalog error",
+		"binder error", "dynamic sql error", "out of range", "wrong number of",
 	}
 	for _, p := range generic {
 		if strings.Contains(lower, p) {
@@ -101,6 +121,19 @@ func isErrorLike(body string, dbms string) bool {
 			if strings.Contains(lower, strings.ToLower(p)) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// hasDBMSError reports whether the body carries an error signature for the
+// named engine. It is stricter than isErrorLike: product names alone are not
+// proof, because pages mention MySQL and SQL Server in ordinary copy.
+func hasDBMSError(body string, dbms string) bool {
+	lower := strings.ToLower(body)
+	for _, p := range dbmsErrorPatterns(dbms) {
+		if strings.Contains(lower, strings.ToLower(p)) {
+			return true
 		}
 	}
 	return false

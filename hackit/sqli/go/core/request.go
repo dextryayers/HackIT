@@ -1,14 +1,18 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 )
+
+var errDeadline = errors.New("scan deadline reached")
 
 var userAgents = []string{
 	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -54,6 +58,9 @@ func (e *Engine) resolvePoint(param string) InjectionPoint {
 // point. The original value is preserved and the payload is appended, which is
 // the same contract used by classic SQL injection scanners.
 func (e *Engine) RequestAt(point InjectionPoint, payload string) (string, int, http.Header, error) {
+	if e.expired() {
+		return "", 0, nil, errDeadline
+	}
 	adaptiveDelay := e.rateLimiter.GetDelay()
 	if adaptiveDelay > 0 {
 		time.Sleep(adaptiveDelay)
@@ -78,10 +85,33 @@ func (e *Engine) RequestAt(point InjectionPoint, payload string) (string, int, h
 		}
 		body, length, headers, err := e.doRequestAt(point, payload)
 		if err == nil {
+			if !looksBlocked(e.LastStatusCode, length) {
+				return body, length, headers, nil
+			}
+			atomic.AddInt64(&e.blocked, 1)
+			status := e.LastStatusCode
+			// A WAF usually rejects the literal spaces before it checks the
+			// SQL. Retrying with tabs is syntax neutral on every DBMS.
+			alt := strings.ReplaceAll(payload, " ", "\t")
+			if alt != payload {
+				body2, length2, headers2, err2 := e.doRequestAt(point, alt)
+				if err2 == nil && !looksBlocked(e.LastStatusCode, length2) {
+					if e.Log != nil && e.Opts.Verbose >= 1 {
+						e.Log.Info(fmt.Sprintf("WAF rejected the payload (HTTP %d); retried with an alternate encoding", status))
+					}
+					return body2, length2, headers2, nil
+				}
+			}
+			if e.Log != nil && e.Opts.Verbose >= 1 {
+				n := atomic.LoadInt64(&e.blocked)
+				if n <= 3 || n%25 == 0 {
+					e.Log.Warning(fmt.Sprintf("payload rejected with HTTP %d (%d so far); the target may be filtering SQL", status, n))
+				}
+			}
 			return body, length, headers, nil
 		}
 		lastErr = err
-		if isFatalError(err) {
+		if isFatalError(err) || errors.Is(err, errDeadline) {
 			break
 		}
 	}

