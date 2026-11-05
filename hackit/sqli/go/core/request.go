@@ -58,8 +58,16 @@ func (e *Engine) resolvePoint(param string) InjectionPoint {
 // point. The original value is preserved and the payload is appended, which is
 // the same contract used by classic SQL injection scanners.
 func (e *Engine) RequestAt(point InjectionPoint, payload string) (string, int, http.Header, error) {
+	body, length, _, headers, err := e.RequestAtStatus(point, payload)
+	return body, length, headers, err
+}
+
+// RequestAtStatus is RequestAt with the HTTP status of the winning attempt.
+// Blind extraction runs requests from several workers, so the caller must read
+// the status of its own response instead of the shared engine field.
+func (e *Engine) RequestAtStatus(point InjectionPoint, payload string) (string, int, int, http.Header, error) {
 	if e.expired() {
-		return "", 0, nil, errDeadline
+		return "", 0, 0, nil, errDeadline
 	}
 	adaptiveDelay := e.rateLimiter.GetDelay()
 	if adaptiveDelay > 0 {
@@ -83,23 +91,22 @@ func (e *Engine) RequestAt(point InjectionPoint, payload string) (string, int, h
 		if attempt > 0 {
 			time.Sleep(time.Duration(attempt*400) * time.Millisecond)
 		}
-		body, length, headers, err := e.doRequestAt(point, payload)
+		body, length, status, headers, err := e.doRequestAt(point, payload)
 		if err == nil {
-			if !looksBlocked(e.LastStatusCode, length) {
-				return body, length, headers, nil
+			if !looksBlocked(status, length) {
+				return body, length, status, headers, nil
 			}
 			atomic.AddInt64(&e.blocked, 1)
-			status := e.LastStatusCode
 			// A WAF usually rejects the literal spaces before it checks the
 			// SQL. Retrying with tabs is syntax neutral on every DBMS.
 			alt := strings.ReplaceAll(payload, " ", "\t")
 			if alt != payload {
-				body2, length2, headers2, err2 := e.doRequestAt(point, alt)
-				if err2 == nil && !looksBlocked(e.LastStatusCode, length2) {
+				body2, length2, status2, headers2, err2 := e.doRequestAt(point, alt)
+				if err2 == nil && !looksBlocked(status2, length2) {
 					if e.Log != nil && e.Opts.Verbose >= 1 {
 						e.Log.Info(fmt.Sprintf("WAF rejected the payload (HTTP %d); retried with an alternate encoding", status))
 					}
-					return body2, length2, headers2, nil
+					return body2, length2, status2, headers2, nil
 				}
 			}
 			if e.Log != nil && e.Opts.Verbose >= 1 {
@@ -112,14 +119,14 @@ func (e *Engine) RequestAt(point InjectionPoint, payload string) (string, int, h
 					}
 				}
 			}
-			return body, length, headers, nil
+			return body, length, status, headers, nil
 		}
 		lastErr = err
 		if isFatalError(err) || errors.Is(err, errDeadline) {
 			break
 		}
 	}
-	return "", 0, nil, lastErr
+	return "", 0, 0, nil, lastErr
 }
 
 func isFatalError(err error) bool {
@@ -132,10 +139,10 @@ func isFatalError(err error) bool {
 		strings.Contains(msg, "no Host")
 }
 
-func (e *Engine) doRequestAt(point InjectionPoint, payload string) (string, int, http.Header, error) {
+func (e *Engine) doRequestAt(point InjectionPoint, payload string) (string, int, int, http.Header, error) {
 	u, err := url.Parse(e.Opts.URL)
 	if err != nil {
-		return "", 0, nil, err
+		return "", 0, 0, nil, err
 	}
 
 	method := strings.ToUpper(strings.TrimSpace(point.Method))
@@ -157,7 +164,7 @@ func (e *Engine) doRequestAt(point InjectionPoint, payload string) (string, int,
 	case LocationBody:
 		form, err := url.ParseQuery(e.Opts.Data)
 		if err != nil {
-			return "", 0, nil, err
+			return "", 0, 0, nil, err
 		}
 		form.Set(point.Name, point.Original+payload)
 		body = strings.NewReader(form.Encode())
@@ -166,7 +173,7 @@ func (e *Engine) doRequestAt(point InjectionPoint, payload string) (string, int,
 	case LocationJSON:
 		updated, err := setJSONPath(e.Opts.Data, point.Path, point.Original+payload)
 		if err != nil {
-			return "", 0, nil, err
+			return "", 0, 0, nil, err
 		}
 		body = strings.NewReader(updated)
 		contentType = "application/json"
@@ -180,7 +187,7 @@ func (e *Engine) doRequestAt(point InjectionPoint, payload string) (string, int,
 
 	req, err := http.NewRequest(method, u.String(), body)
 	if err != nil {
-		return "", 0, nil, err
+		return "", 0, 0, nil, err
 	}
 
 	for _, raw := range e.Opts.Header {
@@ -233,13 +240,13 @@ func (e *Engine) doRequestAt(point InjectionPoint, payload string) (string, int,
 	elapsed := time.Since(startTime)
 	if err != nil {
 		e.Log.Warning(fmt.Sprintf("connection error: %v", err))
-		return "", 0, nil, err
+		return "", 0, 0, nil, err
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", 0, nil, err
+		return "", 0, 0, nil, err
 	}
 
 	e.LastResponseHeaders = resp.Header
@@ -248,7 +255,7 @@ func (e *Engine) doRequestAt(point InjectionPoint, payload string) (string, int,
 	e.LastStatusCode = resp.StatusCode
 	e.rateLimiter.RecordResponseTime(elapsed)
 
-	return string(respBody), len(respBody), resp.Header, nil
+	return string(respBody), len(respBody), resp.StatusCode, resp.Header, nil
 }
 
 func replaceCookieValue(raw, name, value string) string {

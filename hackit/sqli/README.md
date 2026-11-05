@@ -220,7 +220,7 @@ hackit vuln sqli -u "http://target.test/profile" -H "X-User-Id: 1" --level 3 --d
 | --- | --- |
 | `--format` | `text`, `json`, or `ndjson`. |
 | `--no-color` | Disable colored output. |
-| `-v`, `--verbose` | Show engine progress. Repeatable. |
+| `-v`, `--verbose` | Show engine progress. Level 1 is the default; repeat for payload detail. |
 | `--report` | Write a report after the run. The extension selects the format. |
 
 Logs always go to standard error, so `--format json` keeps standard output
@@ -303,8 +303,10 @@ sqli> set http://target.test/item?id=1; dbs; tables appdb
 ```
 
 The prompt shows the current host, for example `sqli[target.test]> `. Progress
-is streamed from the worker by default; `-v` on the command line, or
-`opt verbose 2` inside the shell, raises the detail level.
+is streamed from the worker by default: every extraction step, blind value
+length, oracle probe counter and rejected payload is printed as it happens, so
+a long dump never looks like a hang. `-v` on the command line, or
+`opt verbose 2` inside the shell, adds the per-payload detail.
 
 ## Desktop interface
 
@@ -386,8 +388,9 @@ tickets and terminal review.
    `--extract-technique` or `--technique`. Blind extraction uses binary search
    over the configured character set and picks the closer of the true and false
    reference responses, so pages whose static chrome dominates the body still
-   produce a usable oracle. Time extraction uses dialect specific delay
-   primitives.
+   produce a usable oracle. The reference pair is discovered once per target and
+   reused for every value, which removes two to six requests per scalar. Time
+   extraction uses dialect specific delay primitives.
 7. `Explorer` runs the requested enumeration, dumps, account checks, searches,
    and scalar queries.
 8. Python renders the result list or writes report files.

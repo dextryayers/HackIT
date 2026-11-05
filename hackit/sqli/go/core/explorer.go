@@ -53,6 +53,13 @@ func (x *Explorer) result(kind, details, payload string) Result {
 	}
 }
 
+func (x *Explorer) note(format string, args ...interface{}) {
+	if x.E.Opts.Verbose < 1 {
+		return
+	}
+	x.E.Log.Info(fmt.Sprintf(format, args...))
+}
+
 func (x *Explorer) tableResult(kind string, ref TableRef, payload string) Result {
 	res := x.result(kind, ref.Name(), payload)
 	res.Database = ref.DB
@@ -76,6 +83,9 @@ func (x *Explorer) Run() []Result {
 	}
 
 	if opts.SQLQuery != "" {
+		if x.E.Opts.Verbose >= 1 {
+			x.E.Log.Info("running SQL query")
+		}
 		if value, err := x.X.Scalar(opts.SQLQuery); err == nil {
 			out = append(out, x.result("sql-query", opts.SQLQuery, value))
 		} else {
@@ -173,6 +183,9 @@ func (x *Explorer) fingerprint() []Result {
 		{"privileges", x.X.Dialect.Privileges(), "privileges"},
 	}
 	for _, item := range items {
+		if x.E.Opts.Verbose >= 1 {
+			x.E.Log.Info(fmt.Sprintf("extracting %s", item.label))
+		}
 		value, err := x.X.Scalar(item.expr)
 		if err != nil || value == "" {
 			continue
@@ -198,6 +211,7 @@ func (x *Explorer) currentDatabase() string {
 }
 
 func (x *Explorer) listDatabases() []Result {
+	x.note("listing databases")
 	values, err := x.X.Strings(x.X.Dialect.Databases())
 	if err != nil {
 		x.E.logWarn(fmt.Sprintf("could not list databases: %v", err))
@@ -337,6 +351,7 @@ func (x *Explorer) tablesFor(scope Scope) []string {
 func (x *Explorer) listTables() []Result {
 	var out []Result
 	for _, scope := range x.scopes() {
+		x.note("listing tables in %s", scope.Label())
 		values := x.tablesFor(scope)
 		if len(values) == 0 {
 			continue
@@ -431,6 +446,7 @@ func (x *Explorer) accounts() []Result {
 }
 
 func (x *Explorer) schema() []Result {
+	x.note("reading schema")
 	var out []Result
 	for _, scope := range x.scopes() {
 		for _, table := range x.tablesFor(scope) {
@@ -452,6 +468,7 @@ func (x *Explorer) schema() []Result {
 }
 
 func (x *Explorer) countRows() []Result {
+	x.note("counting rows")
 	var out []Result
 	table := x.E.Opts.Table
 	if table != "" {
@@ -507,6 +524,7 @@ func (x *Explorer) dumpTable(ref TableRef) []Result {
 	if ref.Table == "" {
 		return nil
 	}
+	x.note("dumping %s", ref.Name())
 	colValues, err := x.X.Strings(x.X.Dialect.Columns(ref.DB, ref.Schema, ref.Table))
 	if err != nil || len(colValues) == 0 {
 		x.E.logWarn(fmt.Sprintf("could not list columns for %s", ref.Name()))
@@ -574,6 +592,7 @@ func (x *Explorer) dumpTable(ref TableRef) []Result {
 
 func (x *Explorer) dumpAll() []Result {
 	var out []Result
+	x.note("dumping every non-system table")
 	for _, scope := range x.scopes() {
 		for _, table := range x.tablesFor(scope) {
 			if isSystemTable(table) && x.E.Opts.RiskLevel < 3 {
@@ -670,6 +689,7 @@ func (x *Explorer) dumpWithLimit(ref TableRef, limit int) []Result {
 }
 
 func (x *Explorer) search(keyword string) []Result {
+	x.note("searching table and column names for %q", keyword)
 	var out []Result
 	tables, err := x.X.Strings(x.X.Dialect.SearchTables(keyword))
 	if err == nil && len(tables) > 0 {

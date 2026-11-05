@@ -162,6 +162,15 @@ type Engine struct {
 	// look like a WAF rejecting the payload rather than the application.
 	deadline time.Time
 	blocked  int64
+
+	// oracleTrue and oracleFalse are the reference responses discovered for
+	// the confirmed injection. They are cached on the engine because every
+	// value in an enumeration needs the same pair; rediscovering it per value
+	// tripled the request count on blind targets.
+	oracleMu    sync.Mutex
+	oracleTrue  string
+	oracleFalse string
+	oraclePair  int
 }
 
 type RateLimiter struct {
