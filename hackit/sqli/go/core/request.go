@@ -105,7 +105,11 @@ func (e *Engine) RequestAt(point InjectionPoint, payload string) (string, int, h
 			if e.Log != nil && e.Opts.Verbose >= 1 {
 				n := atomic.LoadInt64(&e.blocked)
 				if n <= 3 || n%25 == 0 {
-					e.Log.Warning(fmt.Sprintf("payload rejected with HTTP %d (%d so far); the target may be filtering SQL", status, n))
+					if e.Opts.Verbose >= 2 {
+						e.Log.Warning(fmt.Sprintf("payload rejected with HTTP %d (%d so far): %s", status, n, truncatePayload(payload, 120)))
+					} else {
+						e.Log.Warning(fmt.Sprintf("payload rejected with HTTP %d (%d so far); the target may be filtering SQL", status, n))
+					}
 				}
 			}
 			return body, length, headers, nil
@@ -278,4 +282,14 @@ func (e *Engine) currentCookie() string {
 		return e.lastCookieValue
 	}
 	return e.Opts.Cookie
+}
+
+// truncatePayload keeps a rejected payload on one log line. A payload can be
+// several kilobytes of UNION columns, and the interesting part is the start.
+func truncatePayload(payload string, limit int) string {
+	flat := strings.Join(strings.Fields(payload), " ")
+	if len(flat) <= limit {
+		return flat
+	}
+	return flat[:limit] + "..."
 }

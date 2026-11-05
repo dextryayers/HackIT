@@ -1,0 +1,13 @@
+{
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": true,
+    "superpowers@superpowers-marketplace": true,
+    "greptile@anthropic-plugin-directory": true,
+    "oh-my-claudecode@omc": true,
+    "c-review@trailofbits": true,
+    "building-secure-contracts@trailofbits": true,
+    "rust-review@trailofbits": true,
+    "yara-authoring@trailofbits": true,
+    "sharp-edges@trailofbits": true
+  }
+}
