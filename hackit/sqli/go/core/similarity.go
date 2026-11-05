@@ -102,6 +102,47 @@ func booleanDiffer(a, b string) bool {
 	return float64(delta)/float64(largest) >= 0.005
 }
 
+// matchScore ranks how closely a response matches a reference. Similarity
+// alone saturates on large pages whose static chrome dominates the token set,
+// so the length ratio carries weight too. The score is used to pick the closer
+// of the true and false reference bodies instead of comparing against a fixed
+// threshold.
+func matchScore(a, b string) float64 {
+	if a == "" || b == "" {
+		return 0
+	}
+	smaller, larger := len(a), len(b)
+	if larger < smaller {
+		smaller, larger = larger, smaller
+	}
+	lengthScore := float64(smaller) / float64(larger)
+	return 0.6*similarity(a, b) + 0.4*lengthScore
+}
+
+// distinctContentDiff reports whether two responses contain different content
+// beyond the tokens they share with the baseline page.
+func distinctContentDiff(a, b, base string) bool {
+	baseTokens := tokenSet(normalizeResponse(base))
+	left := tokenSet(normalizeResponse(a))
+	right := tokenSet(normalizeResponse(b))
+	for token := range baseTokens {
+		delete(left, token)
+		delete(right, token)
+	}
+	if len(left) == 0 && len(right) == 0 {
+		return false
+	}
+	if len(left) != len(right) {
+		return true
+	}
+	for token := range left {
+		if !right[token] {
+			return true
+		}
+	}
+	return false
+}
+
 func isErrorLike(body string, dbms string) bool {
 	lower := strings.ToLower(body)
 	generic := []string{

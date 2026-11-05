@@ -176,6 +176,7 @@ hackit vuln sqli -u "http://target.test/profile" -H "X-User-Id: 1" --level 3 --d
 | `--time-secs` | Delay used by time based tests and extraction. |
 | `--extract-charset` | Character set for blind extraction. |
 | `--max-length` | Maximum length for blind extraction. Default 4096. |
+| `--deadline` | Overall scan deadline in seconds. Default 900. `0` disables it. |
 
 ### Enumeration and extraction
 
@@ -274,22 +275,36 @@ hackit vuln sqli
 Commands:
 
 ```text
-set <url>
-scan [url]
-dbs [url]
-tables <db> [url]
-columns <db> <table> [url]
-dump <db> <table> [url]
-search <keyword> [url]
-schema [db] [url]
-rows [db] [url]
-sql <query> [url]
-report [url]
-gui
-clear
-help
-exit
+set <url>                     Set the current target
+status                        Show the current target and settings
+opt <name> <value>            Change a setting for later commands
+scan [url]                    Fingerprint and enumerate
+dbs [url]                     List databases
+tables [db] [url]             List tables, current database by default
+columns <db> <table> [url]    List columns
+dump <db> <table> [url]       Dump a table
+dumpall [url]                 Dump every non-system table
+search <keyword> [url]        Search table and column names
+schema [db] [url]             Show schema with column types
+rows [db] [url]               Count rows per table
+sql <query> [url]             Run a scalar SQL query
+report [url]                  Scan and write HTML and JSON reports
+gui                           Open the desktop interface
+clear                         Clear the screen
+help                          Show help
+exit                          Leave the shell
 ```
+
+A target set with `set` is used by every later command, so the URL is not
+repeated. Several commands can run on one line separated by `;`:
+
+```text
+sqli> set http://target.test/item?id=1; dbs; tables appdb
+```
+
+The prompt shows the current host, for example `sqli[target.test]> `. Progress
+is streamed from the worker by default; `-v` on the command line, or
+`opt verbose 2` inside the shell, raises the detail level.
 
 ## Desktop interface
 
@@ -355,10 +370,13 @@ tickets and terminal review.
 
 1. `DiscoverInjectionPoints` builds injection points from the URL, body,
    cookies, and headers. Cookies require level 2. Headers require level 3.
-2. The engine requests the target and captures a baseline response.
-3. `DetectBoundary` tries known prefix and suffix pairs. Each candidate is
-   checked with boolean, error, time, and UNION probes. A candidate is accepted
-   only when the true and false responses are stable and clearly different.
+2. The engine requests the target and captures a baseline response. A single
+   quote is sent once to look for the driver name in the application error page.
+3. `DetectBoundary` tries known prefix and suffix pairs. The open string context
+   (`'` with no suffix) is tried first: the application's own closing quote
+   consumes the payload, so the original query stays intact. Each candidate is
+   checked with the cheapest technique first, and a candidate is accepted only
+   when the true and false responses are stable and clearly different.
 4. `IdentifyDBMS` tries dialect version expressions through UNION and error
    output. If neither works, it uses the confirmed boolean oracle. Targets that
    only answer through timing use the time oracle.
@@ -366,8 +384,10 @@ tickets and terminal review.
    column for in-band extraction.
 6. `Executor.Scalar` selects the extraction path. It honors a forced
    `--extract-technique` or `--technique`. Blind extraction uses binary search
-   over the configured character set. Time extraction uses dialect specific
-   delay primitives.
+   over the configured character set and picks the closer of the true and false
+   reference responses, so pages whose static chrome dominates the body still
+   produce a usable oracle. Time extraction uses dialect specific delay
+   primitives.
 7. `Explorer` runs the requested enumeration, dumps, account checks, searches,
    and scalar queries.
 8. Python renders the result list or writes report files.

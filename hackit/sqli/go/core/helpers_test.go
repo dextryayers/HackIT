@@ -285,17 +285,27 @@ func TestBoundaryCandidates(t *testing.T) {
 	if len(candidates) < 15 {
 		t.Fatalf("expected at least 15 boundary candidates, got %d", len(candidates))
 	}
-	if candidates[0].Prefix != "'" || candidates[0].Suffix != "-- -" {
-		t.Fatalf("first candidate should be the common string context, got %+v", candidates[0])
+	if candidates[0].Prefix != "'" || candidates[0].Suffix != "" {
+		t.Fatalf("first candidate should be the open string context, got %+v", candidates[0])
+	}
+	if candidates[1].Prefix != "'" || candidates[1].Suffix != "-- -" {
+		t.Fatalf("second candidate should be the commented string context, got %+v", candidates[1])
 	}
 	foundEmpty := false
+	foundCommented := false
 	for _, candidate := range candidates {
 		if candidate.Prefix == "" && candidate.Suffix == "" {
 			foundEmpty = true
 		}
+		if candidate.Prefix == "'" && candidate.Suffix == "-- -" {
+			foundCommented = true
+		}
 	}
 	if !foundEmpty {
 		t.Fatalf("numeric context candidate is missing")
+	}
+	if !foundCommented {
+		t.Fatalf("commented string context candidate is missing")
 	}
 }
 

@@ -492,12 +492,18 @@ func (x *Executor) booleanOracle(cond string) bool {
 	if n := atomic.AddInt64(&x.probes, 1); n%50 == 0 && x.E.Opts.Verbose >= 1 {
 		x.E.Log.Info(fmt.Sprintf("blind extraction progress: %d oracle probes", n))
 	}
-	return responsesSimilar(body, trueBody) && responsesDiffer(body, falseBody)
+	// Pick the closer reference body. A fixed similarity threshold fails on
+	// large pages whose static chrome dominates the token set, and on oracle
+	// pairs that differ by only a few hundred bytes.
+	if len(body) < len(trueBody)/3 && len(body) < len(falseBody)/3 {
+		return false
+	}
+	return matchScore(body, trueBody) > matchScore(body, falseBody)
 }
 
 func (x *Executor) booleanRequest(fragment string) string {
-	body, _, err := x.Request(fragment)
-	if err != nil {
+	body, length, err := x.Request(fragment)
+	if err != nil || looksBlocked(x.E.LastStatusCode, length) {
 		return ""
 	}
 	return body

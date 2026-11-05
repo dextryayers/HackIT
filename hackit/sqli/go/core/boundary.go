@@ -18,6 +18,7 @@ type BoundaryCandidate struct {
 // The order matters: string contexts are more common than numeric ones.
 func BoundaryCandidates() []BoundaryCandidate {
 	return []BoundaryCandidate{
+		{"'", ""},
 		{"'", "-- -"},
 		{"'", "-- "},
 		{"'", "#"},
@@ -88,7 +89,9 @@ func (e *Engine) boundaryDialects() []*Dialect {
 }
 
 // probe sends one boundary payload. Blocked responses are counted so the
-// caller can stop when the WAF rejects everything.
+// caller can stop when the WAF rejects everything. Boolean fragments are
+// already quote balanced: they end with an open literal that the application's
+// own closing quote completes, so no guard is added here.
 func (e *Engine) probe(point InjectionPoint, c BoundaryCandidate, fragment string) (string, int, error) {
 	body, length, _, err := e.RequestAt(point, c.Prefix+fragment+c.Suffix)
 	return body, length, err
@@ -123,9 +126,13 @@ func (e *Engine) DetectBoundary(point InjectionPoint, baseBody string) (Boundary
 
 	tried := map[string]bool{}
 	run := func(candidates []BoundaryCandidate) (Boundary, string, string, bool) {
-		for _, technique := range techniques {
-			for _, c := range candidates {
-				key := c.Prefix + "\x00" + c.Suffix
+		// Candidate outer, technique inner: the cheapest proof for each
+		// boundary is attempted before the next boundary is tried. Keying the
+		// visited set by candidate alone made every technique after the first
+		// one skip the whole list.
+		for _, c := range candidates {
+			for _, technique := range techniques {
+				key := technique + "\x00" + c.Prefix + "\x00" + c.Suffix
 				if tried[key] {
 					continue
 				}
@@ -161,6 +168,13 @@ const blockedAbortThreshold = 15
 
 // probeBoundary tests one candidate with one technique.
 func (e *Engine) probeBoundary(point InjectionPoint, c BoundaryCandidate, technique, baseBody string) (bool, string) {
+	// An empty suffix relies on the application's own closing quote, which is
+	// only consumed by a fragment that ends with an open literal. Boolean forms
+	// are built that way; error and UNION fragments are not, and probing them
+	// would produce a syntax error page that looks like a false positive.
+	if c.Suffix == "" && technique != "boolean" {
+		return false, ""
+	}
 	switch technique {
 	case "error":
 		for _, d := range e.boundaryDialects() {
@@ -229,7 +243,9 @@ func (e *Engine) testBoundaryBoolean(point InjectionPoint, c BoundaryCandidate, 
 	if !ok {
 		return false, ""
 	}
-	if !booleanDiffer(true1, false1) {
+	e.Log.Debug(fmt.Sprintf("boolean pair %q true=%d false=%d differ=%v",
+		c.Prefix+c.Suffix, len(true1), len(false1), booleanDiffer(true1, false1)))
+	if !booleanDiffer(true1, false1) && !distinctContentDiff(true1, false1, baseBody) {
 		return false, ""
 	}
 	// Confirm both branches are stable before trusting the difference.
