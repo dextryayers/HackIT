@@ -142,7 +142,7 @@ func hasDBMSError(body string, dbms string) bool {
 func dbmsErrorPatterns(dbms string) []string {
 	switch strings.ToLower(dbms) {
 	case "mysql":
-		return []string{"you have an error in your sql syntax", "mysql_fetch", "mysql_error", "mariadb"}
+		return []string{"you have an error in your sql syntax", "mysql_fetch", "mysql_error", "mysqli", "mariadb"}
 	case "mariadb":
 		return []string{"you have an error in your sql syntax", "mariadb", "mysql_fetch"}
 	case "postgresql":

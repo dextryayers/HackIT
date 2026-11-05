@@ -58,6 +58,7 @@ FLAG_MAP = {
     'extract_charset': '--extract-charset',
     'extract_workers': '--extract-workers',
     'extract_batch': '--extract-batch',
+    'deadline': '--deadline',
     'network_scan': '--network-scan',
     'scan_target': '--scan-target',
     'scan_ports': '--scan-ports',
@@ -119,7 +120,7 @@ INT_FLAGS = frozenset({
     'timeout', 'risk_level', 'depth', 'threads', 'delay',
     'verbose', 'retry', 'crawl_depth', 'crawl_threads',
     'extract_workers', 'extract_batch', 'rows', 'limit', 'offset',
-    'max_length', 'time_secs', 'dump_batch',
+    'max_length', 'time_secs', 'dump_batch', 'deadline',
 })
 
 

@@ -13,6 +13,7 @@ import shlex
 import sys
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from urllib.parse import urlparse
 
 import click
 
@@ -124,7 +125,8 @@ DEFAULT_OPTIONS: Dict[str, Any] = {
     "crawl": "",
     "output_format": "text",
     "no_color": False,
-    "verbose": 0,
+    "verbose": 1,
+    "deadline": 900,
     "report": None,
 }
 
@@ -221,6 +223,7 @@ PASSTHROUGH_KEYS = {
     "file_write",
     "file_exec",
     "crawl",
+    "deadline",
 }
 
 
@@ -493,6 +496,7 @@ def _execute(opts: Dict[str, Any], default_scan: bool = False) -> int:
 @click.option("--bypass-waf", is_flag=True, help="Enable WAF bypass payloads.")
 @click.option("--stealth", is_flag=True, help="Use low noise request pacing.")
 @click.option("--time-secs", default=3, type=int, help="Time based delay in seconds.")
+@click.option("--deadline", default=900, type=int, help="Overall scan deadline in seconds. 0 disables it.")
 @click.option(
     "--extract-technique",
     default="auto",
@@ -551,13 +555,15 @@ def _execute(opts: Dict[str, Any], default_scan: bool = False) -> int:
     help="Output format.",
 )
 @click.option("--no-color", is_flag=True, help="Disable colored output.")
-@click.option("-v", "--verbose", count=True, help="Show engine progress. Repeatable.")
+@click.option("-v", "--verbose", count=True, default=1, help="Show engine progress. Repeatable.")
 @click.option("--report", default=None, help="Write a report to this path after the run.")
 @click.pass_context
 def test_sqli(ctx: click.Context, **opts: Any) -> None:
     """SQL injection testing with enumeration and data extraction."""
     ctx.ensure_object(dict)
-    ctx.obj.update(opts)
+    merged = dict(DEFAULT_OPTIONS)
+    merged.update({key: value for key, value in opts.items() if value is not None})
+    ctx.obj.update(merged)
     if ctx.invoked_subcommand is not None:
         return
     if not opts.get("url"):
@@ -807,11 +813,12 @@ def gui() -> None:
 
 SHELL_HELP = """Commands:
   set <url>                     Set the current target.
+  status                        Show the current target and defaults.
   scan [url]                    Fingerprint and enumerate the target.
   deep [url]                    Full sweep: schemas, tables, counts, dumps.
   dbs [url]                     List databases.
   schemas [db] [url]            List schemas.
-  tables <db> [url]             List tables in a database.
+  tables [db] [url]             List tables. Without db: current database.
   columns <db> <table> [url]    List columns in a table.
   dump <db> <table> [url]       Dump a table.
   search <keyword> [url]        Search table and column names.
@@ -824,7 +831,12 @@ SHELL_HELP = """Commands:
   help                          Show this help.
   exit                          Leave the shell.
 
-A target set with 'set' is used when a command omits the URL.
+A target set with 'set' is used when a command omits the URL, so
+  set http://host/page.php?id=1
+  dbs
+  tables main
+works without repeating the URL. Chain commands on one line with ';':
+  set http://host/page.php?id=1; dbs; tables main
 """
 
 
@@ -847,6 +859,235 @@ def _shell_execute(options: Dict[str, Any], default_scan: bool = False) -> None:
         pass
 
 
+def _split_commands(line: str) -> List[str]:
+    """Split a shell line on semicolons that are outside quotes."""
+    segments: List[str] = []
+    buffer: List[str] = []
+    quote = ""
+    for char in line:
+        if char in ("'", '"'):
+            if quote == char:
+                quote = ""
+            elif not quote:
+                quote = char
+            buffer.append(char)
+        elif char == ";" and not quote:
+            segment = "".join(buffer).strip()
+            if segment:
+                segments.append(segment)
+            buffer = []
+        else:
+            buffer.append(char)
+    tail = "".join(buffer).strip()
+    if tail:
+        segments.append(tail)
+    return segments
+
+
+def _shell_prompt(target: Optional[str]) -> str:
+    if not target:
+        return "sqli> "
+    parsed = urlparse(target)
+    host = parsed.netloc or parsed.path.split("/")[0]
+    return "sqli[%s]> " % host
+
+
+SHELL_OPTION_KEYS = {
+    "dbms": "dbms",
+    "technique": "technique",
+    "cookie": "cookie",
+    "header": "headers",
+    "agent": "agent",
+    "timeout": "timeout",
+    "deadline": "deadline",
+    "verbose": "verbose",
+    "threads": "threads",
+    "delay": "delay",
+    "prefix": "prefix",
+    "suffix": "suffix",
+    "param": "param",
+    "tamper": "tamper",
+}
+
+SHELL_INT_OPTIONS = {"timeout", "deadline", "verbose", "threads", "delay"}
+
+
+def _shell_dispatch(
+    parts: Sequence[str],
+    target: Optional[str],
+    settings: Dict[str, Any],
+) -> Tuple[Optional[str], bool]:
+    """Run one shell command. Returns the target and a stop flag."""
+    command = parts[0].lower()
+
+    if command in ("exit", "quit"):
+        return target, True
+    if command in ("help", "?"):
+        click.echo(SHELL_HELP)
+        return target, False
+    if command == "clear":
+        click.clear()
+        click.echo(BANNER)
+        return target, False
+    if command == "gui":
+        try:
+            from .gui import launch_gui
+
+            launch_gui()
+        except Exception as exc:
+            _log("error", "GUI unavailable: %s" % exc)
+        return target, False
+    if command in ("set", "target"):
+        if len(parts) < 2:
+            if target:
+                _log("info", "target: %s" % target)
+            else:
+                _log("warn", "usage: set <url>")
+            return target, False
+        new_target = parts[1]
+        if not new_target.startswith(("http://", "https://")):
+            new_target = "https://" + new_target
+        _log("ok", "target set to %s" % new_target)
+        return new_target, False
+    if command == "status":
+        if target:
+            _log("info", "target: %s" % target)
+        else:
+            _log("warn", "no target set; use: set <url>")
+        shown = ", ".join(
+            "%s=%s" % (key, value)
+            for key, value in settings.items()
+            if value not in (None, "", (), False)
+        )
+        click.echo("  %s" % (shown or "defaults"))
+        return target, False
+    if command in ("opt", "option"):
+        if len(parts) == 1:
+            for key, value in settings.items():
+                click.echo("  %s = %s" % (key, value))
+            return target, False
+        key = parts[1].lower()
+        if key not in SHELL_OPTION_KEYS:
+            _log("warn", "unknown option: %s" % key)
+            return target, False
+        if len(parts) < 3:
+            click.echo("  %s = %s" % (key, settings.get(SHELL_OPTION_KEYS[key])))
+            return target, False
+        raw_value = " ".join(parts[2:])
+        value: Any = raw_value
+        if key in SHELL_INT_OPTIONS:
+            try:
+                value = int(raw_value)
+            except ValueError:
+                _log("warn", "%s expects a number" % key)
+                return target, False
+        settings[SHELL_OPTION_KEYS[key]] = value
+        _log("ok", "%s set to %s" % (key, value))
+        return target, False
+
+    # Legacy form: <url> <command> [arguments].
+    if command.startswith(("http://", "https://")):
+        target = parts[0]
+        if len(parts) < 2:
+            options = _base_options()
+            options.update(settings)
+            options["url"] = target
+            _shell_execute(options, default_scan=True)
+            return target, False
+        parts = [parts[1]] + list(parts[2:])
+        command = parts[0].lower()
+
+    options = _base_options()
+    options.update(settings)
+    options["url"] = target
+
+    if command == "scan":
+        options["url"] = _shell_target(parts, 1, target)
+        _shell_execute(options, default_scan=True)
+    elif command == "deep":
+        options["url"] = _shell_target(parts, 1, target)
+        options["deep"] = True
+        _shell_execute(options)
+    elif command == "dbs":
+        options["url"] = _shell_target(parts, 1, target)
+        options["list_dbs"] = True
+        _shell_execute(options)
+    elif command == "schemas":
+        if len(parts) > 1 and not parts[1].startswith(("http://", "https://")):
+            options["database"] = parts[1]
+        options["url"] = _shell_target(parts, 2 if options["database"] else 1, target)
+        options["list_schemas"] = True
+        _shell_execute(options)
+    elif command == "tables":
+        index = 1
+        if len(parts) > 1 and not parts[1].startswith(("http://", "https://")):
+            options["database"] = parts[1]
+            index = 2
+        options["url"] = _shell_target(parts, index, target)
+        options["list_tables"] = True
+        _shell_execute(options)
+    elif command == "columns":
+        if len(parts) < 3:
+            _log("warn", "usage: columns <db> <table> [url]")
+            return target, False
+        options.update(database=parts[1], table=parts[2], list_columns=True)
+        options["url"] = _shell_target(parts, 3, target)
+        _shell_execute(options)
+    elif command == "dump":
+        if len(parts) < 3:
+            _log("warn", "usage: dump <db> <table> [url]")
+            return target, False
+        options.update(database=parts[1], dump_table=parts[2])
+        options["url"] = _shell_target(parts, 3, target)
+        _shell_execute(options)
+    elif command in ("dumpall", "dump-all"):
+        options["url"] = _shell_target(parts, 1, target)
+        options["dump_all"] = True
+        _shell_execute(options)
+    elif command == "search":
+        if len(parts) < 2:
+            _log("warn", "usage: search <keyword> [url]")
+            return target, False
+        options["search"] = parts[1]
+        options["url"] = _shell_target(parts, 2, target)
+        _shell_execute(options)
+    elif command == "schema":
+        if len(parts) > 1 and not parts[1].startswith(("http://", "https://")):
+            options["database"] = parts[1]
+        options["url"] = _shell_target(parts, 2 if options["database"] else 1, target)
+        options["schema"] = True
+        _shell_execute(options)
+    elif command == "rows":
+        if len(parts) > 1 and not parts[1].startswith(("http://", "https://")):
+            options["database"] = parts[1]
+        options["url"] = _shell_target(parts, 2 if options["database"] else 1, target)
+        options["count_rows"] = True
+        _shell_execute(options)
+    elif command in ("sql", "query"):
+        if len(parts) < 2:
+            _log("warn", "usage: sql <query> [url]")
+            return target, False
+        options["sql_query"] = " ".join(parts[1:]).strip()
+        _shell_execute(options)
+    elif command == "report":
+        options["url"] = _shell_target(parts, 1, target)
+        if not options["url"]:
+            _log("warn", "set a target first")
+            return target, False
+        results = _run_engine(_default_scan(options))
+        if results:
+            report_mod.generate_report(
+                results,
+                "sqli_report",
+                formats=("html", "json"),
+                target=str(options["url"]),
+            )
+    else:
+        _log("warn", "unknown command: %s" % command)
+        click.echo("Type 'help' for available commands.")
+    return target, False
+
+
 def interactive_shell() -> None:
     click.echo(BANNER)
     click.secho(WARNING, fg="yellow")
@@ -855,9 +1096,10 @@ def interactive_shell() -> None:
     click.echo()
 
     target: Optional[str] = None
+    settings: Dict[str, Any] = {}
     while True:
         try:
-            raw = click.prompt("sqli", prompt_suffix="> ", default="", show_default=False)
+            raw = click.prompt(_shell_prompt(target), prompt_suffix="", default="", show_default=False)
         except (EOFError, KeyboardInterrupt):
             click.echo()
             break
@@ -865,137 +1107,22 @@ def interactive_shell() -> None:
         raw = raw.strip()
         if not raw:
             continue
-        try:
-            parts = shlex.split(raw)
-        except ValueError as exc:
-            _log("error", "could not parse input: %s" % exc)
-            continue
-        if not parts:
-            continue
-
-        command = parts[0].lower()
-        if command in ("exit", "quit"):
-            break
-        if command in ("help", "?"):
-            click.echo(SHELL_HELP)
-            continue
-        if command == "clear":
-            click.clear()
-            click.echo(BANNER)
-            continue
-        if command == "gui":
+        for segment in _split_commands(raw):
             try:
-                from .gui import launch_gui
-
-                launch_gui()
-            except Exception as exc:
-                _log("error", "GUI unavailable: %s" % exc)
-            continue
-        if command in ("set", "target"):
-            if len(parts) < 2:
-                _log("warn", "usage: set <url>")
+                parts = shlex.split(segment)
+            except ValueError as exc:
+                _log("error", "could not parse input: %s" % exc)
+                break
+            if not parts:
                 continue
-            target = parts[1]
-            if not target.startswith(("http://", "https://")):
-                target = "https://" + target
-            _log("ok", "target set to %s" % target)
-            continue
-
-        # Legacy form: <url> <command> [arguments].
-        if command.startswith(("http://", "https://")):
-            if len(parts) < 2:
-                options = _base_options()
-                options["url"] = parts[0]
-                _shell_execute(options, default_scan=True)
-                continue
-            target = parts[0]
-            parts = [parts[1]] + parts[2:]
-            command = parts[0].lower()
-
-        options = _base_options()
-        options["url"] = target
-
-        if command == "scan":
-            options["url"] = _shell_target(parts, 1, target)
-            _shell_execute(options, default_scan=True)
-        elif command == "deep":
-            options["url"] = _shell_target(parts, 1, target)
-            options["deep"] = True
-            _shell_execute(options)
-        elif command == "dbs":
-            options["url"] = _shell_target(parts, 1, target)
-            options["list_dbs"] = True
-            _shell_execute(options)
-        elif command == "schemas":
-            if len(parts) > 1 and not parts[1].startswith(("http://", "https://")):
-                options["database"] = parts[1]
-            options["url"] = _shell_target(parts, 2 if options["database"] else 1, target)
-            options["list_schemas"] = True
-            _shell_execute(options)
-        elif command == "tables":
-            if len(parts) < 2:
-                _log("warn", "usage: tables <db> [url]")
-                continue
-            options["database"] = parts[1]
-            options["url"] = _shell_target(parts, 2, target)
-            options["list_tables"] = True
-            _shell_execute(options)
-        elif command == "columns":
-            if len(parts) < 3:
-                _log("warn", "usage: columns <db> <table> [url]")
-                continue
-            options.update(database=parts[1], table=parts[2], list_columns=True)
-            options["url"] = _shell_target(parts, 3, target)
-            _shell_execute(options)
-        elif command == "dump":
-            if len(parts) < 3:
-                _log("warn", "usage: dump <db> <table> [url]")
-                continue
-            options.update(database=parts[1], dump_table=parts[2])
-            options["url"] = _shell_target(parts, 3, target)
-            _shell_execute(options)
-        elif command == "search":
-            if len(parts) < 2:
-                _log("warn", "usage: search <keyword> [url]")
-                continue
-            options["search"] = parts[1]
-            options["url"] = _shell_target(parts, 2, target)
-            _shell_execute(options)
-        elif command == "schema":
-            if len(parts) > 1 and not parts[1].startswith(("http://", "https://")):
-                options["database"] = parts[1]
-            options["url"] = _shell_target(parts, 2 if options["database"] else 1, target)
-            options["schema"] = True
-            _shell_execute(options)
-        elif command == "rows":
-            if len(parts) > 1 and not parts[1].startswith(("http://", "https://")):
-                options["database"] = parts[1]
-            options["url"] = _shell_target(parts, 2 if options["database"] else 1, target)
-            options["count_rows"] = True
-            _shell_execute(options)
-        elif command in ("sql", "query"):
-            if len(parts) < 2:
-                _log("warn", "usage: sql <query> [url]")
-                continue
-            options["sql_query"] = parts[1]
-            options["url"] = _shell_target(parts, 2, target)
-            _shell_execute(options)
-        elif command == "report":
-            options["url"] = _shell_target(parts, 1, target)
-            if not options["url"]:
-                _log("warn", "set a target first")
-                continue
-            results = _run_engine(_default_scan(options))
-            if results:
-                report_mod.generate_report(
-                    results,
-                    "sqli_report",
-                    formats=("html", "json"),
-                    target=str(options["url"]),
-                )
-        else:
-            _log("warn", "unknown command: %s" % command)
-            click.echo("Type 'help' for available commands.")
+            try:
+                target, stop = _shell_dispatch(parts, target, settings)
+            except KeyboardInterrupt:
+                click.echo()
+                _log("warn", "command interrupted")
+                break
+            if stop:
+                return
 
 
 if __name__ == "__main__":

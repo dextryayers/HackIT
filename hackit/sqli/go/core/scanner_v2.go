@@ -39,6 +39,16 @@ func (e *Engine) StartV2() []Result {
 	}
 
 	heuristicDBMS := DetectDBMS(baseBody, headers)
+	// A clean landing page often carries no database signature. The response to
+	// a single quote usually does, because the application's own error handler
+	// prints the client driver name.
+	if heuristicDBMS == "Unknown" {
+		if probeBody, _, _, err := e.RequestAt(first, "'"); err == nil {
+			if detected := DetectDBMS(probeBody, e.LastResponseHeaders); detected != "Unknown" {
+				heuristicDBMS = detected
+			}
+		}
+	}
 	if heuristicDBMS != "Unknown" {
 		e.Log.Info(fmt.Sprintf("heuristic DBMS fingerprint: %s", heuristicDBMS))
 	}

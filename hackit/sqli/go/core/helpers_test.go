@@ -623,3 +623,63 @@ func TestSystemSchemaAndSensitiveTable(t *testing.T) {
 		}
 	}
 }
+
+func TestMySQLMetadataIsBackticked(t *testing.T) {
+	d := mysqlDialect()
+	// Some filters reject the bare "information_schema.tables" token while
+	// accepting the quoted identifier form, so every MySQL metadata query has
+	// to carry the backticks.
+	for _, expr := range []string{
+		d.Databases(),
+		d.Tables("", ""),
+		d.Tables("app", ""),
+		d.Columns("app", "", "users"),
+		d.TableColumns("app", "", "users"),
+		d.SearchTables("user"),
+		d.AllTables(),
+	} {
+		if strings.Contains(expr, "information_schema.tables") ||
+			strings.Contains(expr, "information_schema.columns") ||
+			strings.Contains(expr, "information_schema.schemata") {
+			t.Errorf("metadata query uses a bare schema name: %s", expr)
+		}
+		if !strings.Contains(expr, "`information_schema`.") {
+			t.Errorf("metadata query is missing quoted identifiers: %s", expr)
+		}
+	}
+}
+
+func TestBooleanDifferAcceptsSmallStableDelta(t *testing.T) {
+	base := strings.Repeat("a", 14000)
+	// A real oracle on a large page can differ by a few hundred bytes only.
+	if !booleanDiffer(base, base+strings.Repeat("b", 200)) {
+		t.Error("a small length delta should count as a difference")
+	}
+	if booleanDiffer(base, base) {
+		t.Error("identical bodies must not count as a difference")
+	}
+	if booleanDiffer("", "") {
+		t.Error("empty bodies must not count as a difference")
+	}
+}
+
+func TestLooksBlocked(t *testing.T) {
+	if !looksBlocked(406, 289) {
+		t.Error("a small 406 response should be treated as blocked")
+	}
+	if looksBlocked(200, 14444) {
+		t.Error("a normal page must not be treated as blocked")
+	}
+	if looksBlocked(406, 9000) {
+		t.Error("a large 406 page is an application page, not a WAF rejection")
+	}
+}
+
+func TestHasDBMSErrorIsStrict(t *testing.T) {
+	if hasDBMSError("<p>read more about MySQL</p>", "MySQL") {
+		t.Error("a product name in page copy is not a database error")
+	}
+	if !hasDBMSError("Warning: mysqli_error() expects exactly 1 parameter", "MySQL") {
+		t.Error("the mysql driver warning should match")
+	}
+}
