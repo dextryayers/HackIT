@@ -86,13 +86,44 @@ class GoEngine:
         if subdomains_file:
             cmd.extend(["--subdomains-file", subdomains_file])
 
+        import threading as _threading
+
+        def _forward(proc):
+            # Live-stream the Go worker's output so the user sees progress and
+            # NVD queries actually moving, instead of a silent wait.
+            if proc.stdout is None:
+                return
+            try:
+                for line in proc.stdout:
+                    line = line.rstrip("\n")
+                    if line:
+                        print(line)
+            except Exception:
+                pass
+
         try:
-            process = subprocess.Popen(cmd)
-            process.wait()
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            forwarder = _threading.Thread(target=_forward, args=(process,), daemon=True)
+            forwarder.start()
+            process.wait(timeout=300)
             return process.returncode == 0
         except KeyboardInterrupt:
             process.terminate()
+            try:
+                process.wait(timeout=2)
+            except Exception:
+                process.kill()
             print("\n[!] Interrupted")
+            return False
+        except subprocess.TimeoutExpired:
+            process.kill()
+            print("\n[!] Engine timeout (>300s)")
             return False
         except Exception as e:
             print(f"[!] Execution error: {e}")
