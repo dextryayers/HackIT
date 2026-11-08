@@ -364,6 +364,13 @@ def build_key_bindings(ui: Optional["TuiMixin"] = None, tui: bool = True) -> Key
             ui._show_thinking = not getattr(ui, "_show_thinking", True)
             ui._invalidate()
 
+        @kb.add("c-h", eager=True)
+        def _ctrl_h(event) -> None:  # noqa: ANN001
+            # Toggle progress visibility without stopping the pipeline.
+            if hasattr(ui, "set_progress_hidden"):
+                ui.set_progress_hidden(not getattr(ui, "_progress_hidden", False))
+                ui._invalidate()
+
         @kb.add("pageup", eager=True)
         def _page_up(event) -> None:  # noqa: ANN001
             ui._scroll_transcript(-12)
@@ -490,6 +497,15 @@ class TuiMixin:
         )
         self._tui_welcome()
         self._start_spinner()
+        # Autopilot contract: a target passed on the command line starts the
+        # full pipeline by itself once the TUI is interactive.
+        if self.mode_name == "AUTOPILOT" and self.target and getattr(self, "_autopilot_auto_run", False):
+            self._status_message = "autopilot starting"
+            self._invalidate()
+            try:
+                threading.Timer(1.0, lambda: self._dispatch("autopilot " + str(self.target))).start()
+            except Exception:
+                pass
         try:
             self.app.run()
         except KeyboardInterrupt:
@@ -522,6 +538,13 @@ class TuiMixin:
             self.app.exit()
 
     def _handle_ctrl_c(self) -> None:
+        if getattr(self, "_autopilot_running", False):
+            self._cancel_requested = True
+            if hasattr(self, "_autopilot_stop"):
+                self._autopilot_stop()
+            self._status_message = "cancelling autopilot…"
+            self._invalidate()
+            return
         if self.busy:
             self._cancel_requested = True
             if self.brain is not None and hasattr(self.brain, "cancel_stream"):
@@ -702,7 +725,10 @@ class TuiMixin:
         body.append("/", style=f"bold {AMBER}")
         body.append(" for the command palette. ", style=SLATE_DIM)
         body.append("Ctrl+P", style=f"bold {AMBER}")
-        body.append(" also opens it.\n", style=SLATE_DIM)
+        body.append(" also opens it. ", style=SLATE_DIM)
+        if self.mode_name == "AUTOPILOT":
+            body.append("Set a target with /set-target — autopilot runs the full pipeline automatically. ", style=SLATE_DIM)
+        body.append("\n", style=SLATE_DIM)
         body.append("Scroll transcript: ", style=SLATE_DIM)
         body.append("Wheel", style=f"bold {AMBER}")
         body.append(" / ", style=SLATE_DIM)
@@ -795,6 +821,11 @@ class TuiMixin:
         row("model", model)
         row("memory", f"{backend} · {messages} msg")
         row("target", self.target or "—")
+        autopilot_state = getattr(self, "_autopilot_phase", "") or "idle"
+        if getattr(self, "_autopilot_running", False):
+            autopilot_state = f"● {autopilot_state}"
+        autopilot_state = f"{autopilot_state} " + ("[hidden]" if getattr(self, "_progress_hidden", False) else "")
+        row("autopilot", autopilot_state)
         scroll_state = "live tail" if self._scroll_offset == 0 else f"↑ {self._scroll_offset} lines"
         row("scroll", scroll_state)
         row("workflow", workflow)
@@ -856,6 +887,8 @@ class TuiMixin:
                 (f"bg:{PANEL} {SLATE}", "select  "),
                 (f"bg:{PANEL} {CYAN}", "Enter "),
                 (f"bg:{PANEL} {SLATE}", "run  "),
+                (f"bg:{PANEL} {CYAN}", "Ctrl+H "),
+                (f"bg:{PANEL} {SLATE}", "hide/show progress  "),
                 (f"bg:{PANEL} {CYAN}", "Ctrl+C "),
                 (f"bg:{PANEL} {SLATE}", "exit"),
             ]

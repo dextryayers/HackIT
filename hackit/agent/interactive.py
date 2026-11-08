@@ -51,8 +51,9 @@ _ANSI_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 REPORTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "go", "reports")
 
 AUTOPILOT_COMMANDS = {
-    "set-target": "Lock target domain/IP",
+    "set-target": "Lock target domain/IP (auto-runs autopilot)",
     "target": "Show current target",
+    "autopilot": "Run full autonomous pentest (target optional)",
     "all": "Full comprehensive scan",
     "scan": "Run hative modules",
     "portscan": "Run port scan on target",
@@ -77,6 +78,10 @@ AUTOPILOT_COMMANDS = {
     "payload": "Forge payloads for a vulnerability class",
     "probe": "Send generated payloads to a target",
     "auto": "Run the full autonomous pipeline",
+    "autopilot": "Run full autonomous pentest (target optional)",
+    "progress": "Show/hide live progress",
+    "hide": "Hide progress output",
+    "show": "Show buffered progress",
     "osint": "Run OSINT profile discovery",
     "status": "Provider / model connectivity",
     "model": "Switch model (arrow-key picker)",
@@ -120,7 +125,11 @@ CHAT_COMMANDS = {
     "analyze": "Deep analysis of data/input",
     "payload": "Forge payloads for a vulnerability class",
     "probe": "Send generated payloads to a target",
-    "auto": "Run the autonomous pentest pipeline",
+    "auto": "Run the full autonomous pipeline",
+    "autopilot": "Run full autonomous pentest (target optional)",
+    "progress": "Show/hide live progress",
+    "hide": "Hide progress output",
+    "show": "Show buffered progress",
     "osint": "Run OSINT profile discovery",
     "scan": "Run full hative security scan",
     "status": "Provider / model connectivity",
@@ -275,7 +284,8 @@ def _console() -> "Console":
 
 PARAMETERLESS_COMMANDS = {
     "help", "clear", "status", "memory", "facts", "forget", "models",
-    "usage", "tokens", "exit", "quit", "retry", "target", "save", "export",
+    "usage", "tokens", "progress", "hide", "show", "exit", "quit",
+    "retry", "target", "save", "export",
 }
 
 
@@ -332,6 +342,14 @@ class AgentUI:
         self.last_prompt = ""
         self.brain = None
         self.tui = False
+        # Autopilot visibility + background run state.
+        self._progress_hidden = False
+        self._autopilot_running = False
+        self._autopilot_thread = None
+        self._autopilot_cancel = None
+        self._autopilot_state = None
+        self._autopilot_phase = ""
+        self._autopilot_lock = __import__("threading").Lock()
         self._print_banner()
 
     # ------------------------------------------------------------------
@@ -370,6 +388,18 @@ class AgentUI:
         pct: Optional[int] = None,
         module: str = "",
     ) -> None:
+        # Hidden mode buffers phase chatter but always shows findings,
+        # errors and completion. Buffered events replay on /show.
+        if self._progress_hidden:
+            if status not in ("error", "complete"):
+                if not hasattr(self, "_hidden_buffer"):
+                    self._hidden_buffer = []
+                self._hidden_buffer.append(
+                    (phase, message, status, pct, module)
+                )
+                if len(self._hidden_buffer) > 500:
+                    self._hidden_buffer = self._hidden_buffer[-500:]
+                return
         label = escape(str(module or phase or "task"))
         detail = escape(str(message or ""))
         suffix = f" [dim]{pct:>3}%[/dim]" if isinstance(pct, int) and pct > 0 else ""
@@ -394,6 +424,268 @@ class AgentUI:
         self.print(f"[bold {color}]{escape(str(summary))}[/bold {color}]")
         if table is not None:
             self.print(table)
+
+    # ------------------------------------------------------------------
+    # Progress visibility (hide / show)
+    # ------------------------------------------------------------------
+
+    def set_progress_hidden(self, hidden: bool) -> List[Tuple[str, str, str, Any, str]]:
+        """Toggle progress visibility. Returns buffered events when showing."""
+        self._progress_hidden = bool(hidden)
+        if hidden:
+            self.print("[dim]Progress hidden. Running phases are buffered — /show to replay.[/dim]")
+            return []
+        buffered = getattr(self, "_hidden_buffer", []) or []
+        if hasattr(self, "_hidden_buffer"):
+            self._hidden_buffer = []
+        else:
+            buffered = []
+        if buffered:
+            self.print(f"[dim]Progress visible — replaying {len(buffered)} buffered event(s).[/dim]")
+        else:
+            self.print("[dim]Progress visible.[/dim]")
+        return buffered
+
+    def is_progress_hidden(self) -> bool:
+        return bool(getattr(self, "_progress_hidden", False))
+
+    def _replay_buffered(self, events: List[Tuple[str, str, str, Any, str]]) -> None:
+        if not events:
+            return
+        # Temporarily force visibility so replay actually renders.
+        self._progress_hidden = False
+        for phase, message, status, pct, module in events:
+            self.operation_event(phase, message, status=status, pct=pct, module=module)
+
+    def _cmd_progress(self, argument: str) -> None:
+        arg = (argument or "").strip().lower()
+        if arg in ("hide", "hidden", "off"):
+            self.set_progress_hidden(True)
+        elif arg in ("show", "visible", "on", "unhide"):
+            buffered = self.set_progress_hidden(False)
+            self._replay_buffered(buffered)
+        elif arg == "status":
+            hidden = self.is_progress_hidden()
+            buffered_count = len(getattr(self, "_hidden_buffer", []) or [])
+            autopilot = "running" if self._autopilot_running else "idle"
+            self.print(
+                f"[dim]Progress: {'hidden' if hidden else 'visible'} "
+                f"· buffered: {buffered_count} · autopilot: {autopilot} "
+                f"· phase: {escape(str(self._autopilot_phase or '—'))}[/dim]"
+            )
+        else:
+            buffered = self.set_progress_hidden(not self._progress_hidden)
+            self._replay_buffered(buffered)
+
+    # ------------------------------------------------------------------
+    # Autopilot background runner
+    # ------------------------------------------------------------------
+
+    def _autopilot_start(self, target: str) -> bool:
+        """Start the full pipeline in a background thread. Returns False if busy."""
+        import threading
+
+        target = (target or self.target or "").strip()
+        if not target:
+            self.print("[yellow]Usage: /autopilot <target>  (or /set-target first)[/yellow]")
+            return False
+        with self._autopilot_lock:
+            if self._autopilot_running:
+                self.print("[yellow]Autopilot already running — /autopilot stop to cancel.[/yellow]")
+                return False
+            self._autopilot_running = True
+            self._autopilot_phase = "recon"
+            self._autopilot_state = None
+            cancel = threading.Event()
+            if self.brain is not None and hasattr(self.brain, "cancel_event"):
+                cancel = self.brain.cancel_event
+                self.brain.reset_cancel()
+            self._autopilot_cancel = cancel
+            self.target = target
+
+        self.begin_operation("AUTONOMOUS PENTEST", str(target))
+        self.print(
+            "[dim]AI is running the full pipeline: recon → osint → js → params → "
+            "payload → analyse → plan → execute → probe → correlate → report. "
+            "/progress hide to silence the chatter. Ctrl+C / /autopilot stop to cancel.[/dim]"
+        )
+
+        def _runner() -> None:
+            try:
+                from .workflow import run_pentest, NODE_SEQUENCE
+
+                phase_order = [name for name, _node in NODE_SEQUENCE]
+                phase_total = max(1, len(phase_order))
+
+                def _progress(phase: str, message: str) -> None:
+                    phase = str(phase)
+                    message = str(message)
+                    self._autopilot_phase = phase
+                    status = "run"
+                    pct = None
+                    if phase in phase_order:
+                        index = phase_order.index(phase)
+                        starting = message.startswith("starting ")
+                        if not starting:
+                            status = "done"
+                        pct = int((index + (0 if starting else 1)) / phase_total * 100)
+                    elif phase == "workflow":
+                        status = "log"
+                    elif message.startswith("error:"):
+                        status = "error"
+                    self.operation_event(phase, message, status=status, pct=pct)
+
+                state = run_pentest(
+                    target, scope="active_stealth", progress=_progress,
+                    cancel_event=cancel, authorized=True,
+                )
+                with self._autopilot_lock:
+                    self._autopilot_state = state
+                    self._autopilot_running = False
+                    self._autopilot_phase = "done"
+                cancelled = bool(
+                    (state.get("cancelled") if isinstance(state, dict) else False)
+                ) or (self.brain is not None and getattr(self.brain, "cancelled", False))
+                if cancelled:
+                    self.end_operation(
+                        "Autopilot cancelled. Running tool processes were stopped.",
+                        status="cancelled",
+                    )
+                    return
+                self._render_autopilot_result(state)
+            except Exception as exc:  # noqa: BLE001
+                with self._autopilot_lock:
+                    self._autopilot_running = False
+                    self._autopilot_phase = "error"
+                    self._autopilot_state = {"error": str(exc)}
+                self.end_operation(f"Autopilot failed: {exc}", status="error")
+                if os.environ.get("HACKIT_DEBUG"):
+                    self.print(traceback.format_exc())
+
+        self._autopilot_thread = threading.Thread(target=_runner, daemon=True, name="autopilot")
+        self._autopilot_thread.start()
+        return True
+
+    def _render_autopilot_result(self, state: Any) -> None:
+        if not isinstance(state, dict):
+            self.end_operation("Autopilot finished with no state.", status="error")
+            return
+        findings = state.get("findings", []) or []
+        report_path = state.get("report_path") or ""
+        risk = state.get("risk_score", 0.0)
+        coverage = state.get("coverage", {}) or {}
+        attack_log = state.get("attack_log", []) or []
+        analysis = state.get("analysis", "") or ""
+
+        if coverage:
+            coverage_table = Table(
+                title="ACTIVE COVERAGE",
+                box=box.SIMPLE_HEAVY,
+                title_justify="left",
+                pad_edge=False,
+            )
+            coverage_table.add_column("Metric", style="dim", no_wrap=True)
+            coverage_table.add_column("Value", overflow="fold")
+            modules = ", ".join(str(item) for item in coverage.get("execute_modules", [])) or "—"
+            targets = coverage.get("execute_targets", []) or []
+            probe_targets = coverage.get("probe_targets", []) or []
+            probe_types = coverage.get("probe_types", []) or []
+            parameters = coverage.get("parameters", []) or []
+            coverage_table.add_row("authorized", "yes" if state.get("authorized") else "no")
+            coverage_table.add_row("module tasks", f"{coverage.get('execute_tasks', 0)} across {len(targets)} target(s)")
+            coverage_table.add_row("modules", modules)
+            coverage_table.add_row("endpoints", f"{len(coverage.get('endpoints', []) or [])} discovered")
+            coverage_table.add_row("parameters", ", ".join(str(item) for item in parameters[:12]) or "—")
+            coverage_table.add_row("payload probes", f"{coverage.get('probe_attempted', 0)} across {len(probe_targets)} target(s), {len(probe_types)} type(s)")
+            coverage_table.add_row("probe signals", str(coverage.get("probe_signals", 0)))
+            coverage_table.add_row("attack log", f"{len(attack_log)} action(s)")
+            self.print(coverage_table)
+
+        if analysis:
+            excerpt = strip_control(str(analysis)).strip()
+            if len(excerpt) > 1800:
+                excerpt = "…\n" + excerpt[-1800:]
+            self.print(
+                Panel(
+                    Text(excerpt, style="#e2e8f0"),
+                    title=Text(" ANALYSIS ", style="bold #22d3ee"),
+                    title_align="left",
+                    border_style="#1e293b",
+                    box=box.ROUNDED,
+                    padding=(0, 1),
+                )
+            )
+
+        table = None
+        if findings:
+            order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+            ranked = sorted(findings, key=lambda item: order.get(str(item.get("severity", "info")).lower(), 5))
+            table = Table(
+                title="FINDINGS", box=box.SIMPLE_HEAVY, title_justify="left", pad_edge=False,
+            )
+            table.add_column("Severity", no_wrap=True)
+            table.add_column("CVSS", justify="right", no_wrap=True)
+            table.add_column("Type", style="cyan", no_wrap=True)
+            table.add_column("Target", overflow="fold")
+            table.add_column("Evidence", style="dim", overflow="fold")
+            colors = {"critical": "#fb7185", "high": "#f59e0b", "medium": "#facc15", "low": "#34d399", "info": "#94a3b8"}
+            for item in ranked[:30]:
+                severity = str(item.get("severity", "info")).lower()
+                cvss = item.get("cvss")
+                table.add_row(
+                    Text(severity, style=f"bold {colors.get(severity, '#94a3b8')}"),
+                    Text(str(cvss if cvss is not None else "—")),
+                    Text(str(item.get("type", ""))),
+                    Text(str(item.get("target", ""))),
+                    Text(str(item.get("evidence", ""))[:220]),
+                )
+            if len(ranked) > 30:
+                table.caption = f"{len(ranked) - 30} more finding(s) in the report"
+                table.caption_justify = "left"
+
+        self.end_operation(
+            f"Autopilot complete · {len(findings)} finding(s) · risk {risk}/10 · "
+            f"{coverage.get('execute_tasks', 0)} module task(s) · "
+            f"{coverage.get('probe_attempted', 0)} payload probe(s) · "
+            f"{coverage.get('probe_signals', 0)} probe signal(s)",
+            table,
+        )
+        if report_path:
+            self.print(f"[dim]Report: {escape(str(report_path))}[/dim]")
+
+    def _autopilot_stop(self) -> bool:
+        with self._autopilot_lock:
+            if not self._autopilot_running:
+                self.print("[dim]Autopilot is not running.[/dim]")
+                return False
+            cancel = self._autopilot_cancel
+        if cancel is not None:
+            cancel.set()
+        if self.brain is not None and hasattr(self.brain, "cancel_stream"):
+            try:
+                self.brain.cancel_stream()
+            except Exception:
+                pass
+        self.print("[yellow]Autopilot cancellation requested.[/yellow]")
+        return True
+
+    def _cmd_autopilot(self, argument: str) -> None:
+        arg = (argument or "").strip()
+        low = arg.lower()
+        if low == "stop":
+            self._autopilot_stop()
+            return
+        if low == "status":
+            running = "running" if self._autopilot_running else "idle"
+            self.print(
+                f"[dim]Autopilot: {running} · phase: {escape(str(self._autopilot_phase or '—'))} "
+                f"· target: {escape(str(self.target or '—'))} · "
+                f"progress: {'hidden' if self._progress_hidden else 'visible'}[/dim]"
+            )
+            return
+        target = arg or self.target
+        # /autopilot with no target in autopilot mode reuses the locked target.
+        self._autopilot_start(target)
 
 
     # ------------------------------------------------------------------
@@ -1450,6 +1742,18 @@ class AgentUI:
         if head == "auto":
             self._cmd_auto(rest)
             return True
+        if head == "autopilot":
+            self._cmd_autopilot(rest)
+            return True
+        if head == "progress":
+            self._cmd_progress(rest)
+            return True
+        if head == "hide":
+            self._cmd_progress("hide")
+            return True
+        if head == "show":
+            self._cmd_progress("show")
+            return True
         if head == "target":
             self.target = rest or self.target
             self.print(f"[cyan]Target:[/cyan] {escape(str(self.target or '—'))}")
@@ -1457,6 +1761,19 @@ class AgentUI:
         if head in ("set-target", "set_target"):
             self.target = rest
             self.print(f"[cyan]Target locked:[/cyan] {escape(str(self.target))}")
+            # Autopilot contract: once the target is locked the AI runs the
+            # full pipeline by itself.  /set-target --no-run opts out once.
+            if self.mode_name == "AUTOPILOT" and self.target and "--no-run" not in rest:
+                # Re-parse without the flag so it is never treated as target.
+                self.target = rest.replace("--no-run", "").strip()
+                self.print("[dim]Autopilot starting — full pentest pipeline (recon → report).[/dim]")
+                # Small delay so the lock message lands before progress.
+                try:
+                    import threading
+
+                    threading.Timer(0.6, lambda: self._autopilot_start(self.target)).start()
+                except Exception:
+                    self._autopilot_start(self.target)
             return True
         if head == "export":
             self._cmd_export(rest)
@@ -1558,6 +1875,10 @@ class AgentUI:
             try:
                 raw = self._read_input(session)
             except KeyboardInterrupt:
+                if getattr(self, "_autopilot_running", False):
+                    self._autopilot_stop()
+                    self.print("\n[yellow]Autopilot cancelled. Type /exit to quit.[/yellow]")
+                    continue
                 self.print("\n[dim]Interrupted. Type /exit to quit.[/dim]")
                 continue
             except EOFError:
@@ -1603,7 +1924,9 @@ class AutopilotUI(AgentUI):
         if can_use_tui():
             from .tui import AutopilotTUI
 
-            AutopilotTUI(target=self.target).run()
+            ui = AutopilotTUI(target=self.target)
+            ui._autopilot_auto_run = bool(getattr(self, "_autopilot_auto_run", False))
+            ui.run()
             return
 
         from .brain import AIHyperBrain
@@ -1618,14 +1941,26 @@ class AutopilotUI(AgentUI):
         self._status_panel()
         if self.target:
             self.print(f"[cyan]Target:[/cyan] {escape(str(self.target))}")
+            if getattr(self, "_autopilot_auto_run", False):
+                self.print("[dim]Autopilot auto-starting full pentest pipeline…[/dim]")
+                try:
+                    import threading
+
+                    threading.Timer(0.8, lambda: self._autopilot_start(self.target)).start()
+                except Exception:
+                    self._autopilot_start(self.target)
         else:
-            self.print("[yellow]No target set. Use /set-target <host> or /auto <host>.[/yellow]")
-        self.print("[dim]Type /help for commands. Ctrl+C cancels the current request.[/dim]\n")
+            self.print("[yellow]No target set. Use /set-target <host> (autopilot then runs automatically) or /autopilot <host>.[/yellow]")
+        self.print("[dim]Type /help for commands. /progress hide hides phases. Ctrl+C cancels.[/dim]\n")
 
         while self.running:
             try:
                 raw = self._read_input(session)
             except KeyboardInterrupt:
+                if getattr(self, "_autopilot_running", False):
+                    self._autopilot_stop()
+                    self.print("\n[yellow]Autopilot cancelled. Type /exit to quit.[/yellow]")
+                    continue
                 self.print("\n[dim]Interrupted. Type /exit to quit.[/dim]")
                 continue
             except EOFError:

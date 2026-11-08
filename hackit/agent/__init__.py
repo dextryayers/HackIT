@@ -160,6 +160,8 @@ def enter_agent_shell():
                     ("probe",     "Send forged payloads to a target"),
                     ("osint",     "OSINT footprint discovery"),
                     ("dashboard", "Real-time TUI dashboard"),
+                    ("autopilot", "Full autonomous pentest (auto after target)"),
+                    ("usage",     "Live token usage (session + all-time)"),
                     ("models",    "List models for the active provider"),
                     ("model",     "Switch model (arrow-key picker)"),
                     ("select",    "Central model select (chat, /halo, autopilot, auto)"),
@@ -1448,11 +1450,19 @@ def dashboard(target, scope):
 
 @agent.command()
 @click.argument('target', required=False, default='')
-def autopilot(target):
-    """Launch the Autonomous AI Bug Hunter against a target"""
+@click.option('--no-auto-run', is_flag=True, help='Do not auto-start the pipeline when a target is given')
+def autopilot(target, no_auto_run):
+    """Launch the Autonomous AI Bug Hunter against a target.
+
+    When a target is provided the full pipeline starts automatically once
+    the UI is ready: recon → osint → js → params → payload → analyse →
+    plan → execute → probe → correlate → report.  Pass --no-auto-run to
+    open the UI without starting the pipeline.
+    """
     try:
         from hackit.agent.interactive import create_ui
         ui = create_ui("autopilot")
+        ui._autopilot_auto_run = bool(target) and not no_auto_run
         if target:
             ui.target = target
         ui.run()
@@ -1775,6 +1785,10 @@ _AGENT_ACTIONS = {
     "payload": "payload",
     "probe": "probe",
     "auto": "auto",
+    "autopilot": "autopilot",
+    "progress": "progress",
+    "hide": "progress hide",
+    "show": "progress show",
     "osint": "osint",
     "models": "models",
     "model": "model",

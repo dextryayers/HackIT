@@ -256,6 +256,8 @@ def recon_node(state: PentestState) -> Dict[str, Any]:
         return ("fuzz", data if isinstance(data, list) else [])
 
     scan_data: Dict[str, Any] = {}
+    for _name in ("portscan", "subdomain", "tech", "waf", "headers", "dir-fuzz"):
+        _emit_progress("recon", f"{_name} starting")
     _emit_progress("recon", "core recon modules starting")
     for item in _run_parallel(
         [do_portscan, do_subdomain, do_tech, do_waf, do_headers, do_fuzz],
@@ -263,6 +265,7 @@ def recon_node(state: PentestState) -> Dict[str, Any]:
     ):
         if isinstance(item, tuple) and len(item) == 2:
             scan_data[item[0]] = item[1]
+            _emit_progress("recon", f"{item[0]} done")
 
     # Deep external recon: prefer real tools, fall back to pure Python, dedup.
     try:
@@ -473,6 +476,7 @@ def osint_node(state: PentestState) -> Dict[str, Any]:
     findings = list(state.get("findings", []))
     osint: Dict[str, Any] = {}
 
+    _emit_progress("osint", f"osint starting for {host or target}")
     if _is_private_host(host):
         osint = {"skipped": "private or loopback target"}
         scan_data["osint"] = osint
@@ -564,6 +568,7 @@ def js_node(state: PentestState) -> Dict[str, Any]:
         return updates
 
     _host, _scheme, _port, base_url = _target_parts(state)
+    _emit_progress("js", f"js analysis starting for {base_url}")
     result = bridge.run_hative(base_url, ["js"], timeout=180)
     payload = _module_payload(result)
     if payload is None and result and isinstance(result[0], dict):
@@ -597,6 +602,7 @@ def param_node(state: PentestState) -> Dict[str, Any]:
         scan_data["params"] = {"skipped": "no web service detected"}
     else:
         _host, _scheme, _port, base_url = _target_parts(state)
+        _emit_progress("param", f"parameter discovery starting for {base_url}")
         result = bridge.run_hative(base_url, ["param"], timeout=120)
         scan_data["params"] = _module_payload(result) or (result[0].get("data") if result else {})
 
@@ -650,6 +656,7 @@ def payload_node(state: PentestState) -> Dict[str, Any]:
     target = state["target"]
     updates: Dict[str, Any] = {"phase": Phase.PAYLOAD.value}
     types = _select_payload_types(state)
+    _emit_progress("payload", f"payload forge starting: {', '.join(types)}")
 
     try:
         from hackit.agent import payloads as forge
@@ -728,6 +735,7 @@ No active verification has run yet: every vulnerability is a hypothesis.
 Never describe anything as confirmed; use "candidate" or "hypothesis".
 Be concise: answer in at most 120 words.
 """
+    _emit_progress("analyze", "ai analysis starting")
     analysis = bridge.ai_chat(prompt, mode="analyze", timeout=90)
     analysis_error = ""
     if (not analysis or analysis.startswith("[!]") or len(analysis.strip()) < 80
@@ -773,6 +781,7 @@ Return an ordered plan that covers:
 Sort by criticality and state the exact endpoint/parameter to test when known.
 Be concise: answer in at most 120 words.
 """
+    _emit_progress("plan", "attack plan drafting starting")
     plan = bridge.ai_chat(prompt, mode="attack", timeout=90)
     plan_error = ""
     if (not plan or plan.startswith("[!]") or len(plan.strip()) < 80
@@ -1107,6 +1116,7 @@ def execute_node(state: PentestState) -> Dict[str, Any]:
     except ValueError:
         task_budget = 72
     tasks = tasks[:task_budget]
+    _emit_progress("execute", f"execute starting: {len(tasks)} module task(s) across {len(endpoints)} endpoint(s)")
 
     def make_worker(config, target_url):
         mod, ftype, sev, cvss, rem = config
@@ -1120,6 +1130,7 @@ def execute_node(state: PentestState) -> Dict[str, Any]:
         [make_worker(config, target_url) for config, target_url in tasks],
         max_workers=8,
     )
+    _emit_progress("execute", f"execute done: {len(module_results)} task(s) finished")
 
     attack_log = list(state.get("attack_log") or [])
     for item in module_results:
@@ -1376,6 +1387,7 @@ def probe_node(state: PentestState) -> Dict[str, Any]:
     attempted_types: List[str] = []
     signal_keys = set()
 
+    _emit_progress("probe", "payload verification starting")
     try:
         from hackit.agent import payloads as forge
 
@@ -1395,9 +1407,11 @@ def probe_node(state: PentestState) -> Dict[str, Any]:
         # and each round reaches all discovered targets/parameters before a
         # second payload is tried.  A small budget must not starve later
         # classes just because the first one was listed first.
+        _emit_progress("probe", f"probe starting: {len(type_payloads)} payload class(es)")
         for index, (vuln_type, selected) in enumerate(type_payloads):
             if budget <= 0:
                 break
+            _emit_progress("probe", f"{vuln_type}: {len(selected)} payload(s) (budget {budget})")
             remaining_types = len(type_payloads) - index
             type_budget = max(1, budget // remaining_types)
             ordered_params = _param_order(vuln_type, params)[:3]
@@ -1594,6 +1608,7 @@ Verified probe hits: {sum(1 for item in (state.get('probe_results') or []) if is
    and use a 0/10 risk score. Never describe a hypothesis as confirmed.
 Be concise: answer in at most 80 words.
 """
+    _emit_progress("correlate", "correlation starting")
     correlation = bridge.ai_chat(prompt, mode="correlate", timeout=90)
     correlation_error = ""
     if (not correlation or correlation.startswith("[!]") or len(correlation.strip()) < 40
@@ -1875,6 +1890,7 @@ do not assign a nonzero risk score, and never call a hypothesis confirmed.
 Otherwise only claim what the evidence supports; mark hypotheses as hypotheses.
 Be concise: answer in at most 150 words.
 """
+    _emit_progress("report", "report drafting starting")
     report = bridge.ai_chat(prompt, mode="report", timeout=90)
     report_error = ""
     if (not report or report.startswith("[!]") or len(report.strip()) < 120

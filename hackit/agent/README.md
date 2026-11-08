@@ -177,6 +177,36 @@ Intermediate state is persisted in `~/.hackit/workflow_state/`, so a run can be
 audited or resumed. If LangGraph is installed it is used as the state machine;
 otherwise a dependency-free sequential runner executes the identical nodes.
 
+### Autopilot mode (auto-run after target is set)
+
+In the Autopilot UI (`hackit agent autopilot [target]`), the AI runs the full
+pipeline by itself once a target is locked — no per-phase prompting:
+
+```text
+/set-target example.com        # autopilot starts immediately (use --no-run to opt out once)
+/autopilot example.com         # run explicitly
+/autopilot                    # reuse the locked target
+/autopilot stop               # cancel the background run
+/autopilot status             # show phase / target / visibility
+```
+
+* **What runs autonomously:** every workflow phase (recon with port scan,
+  subdomain enumeration, directory fuzzing, tech/WAF/header audit → OSINT →
+  JS analysis → parameter discovery → AI payload forge → AI analysis →
+  attack plan → active module execution → payload verification →
+  correlation & risk scoring → report).
+* **Background execution:** the pipeline runs in a worker thread. The UI stays
+  responsive and you can keep chatting, run `/usage`, or cancel at any time
+  with `Ctrl+C` or `/autopilot stop`.
+* **Granular live progress:** every sub-step emits an event (for example
+  `portscan starting`, `execute starting: 72 module task(s)`,
+  `sqli: 3 payload(s) (budget 60)`). Phases complete with a check and
+  percentage so you can see which pentest stage is running.
+* **Hide / show progress:** `/progress hide` (alias `/hide`) buffers phase
+  chatter while findings, errors and completion stay visible; `/progress show`
+  (alias `/show`) replays the buffer. In the full-screen TUI, `Ctrl+H` toggles
+  the same visibility, and the sidebar shows `autopilot ● <phase> [hidden]`.
+
 ### Authorization gate
 
 `hackit agent auto <target>` and `/auto <target>` run in explicit authorized
