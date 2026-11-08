@@ -54,6 +54,8 @@ AUTOPILOT_COMMANDS = {
     "set-target": "Lock target domain/IP (auto-runs autopilot)",
     "target": "Show current target",
     "autopilot": "Run full autonomous pentest (target optional)",
+    "recon": "Full recon: ports, subdomains, dir fuzz, JS crawl, tech, WAF",
+    "full": "Full pentest pipeline (alias for /autopilot)",
     "all": "Full comprehensive scan",
     "scan": "Run hative modules",
     "portscan": "Run port scan on target",
@@ -105,6 +107,8 @@ AUTOPILOT_COMMANDS = {
 }
 
 CHAT_COMMANDS = {
+    "recon": "Full recon: ports, subdomains, dir fuzz, JS crawl, tech, WAF",
+    "full": "Full pentest pipeline (alias for /autopilot)",
     "code": "Generate code with explanation",
     "debug": "Debug code or errors",
     "explain": "Explain complex topics simply",
@@ -684,6 +688,11 @@ class AgentUI:
             )
             return
         target = arg or self.target
+        if not target:
+            self.print("[yellow]Target belum terkunci.[/yellow]")
+            self.print("[dim]Ketik [green]/set-target example.com[/green] untuk mengunci dan langsung menjalankan autopilot. Atau [green]/autopilot example.com[/green].[/dim]")
+            self.print("[dim]Setelah target terkunci, serangan pentest berjalan otomatis. AI tetap bisa diajak ngobrol — sebutkan tugasnya (recon, port scan, subdomain, js crawl, dir brute force, sqli…), tool asli akan jalan.[/dim]")
+            return
         # /autopilot with no target in autopilot mode reuses the locked target.
         self._autopilot_start(target)
 
@@ -696,6 +705,24 @@ class AgentUI:
         self.clear_view()
         banner = Text(self.banner.strip("\n"), style="bold cyan")
         self.print(banner)
+        if self.mode_name == "AUTOPILOT":
+            pipeline = "recon → osint → js → params → payload → analyse → plan → execute → probe → correlate → report"
+            self.print(
+                Panel(
+                    Text.from_markup(
+                        "[bold]HackIt Autopilot[/bold]  [dim]v2.2 · high-precision cyber expert[/dim]\n"
+                        f"[dim]{pipeline}[/dim]\n\n"
+                        "[green]/set-target example.com[/green] kunci target → autopilot jalan otomatis\n"
+                        "[green]/recon example.com[/green]   ports · subdomain · dir fuzz · JS crawl · tech · WAF\n"
+                        "[green]/autopilot[/green]  pipeline penuh   [green]/progress hide[/green]  sembunyikan progress\n"
+                        "[green]/help[/green] commands   [green]Tab[/green] autocomplete   [green]Ctrl+C[/green] cancel"
+                    ),
+                    border_style="cyan",
+                    box=box.ROUNDED,
+                    padding=(0, 2),
+                )
+            )
+            return
         self.print(
             Panel(
                 Text.from_markup(
@@ -1340,6 +1367,101 @@ class AgentUI:
         )
 
 
+    def _cmd_recon(self, argument: str) -> None:
+        """Full recon stack in one call: ports, subdomains, dir fuzz, JS crawl, tech, WAF, headers.
+
+        Runs the hative modules sequentially with live progress and an
+        aggregated summary, so the operator does not have to call each tool
+        separately. Results stay evidence-first: only verified hits promote.
+        """
+        tokens = [item for item in (argument or "").split() if item]
+        modules = ("portscan", "subdomain", "fuzz", "js", "tech", "waf", "headers", "param")
+        if tokens and tokens[0].lower() not in {m.lower() for m in modules}:
+            self.target = tokens[0]
+            tokens = tokens[1:]
+        if tokens:
+            # "/recon <target> portscan js" → only those modules.
+            wanted = [t.lower() for t in tokens]
+            modules = tuple(m for m in modules if m.lower() in wanted) or modules
+        if not self.target:
+            self.print("[yellow]Set a target first: /set-target <host> atau /recon <host>[/yellow]")
+            return
+        if not self.brain:
+            return
+        self.begin_operation("RECON", str(self.target))
+        self.operation_event("recon", f"recon lengkap dimulai: {', '.join(modules)}", status="run", pct=0)
+
+        def _progress(event: Dict[str, Any]) -> None:
+            kind = str(event.get("event", ""))
+            status = {"start": "run", "retry": "run", "done": "done", "error": "error", "complete": "complete", "log": "log"}.get(kind, "run")
+            self.operation_event(
+                phase=str(event.get("module") or "recon"),
+                message=str(event.get("message", "")),
+                status=status,
+                pct=event.get("pct") if isinstance(event.get("pct"), int) else None,
+                module=str(event.get("module") or ""),
+            )
+
+        results = self.brain.stream_hative(self.target, on_progress=_progress, modules=list(modules))
+        cancelled = bool(getattr(self.brain, "cancelled", False))
+        if not results:
+            self.end_operation(
+                "Recon cancelled." if cancelled else "Recon completed with no results.",
+                status="cancelled" if cancelled else "error",
+            )
+            return
+
+        def _count(data: Any) -> int:
+            if isinstance(data, list):
+                return len(data)
+            if isinstance(data, dict):
+                for key in ("findings", "results", "vulnerabilities", "issues", "ports", "subdomains", "paths", "endpoints"):
+                    value = data.get(key)
+                    if isinstance(value, list):
+                        return len(value)
+                return 1 if data else 0
+            return 0
+
+        total = 0
+        table = Table(title="RECON RESULTS", box=box.SIMPLE_HEAVY, title_justify="left", pad_edge=False)
+        table.add_column("Module", style="cyan", no_wrap=True)
+        table.add_column("Status", no_wrap=True)
+        table.add_column("Count", justify="right")
+        table.add_column("Time", justify="right", style="dim")
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            data = item.get("data")
+            count = _count(data)
+            total += count
+            error = str(item.get("error") or "")
+            success = bool(item.get("success")) and not error
+            status_text = Text("ok" if success else "error", style=GREEN if success else RED)
+            elapsed = item.get("elapsed_seconds")
+            elapsed_text = f"{float(elapsed):.1f}s" if isinstance(elapsed, (int, float)) else "—"
+            table.add_row(Text(str(item.get("module") or "module")), status_text, Text(str(count)), elapsed_text, )
+            if error:
+                table.add_column("Note", style="dim") if len(table.columns) == 4 else None
+            # Append error inline via caption if any module failed.
+        failures = [str(x.get("module")) for x in results if isinstance(x, dict) and x.get("error")]
+        if failures:
+            table.caption = f"modules gagal: {', '.join(failures)} — sisa recon tetap jalan"
+            table.caption_justify = "left"
+        self.end_operation(
+            f"Recon lengkap · {len(results)} module(s) · {total} item(s) · target {self.target}",
+            table,
+        )
+        # Surface the most useful recon output as plain lines for quick scan.
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            data = item.get("data")
+            module = str(item.get("module") or "")
+            if isinstance(data, list) and data:
+                sample = ", ".join(str(x)[:60] for x in data[:5])
+                if sample:
+                    self.print(f"[dim]{module}: {escape(sample[:220])}[/dim]")
+
     def _cmd_osint(self, query: str) -> None:
         if not query:
             query = self.target
@@ -1653,16 +1775,21 @@ class AgentUI:
     # The AI stays conversational, but a pentest intent always executes
     # deterministically instead of being left as chat text.
     _CYBER_INTENTS = [
-        (("subdomain", "sub domain", "sub-domain", "enum subdomain"), "subdomainenum"),
-        (("port scan", "portscan", "pindai port", "cek port", "scan port"), "portscan"),
-        (("dir brute", "dir fuzz", "brute force direktori", "dorking", "cari direktori"), "dirfuzz"),
-        (("js crawl", "javascript", "crawl js", "analisis js", "endpoints js"), "js"),
-        (("recon", "pindai lengkap", "full scan", "serang", "pen test", "pentest", "uji celah"), "all"),
-        (("tech", "teknologi", "fingerprint teknologi", "waf", "deteksi waf"), "techdetect"),
-        (("sqli", "sql injection", "cari sql", "uji sql"), "sqli"),
-        (("xss", "cross site", "uji xss"), "xss"),
+        # Combined / full pipelines first (longest needles win).
+        (("full pentest", "pentest penuh", "uji lengkap", "serang penuh", "autopilot penuh", "pentest lengkap", "uji semua"), "all"),
+        (("recon lengkap", "recon penuh", "pindai semua", "semua recon", "full recon"), "recon"),
+        (("recon", "pindai", "mapping", "pemetaan"), "recon"),
+        (("subdomain", "sub domain", "sub-domain", "enum subdomain", "cari subdomain"), "subdomainenum"),
+        (("port scan", "portscan", "pindai port", "cek port", "scan port", "pindai port"), "portscan"),
+        (("dir brute", "dir fuzz", "brute force direktori", "dorking", "cari direktori", "brute force", "fuzz direktori"), "dirfuzz"),
+        (("js crawl", "javascript", "crawl js", "analisis js", "endpoints js", "crawl javascript"), "js"),
+        (("tech", "teknologi", "fingerprint teknologi", "waf", "deteksi waf", "cek teknologi"), "techdetect"),
+        (("serang", "pen test", "pentest", "uji celah", "uji keamanan"), "all"),
+        (("sqli", "sql injection", "cari sql", "uji sql", "injeksi sql"), "sqli"),
+        (("xss", "cross site", "uji xss", "injeksi xss"), "xss"),
         (("ssrf", "uji ssrf"), "ssrf"),
-        (("param", "parameter", "param discovery", "cari parameter"), "params"),
+        (("param", "parameter", "param discovery", "cari parameter", "temuan parameter"), "params"),
+        (("osint", "profil", "jejaring", "sosial"), "osint"),
     ]
 
     def _maybe_cyber_intent(self, text: str) -> bool:
@@ -1690,6 +1817,12 @@ class AgentUI:
         self.target = candidate
         if module == "all":
             self._autopilot_start(candidate)
+            return True
+        if module == "recon":
+            self._cmd_recon(candidate)
+            return True
+        if module == "osint":
+            self._cmd_osint(candidate)
             return True
         self._cmd_scan(module)
         return True
@@ -1799,6 +1932,12 @@ class AgentUI:
             return True
         if head == "probe":
             self._cmd_probe_command(rest)
+            return True
+        if head == "recon":
+            self._cmd_recon(rest)
+            return True
+        if head == "full":
+            self._cmd_autopilot(rest or self.target or "")
             return True
         if head == "scan":
             self._cmd_scan(rest)

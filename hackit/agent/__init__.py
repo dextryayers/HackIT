@@ -218,6 +218,7 @@ def enter_agent_shell():
         ("setting",   "configure AI keys",       "status",     "connectivity status"),
         ("models",    "list provider models",    "reset",      "reset AI config"),
         ("memory",    "inspect AI memory",       "guide",      "command reference"),
+        ("recon",     "full recon stack",        "progress",   "hide/show progress"),
         ("clear",     "clear screen",            "help",       "list every command"),
     ]
     click.echo(f"  {'─' * 60}")
@@ -297,18 +298,17 @@ def enter_agent_shell():
                 click.echo(f"  {'─' * 48}")
                 helps = [
                     ("swarm",     "28-agent autonomous scan"),
-                    ("autopilot", "AI-powered bug hunting"),
+                    ("autopilot", "Masuk UI autopilot → set-target → pentest otomatis"),
                     ("auto",      "Full recon→OSINT→scan→attack→report"),
+                    ("recon",     "Recon lengkap: port, subdomain, dir fuzz, JS, tech, WAF"),
                     ("payload",   "AI payload forge"),
                     ("probe",     "Send forged payloads to a target"),
                     ("osint",     "OSINT footprint discovery"),
                     ("dashboard", "Real-time TUI dashboard"),
-                    ("autopilot", "Full autonomous pentest (auto after target)"),
                     ("usage",     "Live token usage (session + all-time)"),
                     ("models",    "List models for the active provider"),
                     ("model",     "Switch model (arrow-key picker)"),
                     ("select",    "Central model select (chat, /halo, autopilot, auto)"),
-                    ("usage",     "Live token usage (session + all-time)"),
                     ("memory",    "Inspect or clear AI memory"),
                     ("reset",     "Reset AI keys/provider/models"),
                     ("setting",   "Configure AI providers & keys"),
