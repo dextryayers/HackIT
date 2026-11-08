@@ -500,11 +500,12 @@ class AgentUI:
             self._autopilot_running = True
             self._autopilot_phase = "recon"
             self._autopilot_state = None
+            # Fresh event per run: reusing the brain's cancelled event made
+            # a new run inherit the previous cancellation and die instantly.
             cancel = threading.Event()
-            if self.brain is not None and hasattr(self.brain, "cancel_event"):
-                cancel = self.brain.cancel_event
-                self.brain.reset_cancel()
             self._autopilot_cancel = cancel
+            if self.brain is not None and hasattr(self.brain, "reset_cancel"):
+                self.brain.reset_cancel()
             self.target = target
 
         self.begin_operation("AUTONOMOUS PENTEST", str(target))
@@ -513,6 +514,31 @@ class AgentUI:
             "payload → analyse → plan → execute → probe → correlate → report. "
             "/progress hide to silence the chatter. Ctrl+C / /autopilot stop to cancel.[/dim]"
         )
+        self._autopilot_started_at = time.time()
+        self._autopilot_phase_done = set()
+        self._autopilot_phase_seen = set()
+        # Interaktif: render checklist fase + progress bar + spinner.
+        self._render_autopilot_checklist()
+
+        # Heartbeat animasi: update status tiap 0.5s agar UI jelas hidup.
+        def _heartbeat() -> None:
+            spin_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+            tick = 0
+            while self._autopilot_running and not cancel.is_set():
+                time.sleep(0.5)
+                tick += 1
+                elapsed = int(time.time() - getattr(self, "_autopilot_started_at", time.time()))
+                spin = spin_chars[tick % len(spin_chars)]
+                phase = getattr(self, "_autopilot_phase", "recon")
+                # TUI: status bar live. Inline: baris status yang di-update.
+                if hasattr(self, "_status_message"):
+                    self._status_message = f"autopilot {spin} {phase} · {elapsed}s"
+                    if hasattr(self, "_invalidate"):
+                        self._invalidate()
+                elif not self._progress_hidden:
+                    # Inline fallback: satu baris status berkala, tanpa spam.
+                    if tick % 4 == 0:
+                        self.print(f"[dim]{spin} autopilot {escape(str(phase))} · {elapsed}s[/dim]")
 
         def _runner() -> None:
             try:
@@ -525,6 +551,7 @@ class AgentUI:
                     phase = str(phase)
                     message = str(message)
                     self._autopilot_phase = phase
+                    self._autopilot_phase_seen.add(phase)
                     status = "run"
                     pct = None
                     if phase in phase_order:
@@ -532,12 +559,14 @@ class AgentUI:
                         starting = message.startswith("starting ")
                         if not starting:
                             status = "done"
+                            self._autopilot_phase_done.add(phase)
                         pct = int((index + (0 if starting else 1)) / phase_total * 100)
                     elif phase == "workflow":
                         status = "log"
                     elif message.startswith("error:"):
                         status = "error"
                     self.operation_event(phase, message, status=status, pct=pct)
+                    self._render_autopilot_checklist()
 
                 state = run_pentest(
                     target, scope="active_stealth", progress=_progress,
@@ -556,6 +585,7 @@ class AgentUI:
                         status="cancelled",
                     )
                     return
+                self._render_autopilot_checklist(final=True)
                 self._render_autopilot_result(state)
             except Exception as exc:  # noqa: BLE001
                 with self._autopilot_lock:
@@ -566,9 +596,46 @@ class AgentUI:
                 if os.environ.get("HACKIT_DEBUG"):
                     self.print(traceback.format_exc())
 
+        threading.Thread(target=_heartbeat, daemon=True, name="autopilot-heartbeat").start()
         self._autopilot_thread = threading.Thread(target=_runner, daemon=True, name="autopilot")
         self._autopilot_thread.start()
         return True
+
+    def _render_autopilot_checklist(self, final: bool = False) -> None:
+        """Interactive checklist: per-phase icon + progress bar."""
+        try:
+            from .workflow import NODE_SEQUENCE
+        except Exception:
+            return
+        order = [name for name, _node in NODE_SEQUENCE]
+        done = getattr(self, "_autopilot_phase_done", set()) or set()
+        seen = getattr(self, "_autopilot_phase_seen", set()) or set()
+        if final:
+            done = set(order)
+        current = getattr(self, "_autopilot_phase", "")
+        total = max(1, len(order))
+        finished = sum(1 for name in order if name in done)
+        pct = int(finished / total * 100)
+        elapsed = int(time.time() - getattr(self, "_autopilot_started_at", time.time()))
+        # Progress bar (20 blok).
+        filled = int(pct * 20 / 100)
+        bar = "█" * filled + "░" * (20 - filled)
+        lines = [f"[bold cyan]AUTOPILOT[/bold cyan] [dim]{bar} {pct}% · {elapsed}s · target {escape(str(self.target or '—'))}[/dim]"]
+        for name in order:
+            if name in done:
+                icon = "[green]✓[/green]"
+            elif name == current and self._autopilot_running and not final:
+                icon = "[cyan]▶[/cyan]"
+            elif name in seen and not final:
+                icon = "[cyan]▶[/cyan]"
+            else:
+                icon = "[dim]○[/dim]"
+            label = escape(str(name))
+            if name == current and not final:
+                lines.append(f"  {icon} [bold]{label}[/bold]")
+            else:
+                lines.append(f"  {icon} [dim]{label}[/dim]")
+        self.print("\n".join(lines))
 
     def _render_autopilot_result(self, state: Any) -> None:
         if not isinstance(state, dict):
@@ -1885,14 +1952,7 @@ class AgentUI:
             target = target[: -len("--no-run")].strip()
         self.target = target
         self.print(f"[cyan]Target locked:[/cyan] {escape(str(self.target))}")
-        if self.mode_name == "AUTOPILOT" and not no_run:
-            self.print("[dim]Autopilot starting — full pentest pipeline (recon → report).[/dim]")
-            try:
-                import threading
-
-                threading.Timer(0.6, lambda: self._autopilot_start(self.target)).start()
-            except Exception:
-                self._autopilot_start(self.target)
+        self.print("[dim]Target siap. Ketik [green]mulai[/green] / [green]lanjut[/green] / [green]gass[/green] atau [green]/autopilot[/green] untuk menyerang penuh.[/dim]")
         return True
 
     def _handle_bare_go(self, text: str) -> bool:
@@ -2048,21 +2108,13 @@ class AgentUI:
             self.print(f"[cyan]Target:[/cyan] {escape(str(self.target or '—'))}")
             return True
         if head in ("set-target", "set_target"):
-            self.target = rest
+            wanted = rest.replace("--no-run", "").strip()
+            if not wanted:
+                self.print("[yellow]Usage: /set-target example.com[/yellow]")
+                return True
+            self.target = wanted
             self.print(f"[cyan]Target locked:[/cyan] {escape(str(self.target))}")
-            # Autopilot contract: once the target is locked the AI runs the
-            # full pipeline by itself.  /set-target --no-run opts out once.
-            if self.mode_name == "AUTOPILOT" and self.target and "--no-run" not in rest:
-                # Re-parse without the flag so it is never treated as target.
-                self.target = rest.replace("--no-run", "").strip()
-                self.print("[dim]Autopilot starting — full pentest pipeline (recon → report).[/dim]")
-                # Small delay so the lock message lands before progress.
-                try:
-                    import threading
-
-                    threading.Timer(0.6, lambda: self._autopilot_start(self.target)).start()
-                except Exception:
-                    self._autopilot_start(self.target)
+            self.print("[dim]Target siap. Ketik [green]mulai[/green] / [green]lanjut[/green] / [green]gass[/green] atau [green]/autopilot[/green] untuk memulai serangan penuh (recon → report).[/dim]")
             return True
         if head == "export":
             self._cmd_export(rest)
