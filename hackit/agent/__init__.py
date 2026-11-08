@@ -19,6 +19,137 @@ def agent(ctx):
     if ctx.invoked_subcommand is None:
         enter_agent_shell()
 
+# ── Shell-level autopilot (above the UI, not inside it) ──────────────────
+# The grid above launches these from the top shell.  Autopilot runs the
+# full workflow pipeline directly in the shell (no sub-UI drop-in) so the
+# operator sees progress where they typed the command.
+
+_shell_state = {
+    "target": "",
+    "progress_hidden": False,
+    "buffer": [],
+    "running": False,
+}
+
+
+def _shell_print_progress(phase: str, message: str, status: str = "run", pct=None) -> None:
+    """Print one progress line unless hidden (buffered for /show replay)."""
+    if _shell_state["progress_hidden"]:
+        if status not in ("error", "complete"):
+            _shell_state["buffer"].append((phase, message, status, pct))
+            if len(_shell_state["buffer"]) > 500:
+                _shell_state["buffer"] = _shell_state["buffer"][-500:]
+            return
+    icon = "▶" if status == "run" else ("✓" if status == "done" else ("✗" if status == "error" else "·"))
+    suffix = f" {DIM}{int(pct):>3}%{RESET}" if isinstance(pct, int) and pct > 0 else ""
+    click.echo(f"  {CYAN}{icon}{RESET} {B_CYAN}{str(phase):<10}{RESET} {DIM}{str(message)}{RESET}{suffix}")
+    try:
+        sys.stdout.flush()
+    except Exception:
+        pass
+
+
+def _shell_run_autopilot(target: str, scope: str = "active_stealth", resume: bool = False) -> object:
+    """Run the full pipeline in the top shell with live progress."""
+    from hackit.agent.workflow import NODE_SEQUENCE, run_pentest
+
+    target = (target or "").strip()
+    if not target:
+        click.echo(f"  {RED}✦{RESET}  {DIM}Usage:{RESET} {GREEN}autopilot <target>{RESET}  {DIM}or {RESET}{GREEN}set <target>{RESET}  {DIM}first.{RESET}")
+        return None
+    click.echo(_colored(f"\n  [ AUTONOMOUS PENTEST ] target={target} scope={scope}", B_CYAN, bold=True))
+    click.echo(_colored(f"  Engine: {_workflow_engine()}  ·  Model: {_active_model_label()}", DIM))
+    if os.environ.get("HACKIT_AUTHORIZED", "").lower() not in ("1", "true", "yes", "y"):
+        click.echo(_colored(
+            "  [*] Active verification enabled for this shell run. "
+            "Only test targets you own or have permission to test.",
+            YELLOW,
+        ))
+    click.echo(_colored("  [*] AI is running: recon → osint → js → params → payload → analyse → plan → execute → probe → correlate → report", DIM))
+    click.echo(_colored("  [*] Commands: progress hide | progress show | stop (Ctrl+C to cancel)", DIM))
+
+    phase_order = [name for name, _node in NODE_SEQUENCE]
+    phase_total = max(1, len(phase_order))
+    _shell_state["running"] = True
+
+    def _progress(phase: str, message: str) -> None:
+        phase = str(phase)
+        message = str(message)
+        status = "run"
+        pct = None
+        if phase in phase_order:
+            index = phase_order.index(phase)
+            starting = message.startswith("starting ")
+            if not starting:
+                status = "done"
+            pct = int((index + (0 if starting else 1)) / phase_total * 100)
+        elif phase == "workflow":
+            status = "log"
+        elif message.startswith("error:"):
+            status = "error"
+        _shell_print_progress(phase, message, status=status, pct=pct)
+
+    try:
+        state = run_pentest(target, scope=scope, resume=resume, progress=_progress, authorized=True)
+    except KeyboardInterrupt:
+        _shell_state["running"] = False
+        click.echo(_colored("\n  [!] Pipeline interrupted.", YELLOW))
+        return None
+    except Exception as exc:  # noqa: BLE001
+        _shell_state["running"] = False
+        click.echo(_colored(f"\n  [!] Pipeline failed: {exc}", RED))
+        if os.environ.get("HACKIT_DEBUG"):
+            import traceback
+            click.echo(traceback.format_exc())
+        return None
+    finally:
+        _shell_state["running"] = False
+
+    findings = state.get("findings", []) if isinstance(state, dict) else []
+    click.echo(_colored(
+        f"\n  [+] Pipeline complete · {len(findings)} finding(s) · "
+        f"risk {state.get('risk_score', 0)}/10",
+        GREEN, bold=True,
+    ))
+    if findings:
+        order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+        ranked = sorted(findings, key=lambda item: order.get(str(item.get("severity", "info")).lower(), 5))
+        for item in ranked[:12]:
+            sev = str(item.get("severity", "info")).lower()
+            color = {"critical": RED, "high": RED, "medium": YELLOW, "low": CYAN}.get(sev, DIM)
+            sev_label = _colored(f"{sev.upper():<8}", color)
+            type_label = _colored(f"{str(item.get('type', '?'))[:16]:<16}", B_CYAN)
+            click.echo(
+                f"  {sev_label} {type_label} "
+                f"{DIM}{str(item.get('target', ''))[:40]} · "
+                f"{str(item.get('description', ''))[:90]}{RESET}"
+            )
+        if len(findings) > 12:
+            click.echo(_colored(f"  … {len(findings) - 12} more in the report", DIM))
+    if state.get("report_path"):
+        click.echo(_colored(f"  [+] Report: {state['report_path']}", GREEN))
+    click.echo(_colored(f"  [+] State: {os.path.join(os.path.expanduser('~'), '.hackit', 'workflow_state')}", DIM))
+    return state
+
+
+def _active_model_label() -> str:
+    try:
+        from hackit.agent import providers as _pr
+        from hackit.config import load_config as _lc
+        cfg = _lc()
+        provider = _pr.get_active_provider(cfg)
+        if not provider:
+            return "none / auto"
+        model = _pr.effective_model(provider, cfg)
+        if provider == "ollama":
+            info = _pr.detect_ollama()
+            if info.online and info.models:
+                model = _pr.pick_ollama_model(info.models, model)
+        return f"{provider} · {model or 'auto'}"
+    except Exception:
+        return "unknown"
+
+
 def enter_agent_shell():
     """Dedicated Agent CLI Shell — the agent's own terminal"""
     import shutil, time, subprocess as _sp
@@ -98,6 +229,18 @@ def enter_agent_shell():
         pad = max(1, col_right - vis)
         click.echo(f"{l}{' ' * pad}{r}")
     click.echo(f"  {'─' * 60}")
+    # Central AI summary: which model is ready + live token usage, above input.
+    try:
+        _model_label = _active_model_label()
+    except Exception:
+        _model_label = "unknown"
+    try:
+        from hackit.agent.usage import session_totals as _st
+        _totals = _st()
+        _tok_line = f"{_totals['total']:,} tokens · {_totals['turns']} turn(s) (all-time)"
+    except Exception:
+        _tok_line = "0 tokens"
+    click.echo(f"  {GREEN}model{RESET}  {B_CYAN}{_model_label}{RESET}   {DIM}·{RESET}   {GREEN}tokens{RESET}  {_tok_line}   {DIM}·{RESET}   {GREEN}select{RESET}  {DIM}to switch · {GREEN}usage{RESET}  {DIM}for detail{RESET}")
     click.echo(f"  {YELLOW}✦{RESET}  {DIM}commands  |  chat  |  back  |  exit  |  help{RESET}")
     click.echo(f"  {YELLOW}✦{RESET}  {DIM}any{RESET} {GREEN}/mode{RESET} {DIM}reaches the AI: {RESET}{GREEN}/halo /risk /attack /report /deep ...{RESET}")
     click.echo()
@@ -208,7 +351,78 @@ def enter_agent_shell():
                 click.get_current_context().invoke(status)
                 continue
 
-            # ── global: chat / autopilot → launch interactive TUI ──
+            # ── shell-level autopilot: set target → AI runs by itself ──
+            if base_cmd in ('set', 'target', 'set-target'):
+                wanted = remaining.strip()
+                if not wanted:
+                    if _shell_state["target"]:
+                        click.echo(f"  {GREEN}target{RESET}  {DIM}{_shell_state['target']}{RESET}")
+                    else:
+                        click.echo(f"  {YELLOW}✦{RESET}  {DIM}Usage:{RESET} {GREEN}set <target>{RESET}")
+                    continue
+                # `set target --no-run` sets without launching.
+                no_run = wanted.endswith("--no-run")
+                if no_run:
+                    wanted = wanted[: -len("--no-run")].strip()
+                _shell_state["target"] = wanted
+                click.echo(f"  {GREEN}target{RESET}  {DIM}{_shell_state['target']}{RESET}  {DIM}· model {_active_model_label()}{RESET}")
+                if not no_run:
+                    click.echo(f"  {DIM}Autopilot starting — full pentest pipeline…{RESET}")
+                    _shell_run_autopilot(_shell_state["target"], authorized=True)
+                continue
+
+            if base_cmd in ('autopilot', 'auto'):
+                target = remaining.strip() or _shell_state["target"]
+                scope = 'active_stealth'
+                if '--scope' in parts:
+                    idx = parts.index('--scope')
+                    if idx + 1 < len(parts):
+                        scope = parts[idx + 1]
+                if not target:
+                    click.echo(f"  {RED}✦{RESET}  {DIM}Usage:{RESET} {GREEN}autopilot <target>{RESET}  {DIM}or {RESET}{GREEN}set <target>{RESET} {DIM}first.{RESET}")
+                    continue
+                _shell_state["target"] = target
+                # Top-shell autopilot runs here, above the UI — no sub-UI drop-in.
+                _shell_run_autopilot(target, scope=scope)
+                continue
+
+            if base_cmd == 'progress':
+                arg = remaining.strip().lower()
+                if arg in ('hide', 'hidden', 'off'):
+                    _shell_state["progress_hidden"] = True
+                    click.echo(f"  {DIM}Progress hidden — findings/errors still show. /show to replay.{RESET}")
+                elif arg in ('show', 'visible', 'on', 'unhide'):
+                    buffered = _shell_state["buffer"]
+                    _shell_state["buffer"] = []
+                    _shell_state["progress_hidden"] = False
+                    click.echo(f"  {DIM}Progress visible — replaying {len(buffered)} event(s).{RESET}")
+                    for _ph, _msg, _st, _pct in buffered:
+                        _shell_print_progress(_ph, _msg, status=_st, pct=_pct)
+                elif arg == 'status':
+                    click.echo(f"  {DIM}Progress: {'hidden' if _shell_state['progress_hidden'] else 'visible'} · buffered: {len(_shell_state['buffer'])} · running: {_shell_state['running']} · target: {_shell_state['target'] or '—'}{RESET}")
+                else:
+                    _shell_state["progress_hidden"] = not _shell_state["progress_hidden"]
+                    if not _shell_state["progress_hidden"]:
+                        buffered = _shell_state["buffer"]
+                        _shell_state["buffer"] = []
+                        for _ph, _msg, _st, _pct in buffered:
+                            _shell_print_progress(_ph, _msg, status=_st, pct=_pct)
+                    click.echo(f"  {DIM}Progress: {'hidden' if _shell_state['progress_hidden'] else 'visible'}{RESET}")
+                continue
+
+            if base_cmd in ('hide',):
+                _shell_state["progress_hidden"] = True
+                click.echo(f"  {DIM}Progress hidden. /show to replay.{RESET}")
+                continue
+            if base_cmd in ('show',):
+                buffered = _shell_state["buffer"]
+                _shell_state["buffer"] = []
+                _shell_state["progress_hidden"] = False
+                for _ph, _msg, _st, _pct in buffered:
+                    _shell_print_progress(_ph, _msg, status=_st, pct=_pct)
+                continue
+
+            # ── global: chat → launch interactive TUI ──
             if base_cmd == 'chat':
                 cfg = load_config()
                 if not provider_registry.configured_providers(cfg) and not provider_registry.detect_ollama().online:
@@ -222,16 +436,7 @@ def enter_agent_shell():
                     click.echo(f"  {RED}[!] Chat UI error: {e}{RESET}")
                 continue
 
-            if base_cmd == 'autopilot':
-                try:
-                    from hackit.agent.interactive import create_ui
-                    ui = create_ui("autopilot")
-                    if remaining:
-                        ui.target = remaining
-                    ui.run()
-                except Exception as e:
-                    click.echo(f"  {RED}[!] Autopilot UI error: {e}{RESET}")
-                continue
+            # (autopilot is handled above in the shell, not via the sub-UI)
 
             # ── COMMAND MODE: only explicit commands ──
             if cmd_mode:
@@ -260,14 +465,12 @@ def enter_agent_shell():
                     continue
 
                 if base_cmd == 'autopilot':
-                    try:
-                        from hackit.agent.interactive import create_ui
-                        ui = create_ui("autopilot")
-                        if remaining:
-                            ui.target = remaining
-                        ui.run()
-                    except Exception as e:
-                        click.echo(f"  {RED}[!] Autopilot UI error: {e}{RESET}")
+                    target = remaining.strip() or _shell_state["target"]
+                    if not target:
+                        click.echo(f"  {RED}✦{RESET}  {DIM}Usage:{RESET} {GREEN}autopilot <target>{RESET}")
+                        continue
+                    _shell_state["target"] = target
+                    _shell_run_autopilot(target)
                     continue
 
                 if base_cmd in ('scan', 'recon', 'discover', 'enumerate', 'fingerprint'):
