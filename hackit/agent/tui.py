@@ -353,6 +353,12 @@ def build_key_bindings(ui: Optional["TuiMixin"] = None, tui: bool = True) -> Key
 
         @kb.add("c-d", eager=True)
         def _ctrl_d(event) -> None:  # noqa: ANN001
+            # Only quit when the composer is empty; otherwise Ctrl+D is
+            # delete-forward and must stay an editing key.
+            buffer = event.current_buffer
+            if buffer.text:
+                buffer.delete_forward()
+                return
             ui._exit()
 
         @kb.add("c-l", eager=True)
@@ -364,9 +370,10 @@ def build_key_bindings(ui: Optional["TuiMixin"] = None, tui: bool = True) -> Key
             ui._show_thinking = not getattr(ui, "_show_thinking", True)
             ui._invalidate()
 
-        @kb.add("c-h", eager=True)
-        def _ctrl_h(event) -> None:  # noqa: ANN001
-            # Toggle progress visibility without stopping the pipeline.
+        @kb.add("c-o", eager=True)
+        def _ctrl_o(event) -> None:  # noqa: ANN001
+            # Toggle progress visibility. Ctrl+H was used before but it IS
+            # Backspace (0x08) in most terminals, which broke editing.
             if hasattr(ui, "set_progress_hidden"):
                 ui.set_progress_hidden(not getattr(ui, "_progress_hidden", False))
                 ui._invalidate()
@@ -887,7 +894,7 @@ class TuiMixin:
                 (f"bg:{PANEL} {SLATE}", "select  "),
                 (f"bg:{PANEL} {CYAN}", "Enter "),
                 (f"bg:{PANEL} {SLATE}", "run  "),
-                (f"bg:{PANEL} {CYAN}", "Ctrl+H "),
+                (f"bg:{PANEL} {CYAN}", "Ctrl+O "),
                 (f"bg:{PANEL} {SLATE}", "hide/show progress  "),
                 (f"bg:{PANEL} {CYAN}", "Ctrl+C "),
                 (f"bg:{PANEL} {SLATE}", "exit"),

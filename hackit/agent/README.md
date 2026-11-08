@@ -209,7 +209,7 @@ autopilot                    # from the top shell: enter the UI CLI (no target y
   percentage so you can see which pentest stage is running.
 * **Hide / show progress:** `/progress hide` (alias `/hide`) buffers phase
   chatter while findings, errors and completion stay visible; `/progress show`
-  (alias `/show`) replays the buffer. In the full-screen TUI, `Ctrl+H` toggles
+  (alias `/show`) replays the buffer. In the full-screen TUI, `Ctrl+O` toggles
   the same visibility, and the sidebar shows `autopilot ● <phase> [hidden]`.
 
 ### Authorization gate
