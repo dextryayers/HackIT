@@ -155,7 +155,10 @@ recon → OSINT → JavaScript → parameters → payload forge → AI analysis
 ```
 
 * **recon** — port scan, subdomain enumeration, technology/WAF fingerprinting,
-  header audit and directory fuzzing.
+  header audit (missing headers, weak HSTS/CSP, info disclosure) and directory
+  fuzzing.  Pro scanners add CORS variant probing (reflected origins), session
+  cookie audit, and differential-verified sensitive-file discovery (.env, .git,
+  actuators, source maps) with soft-404 suppression.
 * **OSINT** — public profiles, breach references and domain registration data.
 * **payload** — the active provider forges payloads for the vulnerability
   classes suggested by the collected context; curated payloads remain
@@ -170,7 +173,13 @@ recon → OSINT → JavaScript → parameters → payload forge → AI analysis
 * **coverage / attack log** — every module task and payload probe is recorded
   with its target, parameter, result and evidence. Confirmed signals become
   findings; the report includes an Active Coverage section and an Attack Log.
-* **report** — Markdown, HTML and Mermaid reports under
+* **deep AI analysis** — Ollama and cloud provider APIs receive the full
+  evidence brief; the plan names modules, parameters, expected signals and PoC
+  steps.  A built-in offline path degrades gracefully when no model answers.
+* **report** — A professional pentest report generator emits Markdown with an
+  executive summary, threat model, recon summary, severity-indexed findings,
+  per-finding PoC / evidence / remediation, attack chains, ROI-ranked roadmap
+  and appendices (subdomains, ports, parameters). Reports are written to
   `hackit/agent/go/reports/pentest/`.
 
 Intermediate state is persisted in `~/.hackit/workflow_state/`, so a run can be
