@@ -310,7 +310,6 @@ def enter_agent_shell():
                     ("dashboard", "Real-time TUI dashboard"),
                     ("usage",     "Live token usage (session + all-time)"),
                     ("models",    "List models for the active provider"),
-                    ("model",     "Switch model (arrow-key picker)"),
                     ("select",    "Central model select (chat, /halo, autopilot, auto)"),
                     ("memory",    "Inspect or clear AI memory"),
                     ("reset",     "Reset AI keys/provider/models"),
@@ -507,7 +506,7 @@ def enter_agent_shell():
                     continue
 
                 if base_cmd in ('auto', 'payload', 'probe', 'osint', 'doctor',
-                                'models', 'model', 'select', 'usage', 'memory'):
+                                'models', 'select', 'usage', 'memory'):
                     handle_ai_command("/" + user_input)
                     continue
 
@@ -866,6 +865,7 @@ def _dropdown_select(provider, models, fetched_ids=None):
     Returns model ID string, or empty string if cancelled.
     """
     import os
+    import shutil
 
     try:
         import fcntl
@@ -1369,40 +1369,8 @@ def models(provider, curated):
             f"  {GREEN}{index:>2}.{RESET} {B_CYAN}{model:<48}{RESET} "
             f"{DIM}{tier:<8} {description}{RESET}"
         )
-    click.echo(_colored("\n  Set one with: agent model  (or agent setting --model ...)", DIM))
+    click.echo(_colored("\n  Set one with: agent select  (or /select <model-id> inside chat, autopilot, auto)", DIM))
 
-
-@agent.command()
-@click.argument('model_id', required=False)
-def model(model_id):
-    """Show or switch the active model (arrow-key picker when omitted)."""
-    from hackit.config import save_config
-
-    cfg = load_config()
-    provider = provider_registry.normalize_provider(
-        provider_registry.get_active_provider(cfg) or "gemini"
-    )
-    key = provider_registry.resolve_api_key(provider, cfg)
-
-    if model_id:
-        cfg.setdefault("ai_models", {})[provider] = model_id.strip()
-        save_config(cfg)
-        click.echo(_colored(f"  [✓] {provider} model set to {model_id.strip()}", GREEN))
-        return
-
-    current = provider_registry.effective_model(provider, cfg)
-    click.echo(_colored(f"\n  [ MODEL · {provider} ] current: {current or '(auto)'}", B_CYAN))
-    items = provider_registry.model_options(provider, key=key, include_remote=True)
-    if not items:
-        click.echo(_colored("  [!] No models found. Check the key or start Ollama.", YELLOW))
-        return
-    chosen = _dropdown_select(provider, items, [item[0] for item in items])
-    if not chosen:
-        click.echo(_colored("  [*] Model unchanged.", DIM))
-        return
-    cfg.setdefault("ai_models", {})[provider] = chosen
-    save_config(cfg)
-    click.echo(_colored(f"  [✓] {provider} model set to {chosen}", GREEN))
 
 
 @agent.command()
@@ -2044,8 +2012,6 @@ _AGENT_ACTIONS = {
     "show": "progress show",
     "osint": "osint",
     "models": "models",
-    "model": "model",
-    "select": "model",
     "usage": "usage",
     "tokens": "usage",
     "doctor": "doctor",
@@ -2071,8 +2037,7 @@ def _click_registry():
         "auto": auto,
         "osint": osint_cmd,
         "models": models,
-        "model": model,
-        "doctor": doctor,
+            "doctor": doctor,
         "memory": memory,
         "setting": setting,
         "status": status,

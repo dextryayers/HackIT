@@ -87,7 +87,6 @@ AUTOPILOT_COMMANDS = {
     "show": "Show buffered progress",
     "osint": "Run OSINT profile discovery",
     "status": "Provider / model connectivity",
-    "model": "Switch model (arrow-key picker)",
     "select": "Central model select (chat, /halo, autopilot, auto)",
     "provider": "Switch provider",
     "usage": "Live token usage (session + all-time)",
@@ -138,7 +137,6 @@ CHAT_COMMANDS = {
     "osint": "Run OSINT profile discovery",
     "scan": "Run full hative security scan",
     "status": "Provider / model connectivity",
-    "model": "Switch model (arrow-key picker)",
     "select": "Central model select (chat, /halo, autopilot, auto)",
     "provider": "Switch provider",
     "models": "List available models",
@@ -1210,51 +1208,6 @@ class AgentUI:
         self.print(f"[dim]Model: {escape(str(self.brain.provider or 'none'))} · {escape(str(self.brain.model or 'auto'))}[/dim]")
         self.print("[dim]Estimated at ~4 characters/token. Usage is written to ~/.hackit/token_usage.json each turn.[/dim]")
 
-    def _cmd_model(self, argument: str) -> None:
-        if not self.brain:
-            return
-        if argument:
-            self.brain.model = argument.strip()
-            try:
-                from hackit.config import load_config, save_config
-
-                cfg = load_config()
-                cfg.setdefault("ai_models", {})[self.brain.provider] = self.brain.model
-                save_config(cfg)
-            except Exception:
-                pass
-            self.print(f"[green]Model set to {escape(str(self.brain.model))}.[/green]")
-            return
-
-        # No argument: open the arrow-key selector so a provider that exposes
-        # more than one model can be switched without typing the id.
-        items = self.brain.list_models(include_remote=True)
-        if not items:
-            self.print(f"[dim]Current model: {escape(str(self.brain.model or 'auto'))}[/dim]")
-            self.print("[dim]No models discovered. Usage: /model <model-id>[/dim]")
-            return
-        try:
-            from . import _dropdown_select
-        except Exception:  # pragma: no cover - defensive
-            _dropdown_select = None  # type: ignore[assignment]
-        if _dropdown_select is None:
-            self.print("[dim]Usage: /model <model-id>[/dim]")
-            return
-        chosen = _dropdown_select(self.brain.provider, items, [i[0] for i in items])
-        if not chosen:
-            self.print("[dim]Model unchanged.[/dim]")
-            return
-        self.brain.model = chosen
-        try:
-            from hackit.config import load_config, save_config
-
-            cfg = load_config()
-            cfg.setdefault("ai_models", {})[self.brain.provider] = chosen
-            save_config(cfg)
-        except Exception:
-            pass
-        self.print(f"[green]Model set to {escape(chosen)}.[/green]")
-
     def _cmd_models(self) -> None:
         if not self.brain:
             return
@@ -2112,9 +2065,6 @@ class AgentUI:
             return True
         if head == "provider":
             self._cmd_provider(rest)
-            return True
-        if head == "model":
-            self._cmd_model(rest)
             return True
         if head == "select":
             self._cmd_select(rest)
