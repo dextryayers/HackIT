@@ -222,26 +222,29 @@ def enter_agent_shell():
         ("clear",     "clear screen",            "help",       "list every command"),
     ]
     click.echo(f"  {'─' * 60}")
-    col_right = 46
+
+    def _vis_len(text: str) -> int:
+        """Visible width with ANSI escapes stripped."""
+        import re as _re
+        return len(_re.sub(r"\x1b\[[0-9;]*m", "", text))
+
+    _L_COL = 29   # left cell width in visible chars
+    _RIGHT_COL = 30
     for c1, d1, c2, d2 in cmds:
-        l = f"  {GREEN}▶{RESET} {B_CYAN}{c1:>9}{RESET}  {DIM}{d1}{RESET}"
-        r = f"{GREEN}▶{RESET} {B_CYAN}{c2:>9}{RESET}  {DIM}{d2}{RESET}"
-        vis = 15 + len(d1)
-        pad = max(1, col_right - vis)
-        click.echo(f"{l}{' ' * pad}{r}")
+        left = f"  {GREEN}▶{RESET} {B_CYAN}{c1:>8}{RESET}  {DIM}{d1}{RESET}"
+        right = f"{GREEN}▶{RESET} {B_CYAN}{c2:>8}{RESET}  {DIM}{d2}{RESET}"
+        pad = max(1, _L_COL - _vis_len(left))
+        click.echo(f"{left}{' ' * pad}{right}")
     click.echo(f"  {'─' * 60}")
-    # Central AI summary: which model is ready + live token usage, above input.
-    try:
-        _model_label = _active_model_label()
-    except Exception:
-        _model_label = "unknown"
+    # Central AI summary: live token usage, above input. Model selection
+    # lives behind /select, not a separate line.
     try:
         from hackit.agent.usage import session_totals as _st
         _totals = _st()
         _tok_line = f"{_totals['total']:,} tokens · {_totals['turns']} turn(s) (all-time)"
     except Exception:
         _tok_line = "0 tokens"
-    click.echo(f"  {GREEN}model{RESET}  {B_CYAN}{_model_label}{RESET}   {DIM}·{RESET}   {GREEN}tokens{RESET}  {_tok_line}   {DIM}·{RESET}   {GREEN}select{RESET}  {DIM}to switch · {GREEN}usage{RESET}  {DIM}for detail{RESET}")
+    click.echo(f"  {GREEN}tokens{RESET}  {_tok_line}   {DIM}·{RESET}   {GREEN}select{RESET}  {DIM}to switch the AI model{RESET}")
     click.echo(f"  {YELLOW}✦{RESET}  {DIM}commands  |  chat  |  back  |  exit  |  help{RESET}")
     click.echo(f"  {YELLOW}✦{RESET}  {DIM}any{RESET} {GREEN}/mode{RESET} {DIM}reaches the AI: {RESET}{GREEN}/halo /risk /attack /report /deep ...{RESET}")
     click.echo()
@@ -907,10 +910,18 @@ def _dropdown_select(provider, models, fetched_ids=None):
     top = 0
     page = min(n, 12)
 
-    click.echo(f"\n  {B_CYAN}{BOLD}╭{'─' * 52}{B_CYAN}{BOLD}╮{RESET}")
-    click.echo(f"  │{'':>6}{B_CYAN}{BOLD}MODEL SELECTION{RESET}{B_CYAN}{BOLD}{'':<6}│{RESET}")
-    click.echo(f"  │  {PROVIDER_LABELS.get(provider, provider.upper())}{'':>28}│")
-    click.echo(f"  {B_CYAN}{BOLD}╰{'─' * 52}{B_CYAN}{BOLD}╯{RESET}")
+    _term_cols = shutil.get_terminal_size().columns
+    box_w = max(30, min(66, _term_cols - 6))
+    _title = " MODEL SELECTION "
+    _title_pad = max(0, box_w - 2 - len(_title))
+    _left = _title_pad // 2
+    _right = _title_pad - _left
+    provider_label = PROVIDER_LABELS.get(provider, provider.upper())
+    _prov_pad = max(0, box_w - 2 - 2 - len(provider_label))
+    click.echo(f"\n  {B_CYAN}{BOLD}╭{'─' * box_w}{B_CYAN}{BOLD}╮{RESET}")
+    click.echo(f"  {B_CYAN}{BOLD}│{RESET}{' ' * _left}{B_CYAN}{BOLD}{_title}{RESET}{' ' * _right}{B_CYAN}{BOLD}│{RESET}")
+    click.echo(f"  {B_CYAN}{BOLD}│{RESET}  {provider_label}{' ' * _prov_pad}{B_CYAN}{BOLD}│{RESET}")
+    click.echo(f"  {B_CYAN}{BOLD}╰{'─' * box_w}{B_CYAN}{BOLD}╯{RESET}")
     click.echo()
     _HL = "\033[48;5;236m\033[38;5;15m"
     _R = "\033[0m"
@@ -947,22 +958,39 @@ def _dropdown_select(provider, models, fetched_ids=None):
 
         sys.stdout.write("\033[2J\033[H")
 
-        sys.stdout.write(f"\n  {B_CYAN}{BOLD}╭{'─' * 52}{B_CYAN}{BOLD}╮{RESET}\r\n")
-        sys.stdout.write(f"  │{'':>6}{B_CYAN}{BOLD}MODEL SELECTION{RESET}{B_CYAN}{BOLD}{'':<6}│{RESET}\r\n")
-        sys.stdout.write(f"  │  {PROVIDER_LABELS.get(provider, provider.upper())}{'':>28}│\r\n")
-        sys.stdout.write(f"  {B_CYAN}{BOLD}╰{'─' * 52}{B_CYAN}{BOLD}╯{RESET}\r\n")
+        _term_cols = shutil.get_terminal_size().columns
+        box_w = max(30, min(66, _term_cols - 6))
+        _title = " MODEL SELECTION "
+        _title_pad = max(0, box_w - 2 - len(_title))
+        _left = _title_pad // 2
+        _right = _title_pad - _left
+        provider_label = PROVIDER_LABELS.get(provider, provider.upper())
+        _prov_pad = max(0, box_w - 2 - 2 - len(provider_label))
+        sys.stdout.write(f"\n  {B_CYAN}{BOLD}╭{'─' * box_w}{B_CYAN}{BOLD}╮{RESET}\r\n")
+        sys.stdout.write(f"  {B_CYAN}{BOLD}│{RESET}{' ' * _left}{B_CYAN}{BOLD}{_title}{RESET}{' ' * _right}{B_CYAN}{BOLD}│{RESET}\r\n")
+        sys.stdout.write(f"  {B_CYAN}{BOLD}│{RESET}  {provider_label}{' ' * _prov_pad}{B_CYAN}{BOLD}│{RESET}\r\n")
+        sys.stdout.write(f"  {B_CYAN}{BOLD}╰{'─' * box_w}{B_CYAN}{BOLD}╯{RESET}\r\n")
         sys.stdout.write("\r\n")
 
+        def _vis(text: str) -> int:
+            import re as _re
+            return len(_re.sub(r"\x1b\[[0-9;]*m", "", text))
+
+        name_col = 38
         for i in range(page):
             idx = top + i
             if idx >= n:
                 sys.stdout.write("\033[K\r\n")
                 continue
             m, tier, desc, dot, badge = items[idx]
+            dot_badge = f"{dot} {badge}"
+            dot_badge_pad = max(1, 10 - _vis(dot_badge))
+            desc_max = max(6, box_w - 2 - 2 - 2 - _vis(dot_badge) - 1 - name_col - 2)
+            desc_text = desc if len(desc) <= desc_max else desc[: desc_max - 1] + "…"
             if idx == cur:
-                sys.stdout.write(f"\r  {_HL} \033[38;5;46m▸\033[38;5;15m {dot} {badge} {m:<36} {desc}{_R}\033[K\r\n")
+                sys.stdout.write(f"\r {_HL} \033[38;5;46m▸\033[38;5;15m {dot_badge}{' ' * dot_badge_pad}{m:<{name_col}} {desc_text}{_R}\033[K\r\n")
             else:
-                sys.stdout.write(f"\r     {dot} {badge} \033[2m{m:<36}\033[0m\033[2m {desc}\033[0m\033[K\r\n")
+                sys.stdout.write(f"\r   {dot_badge}{' ' * dot_badge_pad} \033[2m{m:<{name_col}}\033[0m \033[2m{desc_text}\033[0m\033[K\r\n")
 
         sys.stdout.write(f"\r  \033[2m{GREEN}◉\033[0m\033[2mver  {DIM}○\033[0m\033[2mcur  │  {GREEN}F\033[0m\033[2m {YELLOW}FT\033[0m\033[2m {RED}P\033[0m\033[2m  │  ↑↓ {cur+1}/{n}  Enter=sel\033[0m\033[K")
         sys.stdout.flush()
