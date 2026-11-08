@@ -507,6 +507,66 @@ def recon_node(state: PentestState) -> Dict[str, Any]:
                     scan_data["sensitive_paths_error"] = str(exc)[:200]
         except Exception as exc:  # noqa: BLE001
             scan_data["pro_scan_error"] = str(exc)[:300]
+    # CVE intel pass against main + all reachable subdomains (Go engine + Python bridge).
+    try:
+        if os.environ.get("HACKIT_SKIP_CVE", "").lower() not in ("1", "true", "yes"):
+            _emit_progress("recon", "cve intel pass starting (NVD+CISA+EPSS)")
+            cve_report = _pro.cve_intel_scan(scan_base, max_results=3, subdomains=True)
+            if isinstance(cve_report, dict) and not cve_report.get("error"):
+                def _cvss_to_severity(score: float) -> str:
+                    if score >= 9.0:
+                        return "critical"
+                    if score >= 7.0:
+                        return "high"
+                    if score >= 4.0:
+                        return "medium"
+                    if score > 0:
+                        return "low"
+                    return "info"
+
+                def _append_cves(items, tag: str) -> None:
+                    if not isinstance(items, list):
+                        return
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        score = float(item.get("score") or 0.0)
+                        severity = _cvss_to_severity(score)
+                        refs = item.get("references") or []
+                        if refs:
+                            cwe = item.get("cwe") or ""
+                            evidence = (item.get("description", "") + " Reference: " + " | ".join(refs[:3])).strip()
+                        else:
+                            evidence = str(item.get("description", "")).strip()
+                        _finding(
+                            findings, "cve", str(item.get("cve_id", item.get("CVEID", "CVE"))),
+                            f"{tag} {item.get('software', '')} — {item.get('cve_id', '')}: {item.get('description', '')[:280]}",
+                            severity=severity, cvss=score,
+                            remediation="Patch, mitigate via compensating controls, or virtual-patch (IPS/WAF)",
+                        )
+                        # Best-effort update the last-appended finding with full CVE metadata.
+                        findings[-1]["cve_id"] = str(item.get("cve_id", ""))
+                        findings[-1]["cve_software"] = str(item.get("software", ""))
+                        findings[-1]["cve_refs"] = refs[:8]
+                        findings[-1]["cve_vector"] = str(item.get("vector", ""))
+                        findings[-1]["cve_epss"] = float(item.get("epss") or -1)
+                        findings[-1]["cve_source"] = str(item.get("source", ""))
+
+                _append_cves(cve_report.get("findings", []), "main")
+                for sub in _as_list(cve_report.get("subdomains")):
+                    _append_cves(sub.get("cves", []) if isinstance(sub, dict) else [], str(sub.get("subdomain", "sub")))
+
+                scan_data["cve_intel"] = cve_report
+                cve_total = int(cve_report.get("total_cves", 0)) + sum(
+                    len(_as_list((sub or {}).get("cves"))) for sub in _as_list(cve_report.get("subdomains"))
+                )
+                _emit_progress("recon", f"cve intel pass done: {cve_total} CVE(s) mapped (main + subdomains)")
+            else:
+                scan_data["cve_intel"] = {"skipped": str(cve_report.get("error", "unknown"))}
+                _emit_progress("recon", "cve intel unavailable; continuing without NVD enrichment")
+    except Exception as exc:  # noqa: BLE001
+        scan_data["cve_intel_error"] = str(exc)[:300]
+
     scan_data["web_url"] = base_url
     scan_data["host"] = host
     scan_data["scheme"] = scheme

@@ -78,17 +78,21 @@ type Reference struct {
 }
 
 type ExportResult struct {
-	CVEID       string  `json:"cve_id"`
-	Score       float64 `json:"score"`
-	Severity    string  `json:"severity"`
-	Vector      string  `json:"vector"`
-	Software    string  `json:"software"`
-	CWE         string  `json:"cwe"`
-	Description string  `json:"description,omitempty"`
-	EPSS        float64 `json:"epss,omitempty"`
-	Published   string  `json:"published,omitempty"`
-	AttackType  string  `json:"attack_type,omitempty"`
-	Source      string  `json:"source,omitempty"`
+	CVEID       string   `json:"cve_id"`
+	Score       float64  `json:"score"`
+	Severity    string   `json:"severity"`
+	Vector      string   `json:"vector"`
+	Software    string   `json:"software"`
+	Version     string   `json:"version,omitempty"`
+	CWE         string   `json:"cwe"`
+	Description string   `json:"description,omitempty"`
+	EPSS        float64  `json:"epss,omitempty"`
+	Published   string   `json:"published,omitempty"`
+	AttackType  string   `json:"attack_type,omitempty"`
+	Source      string   `json:"source,omitempty"`
+	Confidence  string   `json:"confidence,omitempty"`
+	MatchType   string   `json:"match_type,omitempty"`
+	References  []string `json:"references,omitempty"`
 }
 
 var (
@@ -224,7 +228,17 @@ func QueryNVD(software, version string) []ExportResult {
 		return nil
 	}
 
-	return extractResults(&nvdResp, software, version)
+	matches := extractResults(&nvdResp, software, version)
+	// Precision gate — drop keyword hits missing the queried software token in
+	// the summary; these produce false positives like matching "python" to
+	// pygresql reports.
+	filtered := make([]ExportResult, 0, len(matches))
+	for _, r := range matches {
+		if keywordMatchReasonable(software, r.Description) {
+			filtered = append(filtered, r)
+		}
+	}
+	return filtered
 }
 
 func extractResults(nvdResp *NVDResponse, software, version string) []ExportResult {
@@ -239,7 +253,7 @@ func extractResults(nvdResp *NVDResponse, software, version string) []ExportResu
 		seen[cve.ID] = true
 
 		var score float64
-		severity := "INFO"
+		severity := ""   // resolved below from CVSS, and normalized
 		vector := "N/A"
 		attackType := ""
 
@@ -259,11 +273,27 @@ func extractResults(nvdResp *NVDResponse, software, version string) []ExportResu
 			m := cve.Metrics.CVSSMetricV2[0]
 			score = m.CVSSData.BaseScore
 			severity = m.CVSSData.BaseSeverity
-			if severity == "" {
-				severity = "UNKNOWN"
-			}
 			vector = m.CVSSData.VectorString
 			attackType = summarizeAttackVector(m.CVSSData)
+		}
+
+		// Normalize CVSS severity: prefer NVD value, fall back to score band.
+		severityUpper := strings.ToUpper(strings.TrimSpace(severity))
+		if severityUpper == "" || severityUpper == "UNKNOWN" || severityUpper == "NONE" {
+			severity = severityFromScore(score)
+		} else {
+			switch severityUpper {
+			case "CRITICAL":
+				severity = "CRITICAL"
+			case "HIGH":
+				severity = "HIGH"
+			case "MEDIUM":
+				severity = "MEDIUM"
+			case "LOW":
+				severity = "LOW"
+			default:
+				severity = severityFromScore(score)
+			}
 		}
 
 		// Extract description (English)
@@ -284,6 +314,18 @@ func extractResults(nvdResp *NVDResponse, software, version string) []ExportResu
 			cwe = cve.Weaknesses[0].Description[0].Value
 		}
 
+		// Collect useful references (advisories, patches, vendor notes).
+		refs := make([]string, 0, 12)
+		for _, ref := range cve.References {
+			if ref.URL == "" {
+				continue
+			}
+			refs = append(refs, ref.URL)
+			if len(refs) >= 12 {
+				break
+			}
+		}
+
 		// Determine displayed software name
 		sw := software
 		if sw == "" {
@@ -293,17 +335,31 @@ func extractResults(nvdResp *NVDResponse, software, version string) []ExportResu
 			sw = fmt.Sprintf("%s %s", software, version)
 		}
 
+		runtimeSw := software
+		if runtimeSw == "" {
+			runtimeSw = cve.ID
+		}
+		matchType := ""
+		if version != "" {
+			matchType = "version_match"
+		} else {
+			matchType = "keyword"
+		}
 		results = append(results, ExportResult{
 			CVEID:       cve.ID,
 			Score:       score,
 			Severity:    severity,
 			Vector:      vector,
 			Software:    sw,
+			Version:     version,
 			CWE:         cwe,
 			Description: desc,
 			Published:   cve.Published,
 			AttackType:  attackType,
 			Source:      cve.SourceIdentifier,
+			Confidence:  "medium",
+			MatchType:   matchType,
+			References:  refs,
 		})
 	}
 	return results
@@ -429,4 +485,39 @@ func deduplicateResults(results []ExportResult) []ExportResult {
 		deduped = append(deduped, r)
 	}
 	return deduped
+}
+
+
+func severityFromScore(score float64) string {
+	switch {
+	case score >= 9.0:
+		return "CRITICAL"
+	case score >= 7.0:
+		return "HIGH"
+	case score >= 4.0:
+		return "MEDIUM"
+	case score > 0.0:
+		return "LOW"
+	default:
+		return "INFO"
+	}
+}
+
+// keywordMatchReasonable drops NVD keyword hits in which the queried software
+// name is absent from the summary; these are almost always mis-scoped.
+func keywordMatchReasonable(sw, desc string) bool {
+	sw = strings.ToLower(strings.TrimSpace(sw))
+	if sw == "" {
+		return true
+	}
+	desc = strings.ToLower(desc)
+	if strings.Contains(desc, sw) {
+		return true
+	}
+	// A few tolerant fallbacks (word-boundary-ish substring match).
+	base := strings.TrimSuffix(sw, ".js")
+	if base != sw && strings.Contains(desc, base) {
+		return true
+	}
+	return false
 }

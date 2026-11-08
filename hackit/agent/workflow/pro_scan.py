@@ -48,6 +48,61 @@ def _go_pro_engine_path() -> str:
     return ""
 
 
+_NVD_API_KEY = os.environ.get("HACKIT_NVD_API_KEY") or os.environ.get("NVD_API_KEY") or ""
+
+
+def cve_intel_scan(url: str, max_results: int = 3, subdomains: bool = True) -> Optional[Dict[str, Any]]:
+    """Invoke the Go CVE worker against the target and return the parsed report.
+
+    The report includes fingerprinted technologies and ranked CVEs with
+    references, CWEs, CVSS vectors, EPSS probabilities, CISA KEV flags and
+    per-subdomain findings for every reachable host in the wordlist.
+    """
+    import subprocess
+    import tempfile
+
+    from hackit.cve.go_bridge import GoEngine
+
+    # We import GoEngine directly to drive flags explicitly; the worker reads
+    # the same flags we added (--subdomains, --deep, --max-results).
+    engine = GoEngine()
+    if not engine.ensure_compiled():
+        return None
+
+    fd, output = tempfile.mkstemp(prefix="cve_intel_", suffix=".json")
+    os.close(fd)
+
+    cmd = [
+        engine.binary_path,
+        "-target", url,
+        "-mode", "main",
+        "-output", output,
+        "-max-results", str(max(1, int(max_results))),
+    ]
+    if subdomains:
+        cmd.append("--subdomains")
+    if _NVD_API_KEY:
+        cmd.extend(["--api-key", _NVD_API_KEY])
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=max(45.0, max_results * 25.0))
+    except subprocess.TimeoutExpired:
+        return {"error": "timeout"}
+    except Exception as exc:
+        return {"error": str(exc)[:200]}
+    try:
+        with open(output, "r", encoding="utf-8") as fh:
+            report = json.load(fh)
+    except Exception as exc:
+        return {"error": f"report read: {exc}"[:200]}
+    finally:
+        try:
+            os.remove(output)
+        except OSError:
+            pass
+    return report
+
+
 def go_rs_scan(url: str, timeout: float = 45.0) -> Optional[Dict[str, Any]]:
     """Invoke the Go pro_engine (which dispatches to the Rust pro_scan scanner).
 

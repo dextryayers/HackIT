@@ -1,11 +1,11 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -158,13 +158,18 @@ func containsStr(s, substr string) bool {
 	return false
 }
 
+var outputPtr *string
+
 func main() {
 	targetPtr := flag.String("target", "", "Target URL/IP")
 	modePtr := flag.String("mode", "main", "Mode (parameter/main)")
-	outputPtr := flag.String("output", "", "Output JSON file")
+	outputPtr = flag.String("output", "", "Output JSON file")
 	apiKeyPtr := flag.String("api-key", "", "NVD API key (for higher rate limits)")
 	debugPtr := flag.Bool("debug", false, "Enable debug logging")
 	maxResults := flag.Int("max-results", 20, "Max CVEs per tech/scan")
+	subdomainsPtr := flag.Bool("subdomains", false, "Scan built-in common subdomains of the target domain")
+	subFilePtr := flag.String("subdomains-file", "", "File with subdomain labels (one per line), read in addition to the built-in list")
+	deepPtr := flag.Bool("deep", false, "Full scan: header/body tech detection + all common subdomains + wordlist override")
 	flag.Parse()
 
 	if *targetPtr == "" {
@@ -179,6 +184,10 @@ func main() {
 		SetNVDAPIKey(*apiKeyPtr)
 		debugCVE("NVD API key configured")
 	}
+	// Deep scans imply subdomain coverage, soft fail-safe.
+	if *deepPtr {
+		*subdomainsPtr = true
+	}
 
 	// Signal handler for clean exit
 	sigCh := make(chan os.Signal, 1)
@@ -192,6 +201,11 @@ func main() {
 	fmt.Printf("%s[+] Initiating CVE Scanner on: %s%s%s\n", Magenta, Bold, *targetPtr, Reset)
 
 	var allResults []ExportResult
+	var reportTechs []DetectedTech
+
+	if *deepPtr {
+		fmt.Printf("%s[*] Deep mode: enhanced header/body detection + common subdomains + built-in wordlist%s\n", Blue, Reset)
+	}
 
 	if *modePtr == "parameter" {
 		fmt.Printf("%s[*] Phase 1: Parameter/Logic Scanning%s\n", Blue, Reset)
@@ -206,10 +220,29 @@ func main() {
 		allResults = logicResults
 
 	} else {
-		fmt.Printf("%s[*] Phase 1: Tech Detection + Port Scanning%s\n", Blue, Reset)
+		fmt.Printf("%s[*] Phase 1: Tech Detection (headers + body + port scan)%s\n", Blue, Reset)
 		techs := DetectTechnologies(*targetPtr)
+		probed := ProbeTarget(*targetPtr)
+		mergeSeen := map[string]bool{}
+		unified := []DetectedTech{}
+		for _, t := range techs {
+			k := strings.ToLower(t.Software) + "@" + t.Version
+			if !mergeSeen[k] {
+				mergeSeen[k] = true
+				unified = append(unified, t)
+			}
+		}
+		for _, t := range probed {
+			k := strings.ToLower(t.Software) + "@" + t.Version
+			if !mergeSeen[k] {
+				mergeSeen[k] = true
+				unified = append(unified, t)
+			}
+		}
+		techs = unified
+
 		if len(techs) == 0 {
-			fmt.Printf("%s[!] HTTP headers yielded nothing. Escalating to port scan...%s\n", Yellow, Reset)
+			fmt.Printf("%s[!] Enhanced probe yielded nothing. Escalating to port scan...%s\n", Yellow, Reset)
 			techs = DeepScanPorts(*targetPtr)
 		}
 
@@ -219,6 +252,7 @@ func main() {
 		}
 
 		fmt.Printf("\n%s[*] Detected %d technologies, querying NVD in parallel...%s\n", Blue, len(techs), Reset)
+		reportTechs = techs
 
 		// Parallel NVD queries
 		var mu sync.Mutex
@@ -326,11 +360,55 @@ func main() {
 		}
 	}
 
-	// Export
-	if *outputPtr != "" && len(deduped) > 0 {
-		data, _ := json.MarshalIndent(deduped, "", "  ")
-		os.WriteFile(*outputPtr, data, 0644)
-		fmt.Printf("\n%s▸ Results exported to %s%s\n", Green, *outputPtr, Reset)
+	// Subdomain intel pass — main target techs are the cite above; expand now.
+	var subReports []SubdomainReport
+	if *subdomainsPtr {
+		extraHosts := []string{}
+		if *subFilePtr != "" {
+			extraHosts = LoadSubdomainFile(*subFilePtr)
+			if len(extraHosts) == 0 {
+				fmt.Printf("%s[!] Subdomains file %q empty or unreadable; using built-in wordlist%s\n", Yellow, *subFilePtr, Reset)
+			}
+		}
+		fmt.Printf("\n%s[*] Phase 4: Subdomain intelligence — scanning wordlist of %d entries...%s\n", Blue, len(SubdomainWordlist)+len(extraHosts), Reset)
+		subReports = ScanSubdomains(*targetPtr, len(SubdomainWordlist) > 0, SubdomainWordlist, extraHosts)
+
+		// Merge subdomain CVEs into overall results for ranked output/JSON.
+		for _, sr := range subReports {
+			for i := range sr.CVEs {
+				allResults = append(allResults, sr.CVEs[i])
+			}
+		}
+		if len(subReports) == 0 {
+			fmt.Printf("%s[*] No public subdomains responded; target coverage limited to main host%s\n", Dim, Reset)
+		} else {
+			fmt.Printf("\n%s[*] Subdomain scan complete: %d subdomain(s) with public HTTP responses%s\n", Blue, len(subReports), Reset)
+		}
+	}
+
+	// Recompute dedup for tech + subdomain enrichments combined.
+	deduped = deduplicateResults(allResults)
+
+	sevCountTotal := map[string]int{"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0}
+	for _, r := range deduped {
+		if _, ok := sevCountTotal[r.Severity]; ok {
+			sevCountTotal[r.Severity]++
+		} else {
+			sevCountTotal["INFO"]++
+		}
+	}
+	fmt.Printf("\n%s━━━ Deep scan summary ━━━%s\n", Bold, Reset)
+	fmt.Printf("  Target        : %s\n", *targetPtr)
+	fmt.Printf("  Reachable host: %s\n", *targetPtr)
+	fmt.Printf("  Subdomains    : %d enumerated / %d reachable\n", len(SubdomainWordlist), len(subReports))
+	fmt.Printf("  Techs detected: %d\n", len(reportTechs))
+	fmt.Printf("  Total CVEs    : %d\n", len(deduped))
+	fmt.Printf("  Critical=%d  High=%d  Medium=%d  Low=%d  Info=%d\n",
+		sevCountTotal["CRITICAL"], sevCountTotal["HIGH"], sevCountTotal["MEDIUM"], sevCountTotal["LOW"], sevCountTotal["INFO"])
+
+	// Export JSON report (referenced, structured, detailed).
+	if *outputPtr != "" && len(deduped) >= 0 {
+		ExportReport(*targetPtr, *modePtr, startTime, reportTechs, deduped, subReports)
 	}
 
 	elapsedTotal := time.Since(startTime)
