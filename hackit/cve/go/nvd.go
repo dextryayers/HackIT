@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -96,33 +98,215 @@ type ExportResult struct {
 }
 
 var (
-	nvdSem       = make(chan struct{}, 3) // max 3 concurrent NVD requests
-	nvdAPIKey    string
-	nvdReqCount  int
+	nvdSema     = make(chan struct{}, 4) // max concurrency for NVD requests
+	nvdAPIKey   string
+	nvdReqCount int
+
 	nvdReqMu     sync.Mutex
 	nvdLastReq   time.Time
+	nvdCacheMu   sync.Mutex
 )
 
 func SetNVDAPIKey(key string) {
 	nvdAPIKey = key
+	if key == "" {
+		// No key: honour NVD public-tier rate limit (1 request / second).
+		nvdSema = make(chan struct{}, 2)
+	}
 }
 
 func nvdRateLimit() {
 	nvdReqMu.Lock()
 	elapsed := time.Since(nvdLastReq)
-	if elapsed < time.Second {
-		nvdReqMu.Unlock()
+	defer nvdReqMu.Unlock()
+	if nvdAPIKey != "" {
+		if elapsed < 600*time.Millisecond {
+			time.Sleep(600*time.Millisecond - elapsed)
+		}
+	} else if elapsed < time.Second {
 		time.Sleep(time.Second - elapsed)
-		return
 	}
 	nvdLastReq = time.Now()
 	nvdReqCount++
-	nvdReqMu.Unlock()
+}
+
+func nvdCachePath() string {
+	exe, err := os.Executable()
+	if err == nil {
+		if info, err := os.Stat(filepath.Dir(exe)); err == nil && info.IsDir() {
+			return filepath.Join(filepath.Dir(exe), "nvd_cache.json")
+		}
+	}
+	cacheRoot := os.Getenv("XDG_CACHE_HOME")
+	if cacheRoot == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			cacheRoot = filepath.Join(home, ".cache")
+		} else {
+			cacheRoot = os.TempDir()
+		}
+	}
+	dir := filepath.Join(cacheRoot, "hackit")
+	_ = os.MkdirAll(dir, 0o755)
+	return filepath.Join(dir, "nvd_cache.json")
+}
+
+func readNVDCache() map[string]json.RawMessage {
+	nvdCacheMu.Lock()
+	defer nvdCacheMu.Unlock()
+	data, err := os.ReadFile(nvdCachePath())
+	if err != nil {
+		return nil
+	}
+	cache := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &cache); err != nil {
+		return nil
+	}
+	return cache
+}
+
+func writeNVDCacheEntry(key string, payload json.RawMessage) {
+	nvdCacheMu.Lock()
+	defer nvdCacheMu.Unlock()
+	cache := readNVDCache()
+	if len(cache) > 800 {
+		trimmed := map[string]json.RawMessage{}
+		count := 0
+		for k, v := range cache {
+			if count >= 400 {
+				break
+			}
+			trimmed[k] = v
+			count++
+		}
+		cache = trimmed
+	}
+	cache[key] = payload
+	data, err := json.Marshal(cache)
+	if err != nil {
+		return
+	}
+	tmp := nvdCachePath() + ".tmp"
+	_ = os.WriteFile(tmp, data, 0o600)
+	_ = os.Rename(tmp, nvdCachePath())
+}
+
+func cachedQueryNVDCPE(cpe string) []ExportResult {
+	cacheKey := "cpe:" + cpe
+	if cache := readNVDCache(); cache != nil {
+		if raw, ok := cache[cacheKey]; ok {
+			var items []ExportResult
+			if err := json.Unmarshal(raw, &items); err == nil {
+				return items
+			}
+		}
+	}
+
+	currentSema := nvdSema
+	currentSema <- struct{}{}
+	defer func() { <-currentSema }()
+	nvdRateLimit()
+
+	apiURL := fmt.Sprintf("https://services.nvd.nist.gov/rest/json/cves/2.0?cpeName=%s&resultsPerPage=50",
+		url.QueryEscape(cpe))
+	debugCVE("NVD CPE query: %s", apiURL)
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	req, _ := http.NewRequest("GET", apiURL, nil)
+	req.Header.Set("User-Agent", "HackIt-CVE/2.0 (authorised assessment)")
+	req.Header.Set("Accept", "application/json")
+	if nvdAPIKey != "" {
+		req.Header.Set("apiKey", nvdAPIKey)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		debugCVE("NVD CPE error: %v", err)
+		return nil
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var nvdResp NVDResponse
+	if err := json.Unmarshal(body, &nvdResp); err != nil {
+		debugCVE("NVD CPE parse error: %v", err)
+		return nil
+	}
+
+	results := extractResults(&nvdResp, "", "")
+	if payload, err := json.Marshal(results); err == nil {
+		writeNVDCacheEntry(cacheKey, payload)
+	}
+	return results
+}
+
+func cachedQueryNVDKeyword(software, version string) []ExportResult {
+	cacheKey := "keyword:" + strings.ToLower(software) + ":" + strings.ToLower(version)
+	if cache := readNVDCache(); cache != nil {
+		if raw, ok := cache[cacheKey]; ok {
+			var items []ExportResult
+			if err := json.Unmarshal(raw, &items); err == nil {
+				return items
+			}
+		}
+	}
+
+	currentSema := nvdSema
+	currentSema <- struct{}{}
+	defer func() { <-currentSema }()
+	nvdRateLimit()
+
+	query := url.QueryEscape(fmt.Sprintf("%s %s", software, version))
+	apiURL := fmt.Sprintf("https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch=%s&resultsPerPage=40", query)
+	debugCVE("NVD keyword query: %s %s", software, version)
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	req, _ := http.NewRequest("GET", apiURL, nil)
+	req.Header.Set("User-Agent", "HackIt-CVE/2.0 (authorised assessment)")
+	req.Header.Set("Accept", "application/json")
+	if nvdAPIKey != "" {
+		req.Header.Set("apiKey", nvdAPIKey)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		debugCVE("NVD keyword error: %v", err)
+		return nil
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var nvdResp NVDResponse
+	if err := json.Unmarshal(body, &nvdResp); err != nil {
+		debugCVE("NVD keyword parse error: %v", err)
+		return nil
+	}
+
+	matches := extractResults(&nvdResp, software, version)
+	filtered := make([]ExportResult, 0, len(matches))
+	for _, r := range matches {
+		if keywordMatchReasonable(software, r.Description) {
+			filtered = append(filtered, r)
+		}
+	}
+	if payload, err := json.Marshal(filtered); err == nil {
+		writeNVDCacheEntry(cacheKey, payload)
+	}
+	return filtered
+}
+
+func QueryNVD(software, version string) []ExportResult {
+	cpe := generateCPE(software, version)
+	if cpe != "" {
+		if results := QueryNVDCPE(cpe); len(results) > 0 {
+			return results
+		}
+	}
+	return cachedQueryNVDKeyword(software, version)
 }
 
 func getCVEInfo(cveID string) *CVEInfo {
-	nvdSem <- struct{}{}
-	defer func() { <-nvdSem }()
+	cached := nvdSema
+	cached <- struct{}{}
+	defer func() { <-cached }()
 	nvdRateLimit()
 
 	apiURL := fmt.Sprintf("https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=%s", url.QueryEscape(cveID))
@@ -155,91 +339,9 @@ func getCVEInfo(cveID string) *CVEInfo {
 }
 
 func QueryNVDCPE(cpe string) []ExportResult {
-	nvdSem <- struct{}{}
-	defer func() { <-nvdSem }()
-	nvdRateLimit()
-
-	apiURL := fmt.Sprintf("https://services.nvd.nist.gov/rest/json/cves/2.0?cpeName=%s&resultsPerPage=20",
-		url.QueryEscape(cpe))
-	debugCVE("NVD CPE query: %s", apiURL)
-
-	client := &http.Client{Timeout: 20 * time.Second}
-	req, _ := http.NewRequest("GET", apiURL, nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0 (CVE Scanner)")
-	req.Header.Set("Accept", "application/json")
-	if nvdAPIKey != "" {
-		req.Header.Set("apiKey", nvdAPIKey)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		debugCVE("NVD CPE error: %v", err)
-		return nil
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	var nvdResp NVDResponse
-	if err := json.Unmarshal(body, &nvdResp); err != nil {
-		debugCVE("NVD CPE parse error: %v", err)
-		return nil
-	}
-
-	return extractResults(&nvdResp, "", "")
+	return cachedQueryNVDCPE(cpe)
 }
 
-func QueryNVD(software, version string) []ExportResult {
-	nvdSem <- struct{}{}
-	defer func() { <-nvdSem }()
-	nvdRateLimit()
-
-	// First try CPE-based search
-	cpe := generateCPE(software, version)
-	if cpe != "" {
-		results := QueryNVDCPE(cpe)
-		if len(results) > 0 {
-			return results
-		}
-	}
-
-	// Fallback to keyword search
-	query := url.QueryEscape(fmt.Sprintf("%s %s", software, version))
-	apiURL := fmt.Sprintf("https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch=%s&resultsPerPage=20", query)
-	debugCVE("NVD keyword query: %s %s", software, version)
-
-	client := &http.Client{Timeout: 15 * time.Second}
-	req, _ := http.NewRequest("GET", apiURL, nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0 (CVE Scanner)")
-	req.Header.Set("Accept", "application/json")
-	if nvdAPIKey != "" {
-		req.Header.Set("apiKey", nvdAPIKey)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		debugCVE("NVD keyword error: %v", err)
-		return nil
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	var nvdResp NVDResponse
-	if err := json.Unmarshal(body, &nvdResp); err != nil {
-		return nil
-	}
-
-	matches := extractResults(&nvdResp, software, version)
-	// Precision gate — drop keyword hits missing the queried software token in
-	// the summary; these produce false positives like matching "python" to
-	// pygresql reports.
-	filtered := make([]ExportResult, 0, len(matches))
-	for _, r := range matches {
-		if keywordMatchReasonable(software, r.Description) {
-			filtered = append(filtered, r)
-		}
-	}
-	return filtered
-}
 
 func extractResults(nvdResp *NVDResponse, software, version string) []ExportResult {
 	var results []ExportResult
