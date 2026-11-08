@@ -1348,6 +1348,44 @@ def _memory_backend():
 
 
 @agent.command()
+@click.argument('model_id', required=False)
+def select(model_id):
+    """Central AI model selection for chat, /halo, autopilot and auto.
+
+    Without arguments opens an interactive dropdown (or a numbered list on
+    dumb pipes) showing every model exposed by the active provider.
+    """
+    from hackit.config import load_config, save_config
+
+    cfg = load_config()
+    provider = provider_registry.normalize_provider(
+        provider_registry.get_active_provider(cfg) or "gemini"
+    )
+    key = provider_registry.resolve_api_key(provider, cfg)
+
+    if model_id:
+        model = model_id.strip()
+        cfg.setdefault("ai_models", {})[provider] = model
+        save_config(cfg)
+        click.echo(_colored(f"  [✓] {provider} model set to {model}", GREEN))
+        return
+
+    current = provider_registry.effective_model(provider, cfg)
+    click.echo(_colored(f"\n  [ SELECT · {provider} ] current: {current or '(auto)'}", B_CYAN))
+    items = provider_registry.model_options(provider, key=key, include_remote=True)
+    if not items:
+        click.echo(_colored("  [!] No models found. Check the key or start Ollama.", YELLOW))
+        return
+    chosen = _dropdown_select(provider, items, [item[0] for item in items])
+    if not chosen:
+        click.echo(_colored("  [*] Model unchanged.", DIM))
+        return
+    cfg.setdefault("ai_models", {})[provider] = chosen
+    save_config(cfg)
+    _model_loading_animation(chosen, PROVIDER_LABELS.get(provider, provider))
+    click.echo(_colored(f"  [✓] {provider} model set to {chosen}", GREEN))
+
+@agent.command()
 @click.argument('provider', required=False)
 @click.option('--curated/--remote', default=False, help='Only show curated models')
 def models(provider, curated):
@@ -2012,6 +2050,7 @@ _AGENT_ACTIONS = {
     "show": "progress show",
     "osint": "osint",
     "models": "models",
+    "select": "select",
     "usage": "usage",
     "tokens": "usage",
     "doctor": "doctor",
@@ -2037,6 +2076,7 @@ def _click_registry():
         "auto": auto,
         "osint": osint_cmd,
         "models": models,
+        "select": select,
             "doctor": doctor,
         "memory": memory,
         "setting": setting,
