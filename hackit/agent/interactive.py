@@ -1844,6 +1844,85 @@ class AgentUI:
         return ""
 
     # ------------------------------------------------------------------
+    # Bare set / go-words (no slash needed, like normal AI chat)
+    # ------------------------------------------------------------------
+
+    # "Mulai" words: any of these alone means "start the full pipeline".
+    _GO_WORDS = {
+        "lanjut", "lanjutkan", "mulai", "gass", "gas", "gaspol",
+        "jalan", "jalanin", "jalankan", "start", "go", "run",
+        "attack", "serang", "hajar", "sikat", "tempur",
+        "eksekusi", "execute", "continue", "lanjutkan serang",
+        "mulai menyerang", "lanjut menyerang", "gas serangan",
+        "mulai pentest", "mulai serangan",
+    }
+
+    def _handle_bare_set(self, text: str) -> bool:
+        """Recognise `set <target>` / `set target <target>` without a slash.
+
+        Both forms appear in the wild (users paste `set https://x` or
+        `set target https://x`).  In Autopilot the locked target starts
+        the full pipeline immediately; in Chat it only locks.
+        """
+        parts = (text or "").strip().split()
+        if not parts:
+            return False
+        if parts[0].lower() not in ("set", "set-target", "set_target"):
+            return False
+        rest_tokens = parts[1:]
+        if rest_tokens and rest_tokens[0].lower() == "target":
+            rest_tokens = rest_tokens[1:]
+        target = " ".join(rest_tokens).strip()
+        if not target:
+            self.print("[yellow]Usage: set <target>  contoh: set https://example.com[/yellow]")
+            return True
+        # Never treat a second command word as a target.
+        if target.lower() in ("--no-run",):
+            self.print("[yellow]Usage: set <target>  contoh: set https://example.com[/yellow]")
+            return True
+        no_run = target.endswith("--no-run")
+        if no_run:
+            target = target[: -len("--no-run")].strip()
+        self.target = target
+        self.print(f"[cyan]Target locked:[/cyan] {escape(str(self.target))}")
+        if self.mode_name == "AUTOPILOT" and not no_run:
+            self.print("[dim]Autopilot starting — full pentest pipeline (recon → report).[/dim]")
+            try:
+                import threading
+
+                threading.Timer(0.6, lambda: self._autopilot_start(self.target)).start()
+            except Exception:
+                self._autopilot_start(self.target)
+        return True
+
+    def _handle_bare_go(self, text: str) -> bool:
+        """Recognise `lanjut` / `mulai` / `gass` … as “start the full attack”.
+
+        Only fires when the whole message is a go-word (or a short phrase
+        built from go-words).  Anything longer stays with the AI.
+        """
+        cleaned = (text or "").strip().lower().strip(" .!?.")
+        if cleaned not in self._GO_WORDS:
+            # Also accept "<go-word>" + optional target in one line.
+            if cleaned.startswith(tuple(w + " " for w in self._GO_WORDS if " " not in w)):
+                candidate = self._extract_target_hint(text)
+                if candidate:
+                    self.target = candidate
+                    self._autopilot_start(candidate)
+                    return True
+            return False
+        if self._autopilot_running:
+            self.print("[dim]Autopilot sudah jalan — tunggu fase selesai.[/dim]")
+            return True
+        if not self.target:
+            self.print("[yellow]Target belum diset.[/yellow]")
+            self.print("[dim]Ketik [green]set https://example.com[/green] dulu, atau [green]/set-target example.com[/green]. Setelah target terkunci, kata mulai akan langsung menyerang.[/dim]")
+            return True
+        self.print("[dim]Autopilot starting — full pentest pipeline (recon → osint → js → params → payload → analyse → plan → execute → probe → correlate → report).[/dim]")
+        self._autopilot_start(self.target)
+        return True
+
+    # ------------------------------------------------------------------
     # Dispatch
     # ------------------------------------------------------------------
 
@@ -1858,6 +1937,10 @@ class AgentUI:
             head = text.split(None, 1)[0].lower()
             if head in self.commands:
                 text = "/" + text
+            elif self._handle_bare_set(text):
+                return True
+            elif self._handle_bare_go(text):
+                return True
             elif self._maybe_cyber_intent(text):
                 return True
             else:
