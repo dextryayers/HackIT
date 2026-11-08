@@ -451,37 +451,60 @@ def recon_node(state: PentestState) -> Dict[str, Any]:
 
     has_web = _target_has_web({**state, "scan_data": scan_data})
 
-    # Pro scanners: header audit, CORS variants, cookie audit, sensitive paths.
+    # Pro scanners: Go orchestrator + Rust scanners, Python fallback.
     if has_web:
         try:
-            _emit_progress("recon", "pro header + CORS + sensitive paths starting")
-            pro_added = 0
-            try:
-                header_report = _pro.audit_headers(base_url, timeout=8.0)
-                pro_added += _add_pro_findings(findings, header_report.get("findings", []))
-                scan_data["header_audit"] = {"status": header_report.get("status"), "headers": header_report.get("headers", {})}
-            except Exception as exc:  # noqa: BLE001
-                scan_data["header_audit_error"] = str(exc)[:200]
-            try:
-                cors_report = _pro.test_cors(base_url, timeout=8.0)
-                pro_added += _add_pro_findings(findings, cors_report.get("findings", []))
-                scan_data["cors_probe"] = cors_report
-            except Exception as exc:  # noqa: BLE001
-                scan_data["cors_probe_error"] = str(exc)[:200]
-            try:
-                cookie_report = _pro.audit_cookies(base_url, timeout=8.0)
-                pro_added += _add_pro_findings(findings, cookie_report.get("findings", []))
-                scan_data["cookie_audit"] = cookie_report
-            except Exception as exc:  # noqa: BLE001
-                scan_data["cookie_audit_error"] = str(exc)[:200]
-            try:
-                paths_report = _pro.scan_sensitive_paths(scan_base, timeout=6.0)
-                pro_added += _add_pro_findings(findings, paths_report.get("findings", []))
-                scan_data["sensitive_paths"] = {"checked": len(_pro.SENSITIVE_PATHS),
-                                                 "exposed": len(paths_report.get("findings", []))}
-                _emit_progress("recon", f"pro scanners: {pro_added} finding(s) from headers/CORS/cookies/paths")
-            except Exception as exc:  # noqa: BLE001
-                scan_data["sensitive_paths_error"] = str(exc)[:200]
+            _emit_progress("recon", "pro scan engine (Go+Rust) starting")
+            go_res = _pro.go_rs_scan(base_url, timeout=45.0)
+            if isinstance(go_res, dict) and go_res.get("reachable"):
+                pro_added = _add_pro_findings(findings, _as_list(go_res.get("findings")))
+                scan_data["pro_engine"] = {
+                    "engine": go_res.get("engine"),
+                    "reachable": go_res.get("reachable"),
+                    "http_status": go_res.get("http_status"),
+                    "body_bytes": go_res.get("body_bytes"),
+                    "findings_added": pro_added,
+                    "analysis": go_res.get("analysis", {}),
+                }
+                endpoints = []
+                analysis = go_res.get("analysis") or {}
+                if isinstance(analysis, dict):
+                    for endpoint in _as_list(analysis.get("endpoints")):
+                        endpoints.append(str(endpoint))
+                if endpoints:
+                    scan_data.setdefault("external_endpoints", [])
+                    merged = list(scan_data["external_endpoints"]) + [ep for ep in endpoints if ep not in scan_data["external_endpoints"]]
+                    scan_data["external_endpoints"] = sorted(set(str(ep) for ep in merged))[:150]
+                _emit_progress("recon", f"go+rust pro scanners: {pro_added} finding(s)")
+            else:
+                _emit_progress("recon", "go+rust pro engine unavailable; falling back to Python scanners")
+                pro_added = 0
+                try:
+                    header_report = _pro.audit_headers(base_url, timeout=8.0)
+                    pro_added += _add_pro_findings(findings, header_report.get("findings", []))
+                    scan_data["header_audit"] = {"status": header_report.get("status"), "headers": header_report.get("headers", {})}
+                except Exception as exc:  # noqa: BLE001
+                    scan_data["header_audit_error"] = str(exc)[:200]
+                try:
+                    cors_report = _pro.test_cors(base_url, timeout=8.0)
+                    pro_added += _add_pro_findings(findings, cors_report.get("findings", []))
+                    scan_data["cors_probe"] = cors_report
+                except Exception as exc:  # noqa: BLE001
+                    scan_data["cors_probe_error"] = str(exc)[:200]
+                try:
+                    cookie_report = _pro.audit_cookies(base_url, timeout=8.0)
+                    pro_added += _add_pro_findings(findings, cookie_report.get("findings", []))
+                    scan_data["cookie_audit"] = cookie_report
+                except Exception as exc:  # noqa: BLE001
+                    scan_data["cookie_audit_error"] = str(exc)[:200]
+                try:
+                    paths_report = _pro.scan_sensitive_paths(scan_base, timeout=6.0)
+                    pro_added += _add_pro_findings(findings, paths_report.get("findings", []))
+                    scan_data["sensitive_paths"] = {"checked": len(_pro.SENSITIVE_PATHS),
+                                                     "exposed": len(paths_report.get("findings", []))}
+                    _emit_progress("recon", f"pro scanners: {pro_added} finding(s) from headers/CORS/cookies/paths")
+                except Exception as exc:  # noqa: BLE001
+                    scan_data["sensitive_paths_error"] = str(exc)[:200]
         except Exception as exc:  # noqa: BLE001
             scan_data["pro_scan_error"] = str(exc)[:300]
     scan_data["web_url"] = base_url

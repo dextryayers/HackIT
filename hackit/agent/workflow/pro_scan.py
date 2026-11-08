@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import time
 import uuid
 import urllib.error
@@ -29,6 +30,58 @@ from urllib.parse import urljoin, urlparse
 from ..textutils import strip_control
 
 UA = "HackIt-Pentest/2.3 (+authorised assessment)"
+
+
+def _go_pro_engine_path() -> str:
+    """Location of the compiled Go pro_engine wrapper."""
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    candidates = [
+        os.path.join(base_dir, "agent", "go", "pro_engine_bin"),
+        os.path.join(base_dir, "agent", "go", "pro_engine", "pro_engine"),
+        os.path.join(base_dir, "agent", "go", "pro_engine"),
+    ]
+    if shutil.which("pro_engine"):
+        return shutil.which("pro_engine") or ""
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+    return ""
+
+
+def go_rs_scan(url: str, timeout: float = 45.0) -> Optional[Dict[str, Any]]:
+    """Invoke the Go pro_engine (which dispatches to the Rust pro_scan scanner).
+
+    Returns a merged dict with keys: engine, reachable, http_status, body_bytes,
+    findings (list of unified finding dicts), analysis (dict), or None on failure.
+    """
+    import subprocess
+
+    binary = _go_pro_engine_path()
+    if not binary:
+        return None
+    try:
+        proc = subprocess.run(
+            [binary, "--scan", url, "--timeout", str(int(timeout)), "--verbose", "1"],
+            capture_output=True, text=True, timeout=max(15, int(timeout) + 15),
+        )
+    except Exception:
+        return None
+    out = proc.stdout.strip()
+    if not out:
+        return None
+    try:
+        data = json.loads(out)
+    except Exception:
+        start, end = out.find("{"), out.rfind("}")
+        if start == -1 or end <= start:
+            return None
+        try:
+            data = json.loads(out[start:end + 1])
+        except Exception:
+            return None
+    if not isinstance(data, dict) or data.get("error"):
+        return None
+    return data
 
 
 def _http_get(url: str, headers: Optional[Dict[str, str]] = None, timeout: float = 8.0,

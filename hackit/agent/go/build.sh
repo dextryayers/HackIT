@@ -60,6 +60,22 @@ build_engine "$HACKIT_GO_DIR/chat_go" "Chat Engine"     "$HACKIT_GO_DIR/chat_go/
 build_engine "$HACKIT_GO_DIR/worker"  "Worker Engine"   "$HACKIT_GO_DIR/worker/worker"
 build_engine "$HACKIT_GO_DIR/hative"  "Hative Scanner"  "$HACKIT_GO_DIR/hative/hative"
 build_engine "$HACKIT_GO_DIR/swarm"   "Swarm Engine"    "$HACKIT_GO_DIR/swarm/swarm_engine"
+build_engine "$HACKIT_GO_DIR/pro_engine" "Pro Engine (Go orchestrator)" "$HACKIT_GO_DIR/pro_engine_bin"
+
+echo -e "\n${CYAN}─── Rust Engines ───${NC}\n"
+
+if command -v cargo >/dev/null 2>&1; then
+    echo -ne "  Building ${BOLD}pro_scan (Rust)${NC}... "
+    if cargo build --release --manifest-path "$HACKIT_GO_DIR/rustsrc/pro_scan/Cargo.toml" >/tmp/pro_scan_build.log 2>&1; then
+        echo -e "${GREEN}OK${NC} ($(ls -lh "$HACKIT_GO_DIR/rustsrc/pro_scan/target/release/pro_scan" | awk '{print $5}'))"
+    else
+        echo -e "${RED}FAILED${NC}"
+        sed 's/^/      /' /tmp/pro_scan_build.log | head -20
+        FAILED=$((FAILED + 1))
+    fi
+else
+    echo -e "  ${YELLOW}SKIP${NC}     pro_scan (Rust) ${DIM}(cargo not found)${NC}"
+fi
 
 echo -e "\n${CYAN}─── Module Go Engines ───${NC}\n"
 

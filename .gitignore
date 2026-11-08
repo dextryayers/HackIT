@@ -98,3 +98,7 @@ results/
 hackit/agent/go/reports/pentest/*.md
 hackit/agent/go/reports/payloads/*.json
 hackit/agent/go/reports/osint/*.json
+
+# Agent pro engines — build outputs
+hackit/agent/go/pro_engine_bin
+hackit/agent/go/rustsrc/pro_scan/target/
