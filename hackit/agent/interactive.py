@@ -82,6 +82,8 @@ AUTOPILOT_COMMANDS = {
     "model": "Switch model (arrow-key picker)",
     "select": "Central model select (chat, /halo, autopilot, auto)",
     "provider": "Switch provider",
+    "usage": "Live token usage (session + all-time)",
+    "tokens": "Live token usage (alias)",
     "memory": "Show memory statistics",
     "forget": "Clear conversation memory",
     "export": "Export conversation [filename]",
@@ -126,6 +128,8 @@ CHAT_COMMANDS = {
     "select": "Central model select (chat, /halo, autopilot, auto)",
     "provider": "Switch provider",
     "models": "List available models",
+    "usage": "Live token usage (session + all-time)",
+    "tokens": "Live token usage (alias)",
     "memory": "Show memory statistics",
     "facts": "Show remembered facts",
     "forget": "Clear conversation memory",
@@ -271,7 +275,7 @@ def _console() -> "Console":
 
 PARAMETERLESS_COMMANDS = {
     "help", "clear", "status", "memory", "facts", "forget", "models",
-    "exit", "quit", "retry", "target", "save", "export",
+    "usage", "tokens", "exit", "quit", "retry", "target", "save", "export",
 }
 
 
@@ -421,10 +425,13 @@ class AgentUI:
         model = brain.model or "(auto)"
         backend = brain.memory.backend if brain.memory else "off"
         memory_count = brain.memory.stats()["messages"] if brain.memory else 0
+        usage = brain.usage_summary() if hasattr(brain, "usage_summary") else {}
+        usage_text = brain.usage_text() if hasattr(brain, "usage_text") else "~0 tokens"
         rows = [
             ("Engine", brain.engine),
             ("Provider", brain.provider or "none"),
             ("Model", model),
+            ("Tokens", usage_text),
             ("Memory", f"{backend} · {memory_count} msg"),
             ("Target", self.target or "—"),
         ]
@@ -440,7 +447,11 @@ class AgentUI:
             return " provider=… model=… "
         memory = self.brain.memory.stats()["messages"] if self.brain.memory else 0
         target = f" · target={self.target}" if self.target else ""
-        return f" provider={self.brain.provider or 'none'} · model={self.brain.model or 'auto'} · mem={memory}{target} "
+        usage = ""
+        if hasattr(self.brain, "usage_summary"):
+            s = self.brain.usage_summary()
+            usage = f" · tok ~{s['total']:,} ({s['turns']}t)"
+        return f" provider={self.brain.provider or 'none'} · model={self.brain.model or 'auto'} · mem={memory}{usage}{target} "
 
     def _bottom_toolbar(self):
         if _HAS_PT:
@@ -580,8 +591,10 @@ class AgentUI:
         elif not state["answer_started"]:
             self.print("[yellow]Model returned reasoning but no final answer.[/yellow]")
         else:
+            live = self.brain.usage_summary() if hasattr(self.brain, "usage_summary") else {}
+            session = f" · session ~{live.get('total', token_count // 4):,} tok" if live.get("total") else ""
             self.print(
-                f"[dim]{_timestamp()} · {elapsed:.1f}s · ~{max(1, token_count // 4)} tok[/dim]"
+                f"[dim]{_timestamp()} · {elapsed:.1f}s · ~{max(1, token_count // 4)} tok this turn{session}[/dim]"
             )
         return result
 
@@ -706,6 +719,38 @@ class AgentUI:
             self.print("[dim]Applies to chat, /halo, autopilot and auto.[/dim]")
         else:
             self.print(f"[red]Could not switch to {escape(chosen)}.[/red]")
+
+    def _cmd_usage(self) -> None:
+        """Show live token usage for this session and all past sessions."""
+        if not self.brain:
+            return
+        try:
+            from .usage import session_totals, format_total
+        except Exception:  # pragma: no cover
+            self.print("[dim]Token tracking unavailable.[/dim]")
+            return
+        live = self.brain.usage_summary() if hasattr(self.brain, "usage_summary") else {}
+        history = session_totals()
+        table = Table(title="TOKEN USAGE", box=box.SIMPLE)
+        table.add_column("Scope", style="dim")
+        table.add_column("Tokens", style="cyan")
+        table.add_column("Turns", style="white")
+        table.add_column("Detail", style="dim")
+        table.add_row(
+            "This session",
+            f"~{live.get('total', 0):,}",
+            str(live.get("turns", 0)),
+            f"prompt ~{live.get('prompt', 0):,} · completion ~{live.get('completion', 0):,} · reasoning ~{live.get('reasoning', 0):,}",
+        )
+        table.add_row(
+            "All time",
+            f"~{history['total']:,}",
+            str(history["turns"]),
+            f"{history['entries']} session(s) persisted",
+        )
+        self.print(table)
+        self.print(f"[dim]Model: {escape(str(self.brain.provider or 'none'))} · {escape(str(self.brain.model or 'auto'))}[/dim]")
+        self.print("[dim]Estimated at ~4 characters/token. Usage is written to ~/.hackit/token_usage.json each turn.[/dim]")
 
     def _cmd_model(self, argument: str) -> None:
         if not self.brain:
@@ -1366,6 +1411,9 @@ class AgentUI:
             return True
         if head == "select":
             self._cmd_select(rest)
+            return True
+        if head in ("usage", "tokens"):
+            self._cmd_usage()
             return True
         if head == "models":
             self._cmd_models()

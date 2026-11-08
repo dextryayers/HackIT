@@ -28,6 +28,11 @@ from .textutils import strip_control
 from . import payloads as payload_forge
 from . import providers as provider_registry
 
+try:
+    from .usage import TokenMeter
+except Exception:  # pragma: no cover
+    TokenMeter = None  # type: ignore[assignment]
+
 CHAT_SYSTEM_PROMPT = """\
 You are HackIt Chat, a versatile AI assistant built for the terminal.
 
@@ -215,6 +220,9 @@ class AIHyperBrain:
         self.keys = self._load_keys()
         self.model = provider_registry.effective_model(self.provider, self.config)
 
+        # Live token meter shared by chat, /halo, autopilot and auto.
+        self.meter = TokenMeter(provider=self.provider, model=self.model) if TokenMeter else None
+
         if self.provider == "ollama":
             self._refresh_ollama_model()
 
@@ -303,6 +311,8 @@ class AIHyperBrain:
             self.model = model
         else:
             self.model = provider_registry.effective_model(provider, load_config())
+        if self.meter:
+            self.meter.set_model(provider, self.model)
         if provider == "ollama":
             self._refresh_ollama_model()
         return True
@@ -567,6 +577,8 @@ class AIHyperBrain:
         for provider in self.provider_chain():
             if not self._prepare_provider(provider):
                 continue
+            if self.meter:
+                self.meter.add_prompt((body or prompt) + "\n" + system)
             response = self._invoke_engine(
                 body or prompt,
                 system_prompt=system,
@@ -579,6 +591,9 @@ class AIHyperBrain:
                 if not response:
                     last_error = "[!] Model returned only reasoning; no final answer."
                     continue
+                if self.meter:
+                    self.meter.add_stream("answer", response)
+                    self.meter.finish_turn()
                 self._remember_turn(prompt, response)
                 return response
             last_error = response
@@ -599,6 +614,8 @@ class AIHyperBrain:
             self._refresh_ollama_model()
         else:
             self.model = provider_registry.effective_model(provider, self.config)
+        if self.meter:
+            self.meter.set_model(provider, self.model)
         return True
 
     # ------------------------------------------------------------------
@@ -626,6 +643,8 @@ class AIHyperBrain:
                         chosen = candidate
                         break
         self.model = chosen
+        if self.meter:
+            self.meter.set_model(self.provider, chosen)
         from hackit.config import load_config, save_config
 
         cfg = load_config()
@@ -633,6 +652,21 @@ class AIHyperBrain:
         save_config(cfg)
         self.config = cfg
         return True
+
+    # ------------------------------------------------------------------
+    # Live token usage
+    # ------------------------------------------------------------------
+
+    def usage_summary(self) -> Dict[str, Any]:
+        """Current session token counts (estimated ~4 chars/token)."""
+        if self.meter:
+            return self.meter.summary()
+        return {"prompt": 0, "completion": 0, "reasoning": 0, "total": 0, "turns": 0, "provider": self.provider, "model": self.model}
+
+    def usage_text(self) -> str:
+        if self.meter:
+            return self.meter.format()
+        return "~0 tokens · 0 turn(s)"
 
     def _postprocess(self, response: str, prompt: str = "") -> str:
         response = strip_control(response)
@@ -743,6 +777,8 @@ class AIHyperBrain:
                 break
             if not self._prepare_provider(provider):
                 continue
+            if self.meter:
+                self.meter.add_prompt((body or prompt) + "\n" + system)
             full = ""
             failed = [False]
 
@@ -757,6 +793,8 @@ class AIHyperBrain:
                         full += token
                         if self._is_error(token):
                             failed[0] = True
+                    if self.meter:
+                        self.meter.add_stream(kind, token)
                 if on_token:
                     on_token(event)
 
@@ -774,6 +812,8 @@ class AIHyperBrain:
             if not failed[0] and full.strip() and not self._is_error(full):
                 result = self._postprocess(full, prompt=body or prompt)
                 if result:
+                    if self.meter:
+                        self.meter.finish_turn()
                     self._remember_turn(prompt, result)
                     return result
                 last_error = "[!] Model returned no usable final answer."

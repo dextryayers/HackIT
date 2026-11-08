@@ -79,8 +79,9 @@ def enter_agent_shell():
 
     # ── 4. Compact command grid (precise alignment) ──
     cmds = [
-        ("swarm",     "28-agent full scan",      "autopilot",  "autonomous AI hunter"),
-        ("auto",      "full pentest pipeline",   "chat",       "AI chat + tools"),
+        ("select",    "choose ready AI model",   "autopilot",  "autonomous AI hunter"),
+        ("swarm",     "28-agent full scan",      "chat",       "AI chat + tools"),
+        ("auto",      "full pentest pipeline",   "usage",      "live token usage"),
         ("payload",   "AI payload forge",        "osint",      "OSINT footprint"),
         ("probe",     "send payloads to target", "doctor",     "provider diagnostics"),
         ("setting",   "configure AI keys",       "status",     "connectivity status"),
@@ -161,6 +162,8 @@ def enter_agent_shell():
                     ("dashboard", "Real-time TUI dashboard"),
                     ("models",    "List models for the active provider"),
                     ("model",     "Switch model (arrow-key picker)"),
+                    ("select",    "Central model select (chat, /halo, autopilot, auto)"),
+                    ("usage",     "Live token usage (session + all-time)"),
                     ("memory",    "Inspect or clear AI memory"),
                     ("reset",     "Reset AI keys/provider/models"),
                     ("setting",   "Configure AI providers & keys"),
@@ -274,7 +277,7 @@ def enter_agent_shell():
                     continue
 
                 if base_cmd in ('auto', 'payload', 'probe', 'osint', 'doctor',
-                                'models', 'model', 'memory'):
+                                'models', 'model', 'select', 'usage', 'memory'):
                     handle_ai_command("/" + user_input)
                     continue
 
@@ -1148,6 +1151,28 @@ def model(model_id):
 
 
 @agent.command()
+def usage():
+    """Show live token usage for this session and all past sessions."""
+    from hackit.agent.usage import session_totals
+    from hackit.config import load_config
+
+    cfg = load_config()
+    provider = provider_registry.get_active_provider(cfg)
+    model = provider_registry.effective_model(provider, cfg) if provider else ""
+    totals = session_totals()
+    click.echo(_colored("\n  [ TOKEN USAGE · LIVE ]", B_CYAN))
+    click.echo(f"  • Provider        : {YELLOW}{(provider or 'NONE').upper()}{RESET}")
+    click.echo(f"  • Model           : {YELLOW}{model or '(auto)'}{RESET}")
+    click.echo(f"  • Session (live)  : {DIM}open /usage in chat, autopilot or TUI to see this session's running total{RESET}")
+    click.echo(f"  • All-time total  : {GREEN}~{totals['total']:,}{RESET} tokens · {totals['turns']} turn(s) · {totals['entries']} session(s)")
+    click.echo(f"  • Prompt          : {DIM}~{totals['prompt']:,}{RESET}")
+    click.echo(f"  • Completion      : {DIM}~{totals['completion']:,}{RESET}")
+    click.echo(f"  • Source          : {DIM}~/.hackit/token_usage.json (estimated ~4 chars/token){RESET}")
+    click.echo()
+    click.echo(_colored("  Inside chat / autopilot / TUI, run /usage for the live session total.", DIM))
+    click.echo()
+
+@agent.command()
 @click.argument('vuln_type')
 @click.option('--context', default='', help='Target/context for the payloads')
 @click.option('--count', default=12, type=int, help='Number of payloads')
@@ -1753,6 +1778,9 @@ _AGENT_ACTIONS = {
     "osint": "osint",
     "models": "models",
     "model": "model",
+    "select": "model",
+    "usage": "usage",
+    "tokens": "usage",
     "doctor": "doctor",
     "memory": "memory",
     "setting": "setting",
@@ -1789,6 +1817,7 @@ def _click_registry():
         "guide": guide,
         "help": help,
         "chat": chat,
+    "usage": usage,
     }
 
 

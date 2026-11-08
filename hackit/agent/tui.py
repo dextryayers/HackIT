@@ -417,6 +417,7 @@ class TuiMixin:
         self._spinner_index = 0
         self._session_tokens = 0
         self._started_at = time.time()
+        self._live_token_turns = 0
         self._transcript_window: Optional[Window] = None
         self._transcript_control: Optional[_TranscriptControl] = None
         self._input: Optional[TextArea] = None
@@ -432,6 +433,30 @@ class TuiMixin:
         super().__init__(*args, **kwargs)
         self.tui = True
         self.accent = getattr(self, "accent", CYAN)
+
+    # -- live token usage ------------------------------------------------
+
+    def _live_tokens(self) -> str:
+        """Session total for sidebar/header: brain meter wins, then fallback."""
+        brain = getattr(self, "brain", None)
+        if brain is not None and hasattr(brain, "usage_summary"):
+            live = brain.usage_summary()
+            total = int(live.get("total", 0) or 0)
+            if total:
+                return f"{total:,} ({live.get('turns', 0)}t)"
+        if self._session_tokens:
+            return f"{self._session_tokens:,}"
+        return "0"
+
+    def _sync_session_tokens(self) -> None:
+        brain = getattr(self, "brain", None)
+        if brain is not None and hasattr(brain, "usage_summary"):
+            live = brain.usage_summary()
+            total = int(live.get("total", 0) or 0)
+            if total:
+                self._session_tokens = total
+                self._live_token_turns = int(live.get("turns", 0) or 0)
+        self._invalidate()
 
     # -- lifecycle -------------------------------------------------------
 
@@ -713,9 +738,14 @@ class TuiMixin:
         model = str(brain.model) if brain and brain.model else "auto"
         target = self.target or "no target"
         columns, _ = shutil.get_terminal_size((100, 30))
-        budget = max(10, columns // 4)
+        budget = max(8, columns // 5)
         model = _truncate(model, budget)
         target = _truncate(target, budget)
+        tokens = ""
+        if brain is not None and hasattr(brain, "usage_summary"):
+            total = int(brain.usage_summary().get("total", 0) or 0)
+            if total:
+                tokens = f" ~{total:,} tok"
         mode = self.mode_name
         mode_style = f"bg:{AMBER} {INK} bold" if mode == "AUTOPILOT" else f"bg:{CYAN} {INK} bold"
         return FormattedText(
@@ -726,6 +756,7 @@ class TuiMixin:
                 (f"bg:{PANEL} {TEXT}", provider),
                 (f"bg:{PANEL} {SLATE_DIM}", "  ·  model "),
                 (f"bg:{PANEL} {TEXT}", model),
+                (f"bg:{PANEL} AMBER", tokens),
                 (f"bg:{PANEL} {SLATE_DIM}", "  ·  target "),
                 (f"bg:{PANEL} {AMBER if not self.target else TEXT}", target),
                 (f"bg:{PANEL} {SLATE_DIM}", " "),
@@ -779,7 +810,7 @@ class TuiMixin:
                 (f"bg:{PANEL} {SLATE_DIM}", " elapsed  "),
                 (f"bg:{PANEL} {TEXT}", f"{elapsed_text}\n"),
                 (f"bg:{PANEL} {SLATE_DIM}", " tokens   "),
-                (f"bg:{PANEL} {TEXT}", f"~{self._session_tokens}\n"),
+                (f"bg:{PANEL} {TEXT}", f"~{self._live_tokens()}\n"),
                 (f"bg:{PANEL} {RULE}", " " + "─" * 27 + "\n"),
                 (f"bg:{PANEL} {SLATE_DIM}", " KEYS\n"),
                 (f"bg:{PANEL} {AMBER}", " /        "),
@@ -1388,6 +1419,7 @@ class TuiMixin:
                 )
         elapsed = time.time() - started
         self._session_tokens += max(1, token_count // 4)
+        self._sync_session_tokens()
         self.print(
             Text(
                 f"{_timestamp()}  ·  {elapsed:.1f}s  ·  ~{max(1, token_count // 4)} tokens",
