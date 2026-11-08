@@ -789,7 +789,7 @@ class TuiMixin:
                 (f"bg:{PANEL} {TEXT}", provider),
                 (f"bg:{PANEL} {SLATE_DIM}", "  ·  model "),
                 (f"bg:{PANEL} {TEXT}", model),
-                (f"bg:{PANEL} AMBER", tokens),
+                (f"bg:{PANEL} {AMBER}", tokens),
                 (f"bg:{PANEL} {SLATE_DIM}", "  ·  target "),
                 (f"bg:{PANEL} {AMBER if not self.target else TEXT}", target),
                 (f"bg:{PANEL} {SLATE_DIM}", " "),
