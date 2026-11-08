@@ -272,7 +272,15 @@ def recon_node(state: PentestState) -> Dict[str, Any]:
         from hackit.agent import external_tools as _ext
 
         _emit_progress("recon", "external recon starting")
-        extra = _ext.aggregate_recon(host or target, base_url)
+        try:
+            extra = _ext.aggregate_recon(
+                host or target,
+                base_url,
+                timeout_total=float(os.environ.get("HACKIT_RECON_TIMEOUT", "120")),
+                on_stage=lambda stage: _emit_progress("recon", f"{stage}…"),
+            )
+        except TypeError:
+            extra = _ext.aggregate_recon(host or target, base_url)
         _emit_progress("recon", f"external recon done: {len(extra.get('subdomains', []))} subs, {len(extra.get('ports', []))} ports")
         # Merge subdomains (dedup)
         existing_subs = scan_data.get("subdomains")

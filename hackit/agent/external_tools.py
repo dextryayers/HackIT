@@ -86,13 +86,13 @@ def _run(cmd: List[str], timeout: int = 120) -> str:
         return ""
 
 
-def nmap_scan(host: str, ports: List[int] | None = None) -> List[Dict[str, Any]]:
+def nmap_scan(host: str, ports: List[int] | None = None, timeout: float = 30.0) -> List[Dict[str, Any]]:
     ports = ports or COMMON_PORTS
     tool = shutil.which("nmap")
     if not tool:
         return _python_port_scan(host, ports)
     port_spec = ",".join(str(p) for p in ports)
-    out = _run([tool, "-T4", "-sV", "-Pn", "-p", port_spec, host], timeout=180)
+    out = _run([tool, "-T4", "-sV", "-Pn", "-p", port_spec, host], timeout=int(timeout))
     results: List[Dict[str, Any]] = []
     for line in out.splitlines():
         line = line.strip()
@@ -334,9 +334,62 @@ def _extract_links(base_url: str, body: str) -> List[str]:
     return _dedup_str(out)
 
 
-def aggregate_recon(host: str, base_url: str) -> Dict[str, Any]:
-    """Run all available recon techniques and return deduped data."""
-    subdomains = subdomain_enum(host)
+def _run_with_timeout(label: str, func, default, timeout: float, on_timeout=None):
+    """Run a recon stage in a thread; return ``default`` instead of blocking forever."""
+    result = [default]
+
+    def _worker() -> None:
+        try:
+            result[0] = func()
+        except Exception:
+            result[0] = default
+
+    worker = threading.Thread(target=_worker, daemon=True, name=f"recon-{label}")
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        if on_timeout:
+            on_timeout(label)
+        return default
+    return result[0]
+
+
+def aggregate_recon(host: str, base_url: str, timeout_total: float = 120.0, on_stage=None) -> Dict[str, Any]:
+    """Run all available recon techniques and return deduped data.
+
+    Every stage is time-boxed so one hanging tool cannot freeze autopilot.
+    ``on_stage(label)`` receives coarse progress labels for the UI.
+    """
+    def _emit(label: str) -> None:
+        if on_stage:
+            try:
+                on_stage(label)
+            except Exception:
+                pass
+
+    def _warn(label: str) -> None:
+        _emit(f"{label} timeout; skipped")
+
+    deadline = time.monotonic() + max(30.0, timeout_total)
+
+    def _left() -> float:
+        return max(1.0, deadline - time.monotonic())
+
+    _emit("subdomain enumeration")
+    subdomains = _run_with_timeout("subdomain", lambda: subdomain_enum(host), [], min(_left(), 45.0), _warn)
+
+    # Deep multi-engine port/service/OS/vuln scan via PortOrchestrator.
+    _emit("port scan")
+    ps = _run_with_timeout(
+        "portscan",
+        lambda: port_scanner_scan(host, profile="web"),
+        {"ports": nmap_scan(host), "os": {}, "vulns": [], "error": "port scan timeout"},
+        min(_left(), 45.0),
+        _warn,
+    )
+    ports = ps.get("ports") or []
+    port_vulns = ps.get("vulns") or []
+    os_info = ps.get("os") or {}
 
     # Deep multi-engine port/service/OS/vuln scan via PortOrchestrator.
     ps = port_scanner_scan(host, profile="web")
@@ -345,10 +398,13 @@ def aggregate_recon(host: str, base_url: str) -> Dict[str, Any]:
     os_info = ps.get("os") or {}
 
     # Light port scan of a few subdomains.
+    _emit("light subdomain port scan")
     extra_ports: List[Dict[str, Any]] = []
     for sub in subdomains[:5]:
+        if time.monotonic() >= deadline:
+            break
         try:
-            extra_ports.extend(nmap_scan(sub, COMMON_PORTS[:15]))
+            extra_ports.extend(nmap_scan(sub, COMMON_PORTS[:15], timeout=6))
         except Exception:
             pass
     port_seen = set()
@@ -368,7 +424,8 @@ def aggregate_recon(host: str, base_url: str) -> Dict[str, Any]:
         probe_urls.append(f"https://{sub}")
         probe_urls.append(f"http://{sub}")
     probe_urls = _dedup_str(probe_urls)
-    http_results = httpx_probe(probe_urls)
+    _emit("http probe")
+    http_results = _run_with_timeout("httpx", lambda: httpx_probe(probe_urls), [], min(_left(), 45.0), _warn)
 
     endpoints: List[str] = []
     link_candidates: List[str] = []
@@ -378,9 +435,12 @@ def aggregate_recon(host: str, base_url: str) -> Dict[str, Any]:
             endpoints.append(url)
 
     # Crawl apex + subdomains for links/JS endpoints.
+    _emit("link crawl")
     for url in [base_url] + [f"http://{s}" for s in subdomains[:8]]:
+        if time.monotonic() >= deadline:
+            break
         try:
-            with urllib.request.urlopen(url, timeout=6) as resp:
+            with urllib.request.urlopen(url, timeout=4) as resp:
                 body = resp.read(131072).decode("utf-8", "replace")
                 link_candidates.extend(_extract_links(url, body))
         except Exception:

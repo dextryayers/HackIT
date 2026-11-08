@@ -432,6 +432,7 @@ class TuiMixin:
         self._session_tokens = 0
         self._started_at = time.time()
         self._live_token_turns = 0
+        self._autopilot_live: Optional[Dict[str, Any]] = None
         self._transcript_window: Optional[Window] = None
         self._transcript_control: Optional[_TranscriptControl] = None
         self._input: Optional[TextArea] = None
@@ -904,6 +905,11 @@ class TuiMixin:
     # -- structured operations ------------------------------------------
 
     def _operation_counts(self) -> Tuple[int, int, int]:
+        live = getattr(self, "_autopilot_live", None)
+        if isinstance(live, dict):
+            done = sum(1 for name in live["order"] if name in live["done"])
+            running = 1 if (live.get("current") and self.busy) else 0
+            return done, 0, running
         operation = self._operation or {}
         rows = operation.get("rows", {})
         done = sum(1 for row in rows.values() if row.get("status") == "done")
@@ -912,6 +918,10 @@ class TuiMixin:
         return done, errors, running
 
     def _operation_panel(self) -> Panel:
+        live = getattr(self, "_autopilot_live", None)
+        if isinstance(live, dict):
+            return self._autopilot_panel(live)
+
         operation = self._operation or {}
         title = str(operation.get("title") or "OPERATION")
         target = str(operation.get("target") or "")
@@ -997,6 +1007,75 @@ class TuiMixin:
             padding=(0, 1),
         )
 
+    def _autopilot_panel(self, live: Dict[str, Any]) -> Panel:
+        order = live["order"]
+        total = max(1, len(order))
+        done = live["done"]
+        completed = sum(1 for name in order if name in done)
+        pct = int(completed / total * 100)
+        elapsed = int(time.time() - float(live.get("started", time.time())))
+        elapsed_text = f"{elapsed // 60:02d}:{elapsed % 60:02d}"
+        spinner = SPINNER[getattr(self, "_spinner_index", 0) % len(SPINNER)]
+
+        header = Text()
+        header.append("PIPELINE PENTEST", style=f"bold {TEXT}")
+        header.append("  ·  ", style=RULE)
+        header.append(f"{completed}/{total} fase", style=GREEN if completed == total else TEXT)
+        header.append("  ·  ", style=RULE)
+        header.append(elapsed_text, style=SLATE)
+        header.append("  ·  ", style=RULE)
+        header.append(f"{pct}%", style=f"bold {self.accent}")
+
+        width = max(20, min(60, self._content_width() - 12))
+        filled = int(width * pct / 100)
+        bar = Text()
+        bar.append("█" * filled, style=self.accent)
+        bar.append("░" * (width - filled), style=RULE)
+        bar.append(f"  {pct:>3}%", style=SLATE_DIM)
+
+        detail = str(getattr(self, "_status_message", "") or "")[:max(30, self._content_width() - 10)]
+        detail_text = Text(detail, style=SLATE_DIM) if detail else Text("")
+
+        table = Table(
+            box=None,
+            show_header=False,
+            padding=(0, 1),
+            expand=True,
+        )
+        table.add_column(width=2, no_wrap=True)
+        table.add_column(style="bold", no_wrap=True, width=14)
+        table.add_column(ratio=1, overflow="ellipsis", no_wrap=True)
+
+        current = live.get("current") or (order[completed] if completed < total else "")
+        detail_messages = dict(getattr(self, "_autopilot_details", {}) or {})
+        for name in order:
+            if name in done:
+                icon, style = "✓", GREEN
+                label_style = SLATE_DIM
+            elif name == current:
+                icon, style = spinner, self.accent
+                label_style = TEXT
+            else:
+                icon, style = "○", SLATE_DIM
+                label_style = SLATE_DIM
+            message = _truncate(str(detail_messages.get(name) or ("" if name in done else ("running…" if name == current else ""))), max(20, self._content_width() - 30))
+            table.add_row(
+                Text(icon, style=style),
+                Text(str(name), style=label_style),
+                Text(message, style=SLATE),
+            )
+
+        body = Group(header, Text(""), bar, Text(""), detail_text, Text(""), table)
+        target = str(getattr(self, "target", "") or "")
+        return Panel(
+            body,
+            title=Text(f" AUTOPILOT · {target} ", style=f"bold {INK} on {self.accent}"),
+            title_align="left",
+            border_style=self.accent,
+            box=box.ROUNDED,
+            padding=(0, 1),
+        )
+
     def begin_operation(self, title: str, target: str = "") -> None:
         self._operation = {
             "title": str(title or "OPERATION").upper(),
@@ -1006,8 +1085,34 @@ class TuiMixin:
             "pct": 0,
         }
         self._status_message = f"{str(title).lower()} · {target}" if target else str(title).lower()
+        if str(title).upper() == "AUTONOMOUS PENTEST":
+            order = self._autopilot_phase_order()
+            self._autopilot_live = {
+                "order": order,
+                "done": set(),
+                "current": "",
+                "started": time.time(),
+            }
         self._set_live([self._operation_panel()], force=True)
         self._invalidate()
+
+    def _autopilot_phase_order(self) -> List[str]:
+        try:
+            from .workflow import NODE_SEQUENCE
+
+            return [name for name, _node in NODE_SEQUENCE]
+        except Exception:
+            return ["recon", "osint", "js", "param", "payload", "analyze", "plan", "execute", "probe", "correlate", "report"]
+
+    def _autopilot_mark(self, phase: str, done: bool = False) -> None:
+        live = getattr(self, "_autopilot_live", None)
+        if not isinstance(live, dict):
+            return
+        if done:
+            live["done"].add(phase)
+        if phase:
+            if not done or phase in live["order"]:
+                live["current"] = phase
 
     def operation_event(
         self,
@@ -1021,19 +1126,35 @@ class TuiMixin:
         if operation is None:
             return
         key = str(module or phase or "task")
-        rows = operation.setdefault("rows", {})
-        row = rows.get(key, {})
-        row.update({
-            "module": key,
-            "message": strip_control(str(message or ""))[:300],
-            "status": status,
-            "updated": time.time(),
-        })
-        if isinstance(pct, int):
-            row["pct"] = max(0, min(100, pct))
-            operation["pct"] = max(int(operation.get("pct") or 0), max(0, min(100, pct)))
-        rows[key] = row
-        self._status_message = f"{operation.get('title', 'operation').lower()} · {key}"
+
+        live = getattr(self, "_autopilot_live", None)
+        if isinstance(live, dict) and phase in live.get("order", []):
+            # Autopilot: keep one stable panel. No extra rows are printed
+            # into the transcript; only the live panel updates in place.
+            if status == "done" or (status == "run" and str(message).startswith("starting ")):
+                pass
+            if status == "done":
+                self._autopilot_mark(phase, done=True)
+            else:
+                self._autopilot_mark(phase, done=False)
+            self._autopilot_details = getattr(self, "_autopilot_details", {})
+            self._autopilot_details[phase] = strip_control(str(message or ""))[:200]
+            self._status_message = f"autopilot · {phase}"
+        else:
+            rows = operation.setdefault("rows", {})
+            row = rows.get(key, {})
+            row.update({
+                "module": key,
+                "message": strip_control(str(message or ""))[:300],
+                "status": status,
+                "updated": time.time(),
+            })
+            if isinstance(pct, int):
+                row["pct"] = max(0, min(100, pct))
+                operation["pct"] = max(int(operation.get("pct") or 0), max(0, min(100, pct)))
+            rows[key] = row
+            self._status_message = f"{operation.get('title', 'operation').lower()} · {key}"
+
         self._set_live([self._operation_panel()])
 
     def end_operation(
@@ -1043,6 +1164,11 @@ class TuiMixin:
         status: str = "ok",
     ) -> None:
         operation = self._operation or {}
+        live = getattr(self, "_autopilot_live", None)
+        if isinstance(live, dict):
+            if status == "ok":
+                live["done"] = set(live["order"])
+            live["current"] = ""
         elapsed = int(time.time() - float(operation.get("started", time.time())))
         if status == "ok":
             # Progress callbacks do not always emit a terminal event; a
@@ -1084,6 +1210,8 @@ class TuiMixin:
         if table is not None:
             self.print(table)
         self._operation = None
+        self._autopilot_live = None
+        self._autopilot_details = {}
         self._status_message = "ready"
         self._invalidate()
 

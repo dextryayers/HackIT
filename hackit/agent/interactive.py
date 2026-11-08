@@ -24,6 +24,7 @@ try:
     from rich.markdown import Markdown
     from rich.panel import Panel
     from rich.table import Table
+    from rich.console import Group
     from rich.text import Text
     from rich.markup import escape
     from rich import box
@@ -375,8 +376,98 @@ class AgentUI:
     # Structured long-running operations (scan / OSINT / pentest)
     # ------------------------------------------------------------------
 
+    def _autopilot_phase_order(self):
+        try:
+            from .workflow import NODE_SEQUENCE
+
+            return [name for name, _node in NODE_SEQUENCE]
+        except Exception:
+            return ["recon", "osint", "js", "param", "payload", "analyze", "plan", "execute", "probe", "correlate", "report"]
+
+    def _autopilot_mark(self, phase: str, done: bool = False) -> None:
+        live = getattr(self, "_autopilot_live", None)
+        if not isinstance(live, dict):
+            return
+        if done:
+            live["done"].add(phase)
+        if phase:
+            live["current"] = phase
+
+    def _autopilot_panel(self):
+        live = getattr(self, "_autopilot_live", None)
+        if not isinstance(live, dict) or not live.get("order"):
+            return None
+        order = live["order"]
+        total = max(1, len(order))
+        done = set(live.get("done") or set())
+        completed = sum(1 for name in order if name in done)
+        pct = int(completed / total * 100)
+        elapsed = int(time.time() - float(live.get("started", time.time())))
+        elapsed_text = f"{elapsed // 60:02d}:{elapsed % 60:02d}"
+        spin_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        spinner = spin_chars[int(time.time() * 2) % len(spin_chars)]
+
+        header = Text()
+        header.append("PIPELINE PENTEST", style="bold #e2e8f0")
+        header.append("  ·  ", style="#1e293b")
+        header.append(f"{completed}/{total} fase", style="#34d399")
+        header.append("  ·  ", style="#1e293b")
+        header.append(elapsed_text, style="#94a3b8")
+        header.append("  ·  ", style="#1e293b")
+        header.append(f"{pct}%", style="bold #f59e0b")
+
+        filled = int(24 * pct / 100)
+        bar = Text()
+        bar.append("█" * filled, style="#f59e0b")
+        bar.append("░" * (24 - filled), style="#1e293b")
+        bar.append(f"  {pct:>3}%", style="#64748b")
+
+        table = Table(box=None, show_header=False, padding=(0, 1), expand=True)
+        table.add_column(width=2, no_wrap=True)
+        table.add_column(style="bold", no_wrap=True, width=12)
+        table.add_column(ratio=1, overflow="ellipsis", no_wrap=True)
+        current = live.get("current") or (order[completed] if completed < total else "")
+        details = dict(getattr(self, "_autopilot_details", {}) or {})
+        for name in order:
+            if name in done:
+                icon, style = "✓", "#34d399"
+                label_style = "#94a3b8"
+            elif name == current:
+                icon, style = spinner, "#f59e0b"
+                label_style = "#e2e8f0"
+            else:
+                icon, style = "○", "#64748b"
+                label_style = "#64748b"
+            message = strip_control(str(details.get(name) or ("" if name in done else ("running…" if name == current else ""))))
+            if len(message) > 70:
+                message = message[:70] + "…"
+            table.add_row(Text(icon, style=style), Text(name, style=label_style), Text(message, style="#94a3b8"))
+
+        return Panel(
+            Group(header, Text(""), bar, Text(""), table),
+            title=Text(f" AUTOPILOT · {escape(str(self.target or '—'))} ", style="bold #020617 on #f59e0b"),
+            title_align="left",
+            border_style="#f59e0b",
+            box=box.ROUNDED,
+            padding=(0, 1),
+        )
+
     def begin_operation(self, title: str, target: str = "") -> None:
         label = escape(str(title))
+        self._operation = {
+            "title": str(title or "OPERATION").upper(),
+            "target": str(target or ""),
+            "started": time.time(),
+            "rows": {},
+            "pct": 0,
+        }
+        if str(title or "").upper() == "AUTONOMOUS PENTEST":
+            self._autopilot_live = {
+                "order": self._autopilot_phase_order(),
+                "done": set(),
+                "current": "",
+                "started": time.time(),
+            }
         if target:
             self.print(
                 f"[bold cyan]{label}[/bold cyan] [dim]· target {escape(str(target))}[/dim]"
@@ -404,6 +495,22 @@ class AgentUI:
                 if len(self._hidden_buffer) > 500:
                     self._hidden_buffer = self._hidden_buffer[-500:]
                 return
+        live = getattr(self, "_autopilot_live", None)
+        if isinstance(live, dict) and phase in live.get("order", []):
+            if status == "done":
+                self._autopilot_mark(phase, done=True)
+            else:
+                self._autopilot_mark(phase, done=False)
+            self._autopilot_details = getattr(self, "_autopilot_details", {})
+            self._autopilot_details[phase] = strip_control(str(message or ""))[:200]
+            self._status_message = f"autopilot · {phase}"
+            # One single panel, printed only on lifecycle transitions.
+            if not getattr(self, "tui", False):
+                if status == "done" or (status == "run" and str(message).startswith("starting ")):
+                    panel = self._autopilot_panel()
+                    if panel is not None:
+                        self.console.print(panel)
+            return
         label = escape(str(module or phase or "task"))
         detail = escape(str(message or ""))
         suffix = f" [dim]{pct:>3}%[/dim]" if isinstance(pct, int) and pct > 0 else ""
@@ -424,10 +531,18 @@ class AgentUI:
         table: Optional[Any] = None,
         status: str = "ok",
     ) -> None:
+        if getattr(self, "_autopilot_live", None):
+            live = self._autopilot_live
+            if status == "ok":
+                live["done"] = set(live.get("order", []))
+            live["current"] = ""
         color = {"ok": "green", "error": "red", "cancelled": "yellow"}.get(status, "green")
         self.print(f"[bold {color}]{escape(str(summary))}[/bold {color}]")
         if table is not None:
             self.print(table)
+        self._operation = None
+        self._autopilot_live = None
+        self._autopilot_details = {}
 
     # ------------------------------------------------------------------
     # Progress visibility (hide / show)
@@ -510,17 +625,14 @@ class AgentUI:
 
         self.begin_operation("AUTONOMOUS PENTEST", str(target))
         self.print(
-            "[dim]AI is running the full pipeline: recon → osint → js → params → "
-            "payload → analyse → plan → execute → probe → correlate → report. "
-            "/progress hide to silence the chatter. Ctrl+C / /autopilot stop to cancel.[/dim]"
+            "[dim]Autopilot berjalan — pantau panel progress di atas. "
+            "/progress hide sembunyikan chatter · Ctrl+C / /autopilot stop batalkan.[/dim]"
         )
         self._autopilot_started_at = time.time()
         self._autopilot_phase_done = set()
         self._autopilot_phase_seen = set()
-        # Interaktif: render checklist fase + progress bar + spinner.
-        self._render_autopilot_checklist()
 
-        # Heartbeat animasi: update status tiap 0.5s agar UI jelas hidup.
+        # Heartbeat animasi: update status tiap 0.5s agar panel jelas hidup.
         def _heartbeat() -> None:
             spin_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
             tick = 0
@@ -530,15 +642,13 @@ class AgentUI:
                 elapsed = int(time.time() - getattr(self, "_autopilot_started_at", time.time()))
                 spin = spin_chars[tick % len(spin_chars)]
                 phase = getattr(self, "_autopilot_phase", "recon")
-                # TUI: status bar live. Inline: baris status yang di-update.
-                if hasattr(self, "_status_message"):
+                if hasattr(self, "_spinner_index"):
+                    self._spinner_index = tick % len(spin_chars)
+                self._status_message = f"autopilot {spin} {phase} · {elapsed}s"
+                if hasattr(self, "_invalidate") and getattr(self, "tui", False):
+                    self._invalidate()
+                elif tick % 4 == 0 and not self._progress_hidden:
                     self._status_message = f"autopilot {spin} {phase} · {elapsed}s"
-                    if hasattr(self, "_invalidate"):
-                        self._invalidate()
-                elif not self._progress_hidden:
-                    # Inline fallback: satu baris status berkala, tanpa spam.
-                    if tick % 4 == 0:
-                        self.print(f"[dim]{spin} autopilot {escape(str(phase))} · {elapsed}s[/dim]")
 
         def _runner() -> None:
             try:
@@ -566,7 +676,6 @@ class AgentUI:
                     elif message.startswith("error:"):
                         status = "error"
                     self.operation_event(phase, message, status=status, pct=pct)
-                    self._render_autopilot_checklist()
 
                 state = run_pentest(
                     target, scope="active_stealth", progress=_progress,
@@ -585,7 +694,6 @@ class AgentUI:
                         status="cancelled",
                     )
                     return
-                self._render_autopilot_checklist(final=True)
                 self._render_autopilot_result(state)
             except Exception as exc:  # noqa: BLE001
                 with self._autopilot_lock:
@@ -600,42 +708,6 @@ class AgentUI:
         self._autopilot_thread = threading.Thread(target=_runner, daemon=True, name="autopilot")
         self._autopilot_thread.start()
         return True
-
-    def _render_autopilot_checklist(self, final: bool = False) -> None:
-        """Interactive checklist: per-phase icon + progress bar."""
-        try:
-            from .workflow import NODE_SEQUENCE
-        except Exception:
-            return
-        order = [name for name, _node in NODE_SEQUENCE]
-        done = getattr(self, "_autopilot_phase_done", set()) or set()
-        seen = getattr(self, "_autopilot_phase_seen", set()) or set()
-        if final:
-            done = set(order)
-        current = getattr(self, "_autopilot_phase", "")
-        total = max(1, len(order))
-        finished = sum(1 for name in order if name in done)
-        pct = int(finished / total * 100)
-        elapsed = int(time.time() - getattr(self, "_autopilot_started_at", time.time()))
-        # Progress bar (20 blok).
-        filled = int(pct * 20 / 100)
-        bar = "█" * filled + "░" * (20 - filled)
-        lines = [f"[bold cyan]AUTOPILOT[/bold cyan] [dim]{bar} {pct}% · {elapsed}s · target {escape(str(self.target or '—'))}[/dim]"]
-        for name in order:
-            if name in done:
-                icon = "[green]✓[/green]"
-            elif name == current and self._autopilot_running and not final:
-                icon = "[cyan]▶[/cyan]"
-            elif name in seen and not final:
-                icon = "[cyan]▶[/cyan]"
-            else:
-                icon = "[dim]○[/dim]"
-            label = escape(str(name))
-            if name == current and not final:
-                lines.append(f"  {icon} [bold]{label}[/bold]")
-            else:
-                lines.append(f"  {icon} [dim]{label}[/dim]")
-        self.print("\n".join(lines))
 
     def _render_autopilot_result(self, state: Any) -> None:
         if not isinstance(state, dict):
