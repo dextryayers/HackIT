@@ -80,6 +80,7 @@ AUTOPILOT_COMMANDS = {
     "osint": "Run OSINT profile discovery",
     "status": "Provider / model connectivity",
     "model": "Switch model (arrow-key picker)",
+    "select": "Central model select (chat, /halo, autopilot, auto)",
     "provider": "Switch provider",
     "memory": "Show memory statistics",
     "forget": "Clear conversation memory",
@@ -122,6 +123,7 @@ CHAT_COMMANDS = {
     "scan": "Run full hative security scan",
     "status": "Provider / model connectivity",
     "model": "Switch model (arrow-key picker)",
+    "select": "Central model select (chat, /halo, autopilot, auto)",
     "provider": "Switch provider",
     "models": "List available models",
     "memory": "Show memory statistics",
@@ -628,6 +630,7 @@ class AgentUI:
 
         if not argument:
             self.print("[dim]Usage: /provider <" + "|".join(providers.PROVIDERS) + ">[/dim]")
+            self.print("[dim]After switching, run /select to pick the model for the new provider.[/dim]")
             return
         provider = providers.normalize_provider(argument)
         if self.brain and self.brain.set_provider(provider):
@@ -646,6 +649,63 @@ class AgentUI:
             save_config(cfg)
         except Exception:
             pass
+
+    def _cmd_select(self, argument: str) -> None:
+        """Central model selection shared by chat, /halo, autopilot and auto.
+
+        Opens the arrow-key picker when the active provider exposes more than
+        one model, otherwise it shows the current choice and (when no model was
+        chosen yet) the default that will be used. A model id may also be
+        passed directly: ``/select <model-id>``.
+        """
+        if not self.brain:
+            return
+        provider = self.brain.provider or "gemini"
+        current = self.brain.model or "auto"
+        items = self.brain.model_choices(include_remote=True)
+
+        # Direct form: /select <model-id>
+        if argument:
+            model_id = argument.strip()
+            if not model_id:
+                return
+            if self.brain.switch_model(model_id):
+                self.print(f"[green]Model set to {escape(str(self.brain.model))} for {escape(str(provider))}.[/green]")
+                self.print("[dim]Applies to chat, /halo, autopilot and auto.[/dim]")
+            else:
+                self.print(f"[red]Invalid model id: {escape(model_id)}[/red]")
+            return
+
+        if not items:
+            self.print(f"[dim]Current model: {escape(str(current))} ({escape(str(provider))})[/dim]")
+            self.print("[dim]No models discovered. Usage: /select <model-id>[/dim]")
+            return
+
+        if len(items) == 1:
+            only = items[0][0]
+            self.print(f"[dim]Only one model available for {escape(str(provider))}: {escape(str(only))}[/dim]")
+            if self.brain.switch_model(only):
+                self.print(f"[green]Model set to {escape(str(only))}.[/green]")
+            return
+
+        # >1 model: open the picker. The active model is highlighted.
+        try:
+            from . import _dropdown_select
+        except Exception:  # pragma: no cover - defensive
+            _dropdown_select = None  # type: ignore[assignment]
+        if _dropdown_select is None:
+            self.print("[dim]Usage: /select <model-id>[/dim]")
+            return
+        ids = [item[0] for item in items]
+        chosen = _dropdown_select(provider, items, ids)
+        if not chosen:
+            self.print("[dim]Model unchanged.[/dim]")
+            return
+        if self.brain.switch_model(chosen):
+            self.print(f"[green]Model set to {escape(chosen)} for {escape(str(provider))}.[/green]")
+            self.print("[dim]Applies to chat, /halo, autopilot and auto.[/dim]")
+        else:
+            self.print(f"[red]Could not switch to {escape(chosen)}.[/red]")
 
     def _cmd_model(self, argument: str) -> None:
         if not self.brain:
@@ -1303,6 +1363,9 @@ class AgentUI:
             return True
         if head == "model":
             self._cmd_model(rest)
+            return True
+        if head == "select":
+            self._cmd_select(rest)
             return True
         if head == "models":
             self._cmd_models()

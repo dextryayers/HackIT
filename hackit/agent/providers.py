@@ -301,10 +301,81 @@ def get_active_provider(cfg: Optional[Dict[str, Any]] = None) -> str:
 
 def effective_model(provider: str, cfg: Optional[Dict[str, Any]] = None) -> str:
     cfg = cfg or {}
-    model = ((cfg.get("ai_models") or {}).get(provider) or "").strip()
-    if model:
+    # A model chosen once in the /select wizard is authoritative for every
+    # entry point (chat, /halo, autopilot, auto). It wins over the default.
+    models = cfg.get("ai_models") or {}
+    model = (models.get(provider) or "").strip()
+    if model and model != "AUTO_DETECT":
         return model
     return DEFAULT_MODELS.get(provider, "")
+
+
+def selected_model(provider: str, cfg: Optional[Dict[str, Any]] = None) -> str:
+    """The model the operator chose via /select, or empty when unset."""
+    cfg = cfg or {}
+    models = cfg.get("ai_models") or {}
+    model = (models.get(provider) or "").strip()
+    if model and model != "AUTO_DETECT":
+        return model
+    return ""
+
+
+def set_model(provider: str, model: str, cfg: Optional[Dict[str, Any]] = None) -> str:
+    """Persist a model choice. Returns the model actually stored."""
+    from hackit.config import load_config, save_config
+
+    provider = normalize_provider(provider)
+    model = (model or "").strip()
+    cfg = cfg if cfg is not None else load_config()
+    ai_models = cfg.get("ai_models") or {}
+    ai_models[provider] = model
+    cfg["ai_models"] = ai_models
+    save_config(cfg)
+    return model
+
+
+def active_model_label(cfg: Optional[Dict[str, Any]] = None) -> str:
+    """Human-readable 'provider · model' for headers and sidebars."""
+    cfg = cfg or load_config_fallback()
+    provider = get_active_provider(cfg)
+    if not provider:
+        return "no provider"
+    model = effective_model(provider, cfg)
+    if provider == "ollama":
+        info = detect_ollama()
+        if info.online and info.models:
+            model = pick_ollama_model(info.models, model)
+    return f"{provider} · {model or 'auto'}"
+
+
+def load_config_fallback() -> Dict[str, Any]:
+    try:
+        from hackit.config import load_config
+
+        return load_config()
+    except Exception:
+        return {}
+
+
+def model_count(provider: str, key: Optional[str] = None, include_remote: bool = True) -> int:
+    """How many models are selectable for a provider (curated + discovered)."""
+    return len(model_options(provider, key=key, include_remote=include_remote))
+
+
+def should_offer_select(provider: str, cfg: Optional[Dict[str, Any]] = None, threshold: int = 1) -> bool:
+    """True when a provider exposes more than `threshold` models.
+
+    The central /select wizard only appears when there is actually
+    something to choose between; a single-model provider must not pay the
+    picker cost.
+    """
+    cfg = cfg or {}
+    provider = normalize_provider(provider)
+    if provider == "ollama":
+        info = detect_ollama()
+        return len(info.models) > threshold
+    key = resolve_api_key(provider, cfg)
+    return model_count(provider, key=key, include_remote=True) > threshold
 
 
 def model_chain(provider: str, selected: str = "") -> List[str]:

@@ -601,6 +601,39 @@ class AIHyperBrain:
             self.model = provider_registry.effective_model(provider, self.config)
         return True
 
+    # ------------------------------------------------------------------
+    # Central model selection (/select)
+    # ------------------------------------------------------------------
+
+    def model_choices(self, include_remote: bool = True) -> List[Tuple[str, str, str]]:
+        """All selectable models for the active provider."""
+        return provider_registry.model_options(
+            self.provider, key=self.keys.get(self.provider), include_remote=include_remote
+        )
+
+    def switch_model(self, model_id: str) -> bool:
+        """Switch to a model and persist it. Returns False for empty ids."""
+        model_id = (model_id or "").strip()
+        if not model_id:
+            return False
+        chosen = model_id
+        if self.provider == "ollama":
+            info = provider_registry.detect_ollama()
+            if info.online and info.models:
+                # Persist the exact tag Ollama serves, not a bare prefix.
+                for candidate in info.models:
+                    if candidate == model_id or candidate.split(":")[0] == model_id.split(":")[0]:
+                        chosen = candidate
+                        break
+        self.model = chosen
+        from hackit.config import load_config, save_config
+
+        cfg = load_config()
+        cfg.setdefault("ai_models", {})[self.provider] = chosen
+        save_config(cfg)
+        self.config = cfg
+        return True
+
     def _postprocess(self, response: str, prompt: str = "") -> str:
         response = strip_control(response)
         # Reasoning traces are useful while streaming but must never be
