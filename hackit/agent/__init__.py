@@ -360,18 +360,36 @@ def enter_agent_shell():
                     else:
                         click.echo(f"  {YELLOW}✦{RESET}  {DIM}Usage:{RESET} {GREEN}set <target>{RESET}")
                     continue
-                # `set target --no-run` sets without launching.
+                # `set target` only locks the target. The pentest starts
+                # inside the UI when you enter it with `autopilot`.
                 no_run = wanted.endswith("--no-run")
                 if no_run:
                     wanted = wanted[: -len("--no-run")].strip()
                 _shell_state["target"] = wanted
                 click.echo(f"  {GREEN}target{RESET}  {DIM}{_shell_state['target']}{RESET}  {DIM}· model {_active_model_label()}{RESET}")
-                if not no_run:
-                    click.echo(f"  {DIM}Autopilot starting — full pentest pipeline…{RESET}")
-                    _shell_run_autopilot(_shell_state["target"], authorized=True)
+                click.echo(f"  {DIM}Ketik {RESET}{GREEN}autopilot{RESET}{DIM} untuk masuk ke UI CLI — target sudah terkunci, AI langsung jalan setelah masuk.{RESET}")
                 continue
 
-            if base_cmd in ('autopilot', 'auto'):
+            if base_cmd == 'autopilot':
+                # Enter the UI CLI first. The pentest starts inside it once
+                # the target is locked there. No target = still enter the UI,
+                # then /set-target inside it.
+                target = remaining.strip() or _shell_state["target"]
+                try:
+                    from hackit.agent.interactive import create_ui
+                    ui = create_ui("autopilot")
+                    ui._autopilot_auto_run = bool(target)
+                    if target:
+                        ui.target = target
+                        _shell_state["target"] = target
+                    ui.run()
+                except Exception as e:
+                    click.echo(f"  {RED}[!] Autopilot UI error: {e}{RESET}")
+                continue
+
+            if base_cmd == 'auto':
+                # One-shot CLI pipeline (scripting / non-interactive use).
+                # Interactive pentesting lives in the autopilot UI.
                 target = remaining.strip() or _shell_state["target"]
                 scope = 'active_stealth'
                 if '--scope' in parts:
@@ -379,10 +397,9 @@ def enter_agent_shell():
                     if idx + 1 < len(parts):
                         scope = parts[idx + 1]
                 if not target:
-                    click.echo(f"  {RED}✦{RESET}  {DIM}Usage:{RESET} {GREEN}autopilot <target>{RESET}  {DIM}or {RESET}{GREEN}set <target>{RESET} {DIM}first.{RESET}")
+                    click.echo(f"  {RED}✦{RESET}  {DIM}Usage:{RESET} {GREEN}auto <target>{RESET}  {DIM}or {RESET}{GREEN}autopilot{RESET} {DIM}for the interactive UI.{RESET}")
                     continue
                 _shell_state["target"] = target
-                # Top-shell autopilot runs here, above the UI — no sub-UI drop-in.
                 _shell_run_autopilot(target, scope=scope)
                 continue
 
@@ -466,11 +483,16 @@ def enter_agent_shell():
 
                 if base_cmd == 'autopilot':
                     target = remaining.strip() or _shell_state["target"]
-                    if not target:
-                        click.echo(f"  {RED}✦{RESET}  {DIM}Usage:{RESET} {GREEN}autopilot <target>{RESET}")
-                        continue
-                    _shell_state["target"] = target
-                    _shell_run_autopilot(target)
+                    try:
+                        from hackit.agent.interactive import create_ui
+                        ui = create_ui("autopilot")
+                        ui._autopilot_auto_run = bool(target)
+                        if target:
+                            ui.target = target
+                            _shell_state["target"] = target
+                        ui.run()
+                    except Exception as e:
+                        click.echo(f"  {RED}[!] Autopilot UI error: {e}{RESET}")
                     continue
 
                 if base_cmd in ('scan', 'recon', 'discover', 'enumerate', 'fingerprint'):

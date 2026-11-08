@@ -177,15 +177,20 @@ Intermediate state is persisted in `~/.hackit/workflow_state/`, so a run can be
 audited or resumed. If LangGraph is installed it is used as the state machine;
 otherwise a dependency-free sequential runner executes the identical nodes.
 
-### Autopilot mode (auto-run after target is set)
+### Autopilot mode (auto-run after target is set, inside the UI)
 
-In the Autopilot UI (`hackit agent autopilot [target]`), the AI runs the full
-pipeline by itself once a target is locked — no per-phase prompting:
+The shell's `autopilot` command enters the **UI CLI first**. Once you are
+inside the UI, locking a target starts the full pentest by itself — no
+per-phase prompting. The AI also chats, but it is routed as a cyber expert:
+a natural-language pentest request (for example "port scan example.com" or
+"carikan subdomain") executes the real tool deterministically instead of
+being left as chat text.
 
 ```text
-/set-target example.com        # autopilot starts immediately (use --no-run to opt out once)
-/autopilot example.com         # run explicitly
-/autopilot                    # reuse the locked target
+autopilot                    # from the top shell: enter the UI CLI (no target yet)
+/set-target example.com        # inside the UI: autopilot starts immediately (use --no-run to opt out once)
+/autopilot example.com         # inside the UI: run explicitly
+/autopilot                    # inside the UI: reuse the locked target
 /autopilot stop               # cancel the background run
 /autopilot status             # show phase / target / visibility
 ```

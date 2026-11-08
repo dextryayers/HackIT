@@ -1646,6 +1646,71 @@ class AgentUI:
             self.print(f"[red]Import failed: {escape(str(exc))}[/red]")
 
     # ------------------------------------------------------------------
+    # Natural-language cyber intent routing (autopilot)
+    # ------------------------------------------------------------------
+
+    # Keyword groups that map a natural-language request to the real tool.
+    # The AI stays conversational, but a pentest intent always executes
+    # deterministically instead of being left as chat text.
+    _CYBER_INTENTS = [
+        (("subdomain", "sub domain", "sub-domain", "enum subdomain"), "subdomainenum"),
+        (("port scan", "portscan", "pindai port", "cek port", "scan port"), "portscan"),
+        (("dir brute", "dir fuzz", "brute force direktori", "dorking", "cari direktori"), "dirfuzz"),
+        (("js crawl", "javascript", "crawl js", "analisis js", "endpoints js"), "js"),
+        (("recon", "pindai lengkap", "full scan", "serang", "pen test", "pentest", "uji celah"), "all"),
+        (("tech", "teknologi", "fingerprint teknologi", "waf", "deteksi waf"), "techdetect"),
+        (("sqli", "sql injection", "cari sql", "uji sql"), "sqli"),
+        (("xss", "cross site", "uji xss"), "xss"),
+        (("ssrf", "uji ssrf"), "ssrf"),
+        (("param", "parameter", "param discovery", "cari parameter"), "params"),
+    ]
+
+    def _maybe_cyber_intent(self, text: str) -> bool:
+        """Route natural pentest requests to the real scanner. Returns True if handled."""
+        if self.mode_name != "AUTOPILOT":
+            return False
+        lowered = (text or "").strip().lower()
+        if not lowered:
+            return False
+        # Pure questions / chat stay with the AI even if they mention a tool.
+        if lowered.startswith(("apa ", "bagaimana", "kenapa", "jelaskan", "explain", "what ", "how ", "tutorial", "cara ")) and "scan" not in lowered and "cari" not in lowered:
+            return False
+        module = ""
+        for needles, mod in self._CYBER_INTENTS:
+            if any(needle in lowered for needle in needles):
+                module = mod
+                break
+        if not module:
+            return False
+        # Extract a target mention (domain, IP, or URL) when present.
+        candidate = self._extract_target_hint(text) or self.target
+        if not candidate:
+            self.print("[yellow]Sebutkan targetnya dulu, misal: 'port scan example.com'.[/yellow]")
+            return True
+        self.target = candidate
+        if module == "all":
+            self._autopilot_start(candidate)
+            return True
+        self._cmd_scan(module)
+        return True
+
+    @staticmethod
+    def _extract_target_hint(text: str) -> str:
+        import re as _re
+        tokens = [item.strip() for item in (text or "").replace(",", " ").split() if item.strip()]
+        for token in tokens:
+            cleaned = token.strip("<>[](){}")
+            if cleaned.startswith(("http://", "https://")):
+                return cleaned
+        for token in tokens:
+            cleaned = token.strip("<>[](){}")
+            if _re.match(r"^(?:[a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,}$", cleaned):
+                return cleaned
+            if _re.match(r"^\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?$", cleaned):
+                return cleaned
+        return ""
+
+    # ------------------------------------------------------------------
     # Dispatch
     # ------------------------------------------------------------------
 
@@ -1660,6 +1725,8 @@ class AgentUI:
             head = text.split(None, 1)[0].lower()
             if head in self.commands:
                 text = "/" + text
+            elif self._maybe_cyber_intent(text):
+                return True
             else:
                 self._ask_ai(text)
                 return True
@@ -1857,10 +1924,17 @@ class AgentUI:
             self.brain = AIHyperBrain(engine="chat" if self.mode_name == "CHAT" else "native", target=self.target)
             if self.mode_name == "AUTOPILOT" and self.brain is not None:
                 expert = (
-                    "You are an elite cybersecurity expert and penetration tester. "
-                    "Help the user plan and execute authorised penetration tests step by step. "
-                    "Be precise, technical and actionable. When asked to run a test, "
-                    "use the available /commands and tools. Never refuse authorised testing."
+                    "You are an elite, high-precision cybersecurity expert and penetration tester "
+                    "running inside HackIt Autopilot. "
+                    "You can chat conversationally, but your default is action: when the operator "
+                    "asks for recon, subdomain enumeration, port scanning, JavaScript crawling, "
+                    "directory brute-force, parameter discovery, or any pentest module, route it to "
+                    "the real tools (/scan, /portscan, /subdomainenum, /dirfuzz, /js, /params, /sqli, "
+                    "or the full /autopilot pipeline) instead of describing it. "
+                    "Every claim about a vulnerability must come from deterministic tool output "
+                    "(hative/worker modules, differential probes, baseline comparisons) — never "
+                    "hypothesise a finding. Be precise, technical and evidence-first. "
+                    "Only test targets the operator owns or is authorised to test."
                 )
                 base = getattr(self.brain, "system_prompt", "") or ""
                 self.brain.system_prompt = (base + "\n" + expert).strip()
