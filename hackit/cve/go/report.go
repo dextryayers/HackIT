@@ -96,7 +96,9 @@ func ExportReport(target string, mode string, start time.Time, techs []DetectedT
 // ScanSubdomains probes baseHost + each candidate from wordlist or file, and
 // returns full SubdomainReport entries. Never fails; any unreachable host
 // is skipped silently.
-func ScanSubdomains(baseHost string, activeWordlist bool, wordlist []string, extraHosts []string) []SubdomainReport {
+func ScanSubdomains(baseHost string, passive bool, wordlist []string, extraHosts []string) []SubdomainReport {
+	_ = wordlist // kept for back-compatible signature; passive API enumerates
+
 	host := strings.TrimPrefix(strings.TrimPrefix(baseHost, "https://"), "http://")
 	if idx := strings.Index(host, "/"); idx >= 0 {
 		host = host[:idx]
@@ -108,20 +110,32 @@ func ScanSubdomains(baseHost string, activeWordlist bool, wordlist []string, ext
 		return nil
 	}
 
-	labels := []string{}
-	if activeWordlist {
-		labels = append(labels, wordlist...)
-	}
-	labels = append(labels, extraHosts...)
-
 	candidates := []string{}
 	seen := map[string]bool{}
-	for _, label := range labels {
-		label = strings.TrimSpace(label)
-		if label == "" {
+
+	// Primary source: the dedicated subdomain engine with many passive providers
+	// (crt.sh, hackertarget, waybackmachine, rapiddns, commoncrawl, ...).
+	// Wordlist is never the discovery mechanism for this worker.
+	osint := []string{}
+	if passive {
+		osint = enumeratePassiveSubdomains(host, 150*time.Second)
+	}
+	for _, sub := range osint {
+		if seen[sub] {
 			continue
 		}
-		fqdn := label + "." + host
+		seen[sub] = true
+		candidates = append(candidates, sub)
+	}
+
+	for _, raw := range extraHosts {
+		fqdn := strings.ToLower(strings.TrimSpace(strings.TrimSuffix(raw, ".")))
+		if fqdn == "" {
+			continue
+		}
+		if !strings.HasSuffix(fqdn, "."+host) && fqdn != host {
+			fqdn = fqdn + "." + host
+		}
 		if seen[fqdn] {
 			continue
 		}

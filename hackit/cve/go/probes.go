@@ -2,40 +2,17 @@ package main
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 )
-
-// SubdomainWordlist is a curated set of labels most likely to carry an app
-// with a distinct tech stack. Not a full brute-force dump — accuracy beats
-// volume.
-var SubdomainWordlist = []string{
-	"www", "api", "app", "admin", "portal", "panel", "dashboard", "manage",
-	"docs", "help", "support", "status", "blog", "shop", "store",
-	"auth", "sso", "oauth", "id", "connect",
-	"cdn", "static", "assets", "media", "upload", "images", "img",
-	"dev", "staging", "stage", "uat", "test", "demo", "beta", "preview",
-	"m", "mobile", "wap",
-	"git", "gitlab", "ci", "jenkins", "build", "deploy",
-	"grafana", "kibana", "prometheus", "monitor", "metrics", "status",
-	"mail", "owa", "webmail", "email",
-	"db", "mysql", "postgres", "redis", "elasticsearch", "mongo",
-	"ftp", "sftp", "vpn",
-	"secure", "vault", "secret",
-	"internal", "intranet", "private", "corp", "corporate",
-	"docs", "wiki", "knowledge", "kb",
-	"forum", "community", "chat", "irc",
-	"download", "update", "releases",
-	"payments", "pay", "billing",
-	"crm", "erp", "hr",
-	"cloud", "objects", "s3", "storage",
-	"mx", "autodiscover", "autoconfig",
-}
 
 type probeSignature struct {
 	header   string // header name, empty for body/cookie match
@@ -211,6 +188,109 @@ func FilterSubdomains(baseHost string, subs []string) []string {
 		out = append(out, fqdn)
 	}
 	return out
+}
+
+// findRepoRoot walks upward looking for the hackit root directory.
+func findRepoRoot() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	for i := 0; i < 8; i++ {
+		if info, err := os.Stat(filepath.Join(dir, "hackit")); err == nil && info.IsDir() {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return ""
+}
+
+func locateSubdomainWorker() string {
+	hints := []string{}
+	if root := findRepoRoot(); root != "" {
+		hints = append(hints, filepath.Join(root, "hackit", "subdomain", "go", "subdomain_worker"))
+	}
+	if exe, err := os.Executable(); err == nil {
+		hints = append(hints, filepath.Join(filepath.Dir(exe), "..", "..", "subdomain", "go", "subdomain_worker"))
+	}
+	for _, hint := range hints {
+		if abs, err := filepath.Abs(hint); err == nil {
+			if info, err := os.Stat(abs); err == nil && !info.IsDir() {
+				return abs
+			}
+		}
+	}
+	return ""
+}
+
+// enumeratePassiveSubdomains invokes the dedicated subdomain engine (crt.sh,
+// hackertarget.com, waybackmachine, rapiddns, commoncrawl, ...) so the CVE
+// worker sees every publicly-announced subdomain, not a static wordlist.
+// Duplicates are suppressed.
+func enumeratePassiveSubdomains(host string, timeout time.Duration) []string {
+	worker := locateSubdomainWorker()
+	if worker == "" {
+		fmt.Fprintf(os.Stderr, "[probes] subdomain_worker not found; passive subdomain enumeration skipped\n")
+		return nil
+	}
+
+	// Capture stdout directly — the worker prints "[sub] <fqdn>" lines.
+	cmd := exec.Command(worker,
+		"-d", host,
+		"-passive-only",
+		"-fast",
+		"-resolve=false",
+	)
+	done := make(chan []byte, 1)
+	go func() {
+		data, _ := cmd.Output()
+		done <- data
+	}()
+	out := []byte{}
+	select {
+	case out = <-done:
+	case <-time.After(timeout):
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		select {
+		case out = <-done:
+		default:
+		}
+	}
+
+	seen := map[string]bool{}
+	results := []string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		if !strings.Contains(line, "[sub]") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		fqdn := strings.TrimPrefix(fields[len(fields)-1], "[sub]")
+		fqdn = strings.TrimSpace(strings.TrimPrefix(fqdn, "["))
+		fqdn = strings.TrimSuffix(fqdn, "]")
+		fqdn = strings.TrimSuffix(fqdn, ".")
+		fqdn = strings.ToLower(fqdn)
+		if fqdn == "" || fqdn == host {
+			continue
+		}
+		if !strings.HasSuffix(fqdn, "."+host) {
+			continue
+		}
+		if seen[fqdn] {
+			continue
+		}
+		seen[fqdn] = true
+		results = append(results, fqdn)
+	}
+	return results
 }
 
 // LoadSubdomainFile reads hosts from a file, one per line, supports # comments.

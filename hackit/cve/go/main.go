@@ -367,11 +367,11 @@ func main() {
 		if *subFilePtr != "" {
 			extraHosts = LoadSubdomainFile(*subFilePtr)
 			if len(extraHosts) == 0 {
-				fmt.Printf("%s[!] Subdomains file %q empty or unreadable; using built-in wordlist%s\n", Yellow, *subFilePtr, Reset)
+				fmt.Printf("%s[!] Subdomains file %q empty or unreadable; assuming user-supplied list is empty. Probing passive providers only.%s\n", Yellow, *subFilePtr, Reset)
 			}
 		}
-		fmt.Printf("\n%s[*] Phase 4: Subdomain intelligence — scanning wordlist of %d entries...%s\n", Blue, len(SubdomainWordlist)+len(extraHosts), Reset)
-		subReports = ScanSubdomains(*targetPtr, len(SubdomainWordlist) > 0, SubdomainWordlist, extraHosts)
+		fmt.Printf("\n%s[*] Phase 4: Subdomain intelligence — consulting crt.sh, hackertarget.com, wayback, rapiddns, commoncrawl, ...%s\n", Blue, Reset)
+		subReports = ScanSubdomains(*targetPtr, true, nil, extraHosts)
 
 		// Merge subdomain CVEs into overall results for ranked output/JSON.
 		for _, sr := range subReports {
@@ -400,7 +400,7 @@ func main() {
 	fmt.Printf("\n%s━━━ Deep scan summary ━━━%s\n", Bold, Reset)
 	fmt.Printf("  Target        : %s\n", *targetPtr)
 	fmt.Printf("  Reachable host: %s\n", *targetPtr)
-	fmt.Printf("  Subdomains    : %d enumerated / %d reachable\n", len(SubdomainWordlist), len(subReports))
+	fmt.Printf("  Subdomains    : %d reachable (passive-only providers + user extras)\n", len(subReports))
 	fmt.Printf("  Techs detected: %d\n", len(reportTechs))
 	fmt.Printf("  Total CVEs    : %d\n", len(deduped))
 	fmt.Printf("  Critical=%d  High=%d  Medium=%d  Low=%d  Info=%d\n",
