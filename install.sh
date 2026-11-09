@@ -214,6 +214,7 @@ fi
 rm -f "$INSTALL_DIR/.venv.log"
 
 PIP="$VENV/bin/pip"
+PYBIN="$VENV/bin/python"
 if [ ! -x "$PIP" ]; then
     log "bootstrapping pip into the venv (get-pip.py)"
     GET_PIP="$VENV/get-pip.py"
@@ -231,11 +232,11 @@ if [ ! -x "$PIP" ]; then
 fi
 [ "$VENV_MADE" = "1" ] && ok "venv ready at $VENV"
 
-run_step "upgrade pip" "$PIP" install --quiet --upgrade pip
+run_step "upgrade pip" "$PYBIN" -m pip install --quiet --upgrade pip
 if [ -f requirements.txt ]; then
-    run_step "install requirements" "$PIP" install --quiet -r requirements.txt
+    run_step "install requirements" "$PYBIN" -m pip install --quiet -r requirements.txt
 fi
-run_step "install hackit package" "$PIP" install --quiet -e .
+run_step "install hackit package" "$PYBIN" -m pip install --quiet -e .
 echo
 
 # -- Step 3: native engines ---------------------------------------------------------------
@@ -304,7 +305,7 @@ box_row "  ✔  HackIT installed successfully" "$G" "$G"
 box_row "" "$G" "$G"
 box_row "  hackit --help       show all commands" "$G" "$W"
 box_row "  hackit              interactive console" "$G" "$W"
-box_row "  hackit cve <url>    CVE intel scan" "$G" "$W"
+box_row "  hackit util cve <sw> <v>  CVE lookup" "$G" "$W"
 box_row "" "$G" "$G"
 box_bot "$G"
 echo
