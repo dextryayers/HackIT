@@ -89,6 +89,12 @@ const { jobId, target } = Astro.props;
 
 		try {
 			const res = await fetch(`/api/status?job_id=${jobId}`);
+			if (res.status === 404) {
+				clearInterval(pollingInterval);
+				appendLog(`[!] Scan session no longer exists — engine restarted or the job was evicted.`);
+				if (logStatus) logStatus.innerHTML = '<div class="w-1.5 h-1.5 rounded-full bg-amber-400"></div> Session expired';
+				return;
+			}
 			if (!res.ok) throw new Error('API Unavailable');
 			
 			const data = await res.json();

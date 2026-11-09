@@ -191,6 +191,14 @@ const target = ""; // We'll handle this in the client side to avoid SSR complexi
             const poll = setInterval(async () => {
                 try {
                     const res = await fetch(`/api/status?job_id=${jobId}&light=1`);
+                    if (res.status === 404) {
+                        clearInterval(poll);
+                        clearInterval(sysPoll);
+                        logStatus.innerHTML = '<div class="w-1.5 h-1.5 rounded-full bg-amber-400"></div> Session expired';
+                        append('[!] This scan session no longer exists — the engine was restarted or the job was evicted.');
+                        return;
+                    }
+                    if (!res.ok) return;
                     const data = await res.json();
                     if (data.live_logs) {
                         data.live_logs.forEach(l => {
