@@ -20,12 +20,12 @@ requests:
     matchers:
       - type: word
         words:
-          - "ok"
           - "healthy"
           - "alive"
-          - "UP"
-          - "true"
+          - "\"UP\""
+          - "\"down\""
           - "\"status\""
+          - "\"state\""
         condition: or
         name: "info-endpoint"
 ---
@@ -46,10 +46,9 @@ requests:
       - "{{BaseURL}}/service-worker.js"
       - "{{BaseURL}}/manifest.json"
     matchers:
-      - type: word
-        words:
-          - "200 OK"
-        part: header
+      - type: status
+        status:
+          - 200
         name: "file-exists"
   - method: GET
     path:
@@ -109,17 +108,16 @@ requests:
     matchers:
       - type: word
         words:
-          - "login"
-          - "Login"
-          - "LOGIN"
-          - "admin"
-          - "Admin"
-          - "dashboard"
-          - "Dashboard"
-          - "username"
-          - "password"
+          - "<input"
+          - "name=\"password\""
+          - "name=\"username\""
+          - "type=\"password\""
+          - "password\""
           - "Sign In"
           - "Sign in"
+          - "loginform"
+          - "wp-login"
+          - "authenticate"
         condition: or
         name: "admin-panel"
 ---
@@ -176,21 +174,25 @@ requests:
     body: "test"
     matchers:
       - type: word
-        words:
-          - "201 Created"
-        part: header
+        status:
+          - 201
         name: "put-allowed"
+      - type: status
+        status:
+          - 201
   - method: DELETE
     path:
       - "{{BaseURL}}/test.txt"
     matchers:
       - type: word
-        words:
-          - "200 OK"
-          - "204 No Content"
-        condition: or
-        part: header
+        status:
+          - 200
+          - 204
         name: "delete-allowed"
+      - type: status
+        status:
+          - 200
+          - 204
 ---
 id: generic-directory-listing
 info:
@@ -307,26 +309,23 @@ requests:
     path:
       - "{{BaseURL}}/admin"
     matchers:
-      - type: word
-        words:
-          - "200 OK"
-        part: header
+      - type: status
+        status:
+          - 200
         name: "post-admin-not-blocked"
   - method: HEAD
     path:
       - "{{BaseURL}}/admin"
     matchers:
-      - type: word
-        words:
-          - "200 OK"
-        part: header
+      - type: status
+        status:
+          - 200
         name: "head-admin-not-blocked"
   - method: PATCH
     path:
       - "{{BaseURL}}/admin"
     matchers:
-      - type: word
-        words:
-          - "200 OK"
-        part: header
+      - type: status
+        status:
+          - 200
         name: "patch-admin-not-blocked"

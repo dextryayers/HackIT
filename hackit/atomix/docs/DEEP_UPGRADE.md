@@ -2,10 +2,10 @@
 
 Release line unchanged: V2.1 (HackIT V2.1). The `3.0.0`/`3.1.0` labels used in this document during internal iteration are retired — the tool stays V2.1 everywhere.
 
-Status: living document. V2.1 deep-upgrade pass completed and verified against
-`atomix/go` (build + vet + gofmt + 34 unit tests + E2E fixture scan). Items
-marked **[DONE]** shipped in the V2.1 deep-upgrade pass. Everything else is the remaining backlog,
-ordered by impact.
+Status: living document. V2.1 (deep-upgrade + performance Part 2 + accuracy
+pass) completed and verified against `atomix/go` (build + vet + gofmt + unit
+tests + E2E fixture scans, both benign and vulnerable endpoints). Items marked
+**[DONE]** shipped. Everything else is the remaining backlog, ordered by impact.
 
 ---
 
@@ -235,6 +235,30 @@ breaker) → `SendRequestWithRetry` (host override for -scan-all-ips) →
 - Signature trust chain (CA bundle verify)
 - Match-rate telemetry feeding confidence scoring
 
+### Phase 8 — Accuracy pass [COMPLETED, V2.1]
+- [x] Root cause: raw-space `RequestURI` → reflected `400 Bad request syntax`
+      pages matched payload tokens. Fix: `sanitizeRequestURL` (path/query,
+      `%XX`-preserving) at send + composition boundaries
+- [x] Engine-level payload-reflection detection → demote firing matchers to
+      `low` confidence; new `-suppress-reflection-match` flag (also exposed
+      through the Python bridge)
+- [x] New `baseline: true` request option — one benign counterpart request
+      (query values → 1), cached; DSL env gains `baseline_duration`,
+      `baseline_body_length`, `baseline_status_code`
+- [x] `time-based-sqli` rewritten on baseline DSL (no fixed-interval FP)
+- [x] Template library: SQLi family → DBMS error regexes; `jwt-*`/`api-nosqli`
+      → `and`-mode status+content anchors; password/token words replaced with
+      driver-error markers; `cve-sprint4shell` & `rce-curl-wget` deleted
+      (unverifiable unauthenticated); `cve-php-cgi-args-inject` → real code
+      execution proof (`uid=\d+(`); `ldap-blind-injection` → directory
+      markers; `generic-trace-method` → status 200 AND Max-Forwards;
+      status-line-as-word → `type: status`
+- [x] `--validate-deep` now prints FP-RISK advisory lint (127 templates, 242
+      issues, all reflection class)
+- [x] Default-cred, admin-panel, ping, generic-information matchers tightened
+      (quoted/app-state markers)
+- [x] E2E matrix both directions verified and recorded in `docs/ACCURACY.md`
+
 ---
 
 ## 6. Verification protocol (all executed)
@@ -260,3 +284,9 @@ breaker) → `SendRequestWithRetry` (host override for -scan-all-ips) →
 13. Performance Part 2: `go test -bench . -benchtime=100ms -benchmem`
     → results in `docs/PERFORMANCE.md`; E2E wall 4.23s → 3.47–3.83s,
     finding set identical before/after (46/46 tuples)
+14. Accuracy pass: full library on benign fixture → **zero false criticals**
+    (was ~25); `?q=1' UNION SELECT NULL--` no longer 400-reflection-matches
+    (URL sanitization); error-based + baseline-DSL detectors still fire on
+    the vulnerable endpoints; negative controls silent — see `docs/ACCURACY.md`
+15. `--validate-deep` → FP-RISK lint report (127 templates / 242 advisory issues,
+    all reflection class, demoted by engine)

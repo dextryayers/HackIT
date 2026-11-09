@@ -16,10 +16,12 @@ requests:
     matchers:
       - type: word
         words:
-          - "Invoker"
-          - "JMX"
-          - "jndi"
-          - "rmi"
+          - "JMXInvokerServlet"
+          - "RMIInvokerServlet"
+          - "InvokerService"
+          - "JmxRemote"
+          - "java.rmi."
+          - "sun.rmi."
         condition: or
         part: body
 
@@ -27,8 +29,17 @@ requests:
     path:
       - "{{BaseURL}}/invoker/JMXInvokerServlet"
     body: "test"
+    matchers-condition: and
     matchers:
       - type: status
         status:
           - 200
           - 500
+      - type: regex
+        regex:
+          - "JMXInvokerServlet"
+          - 'javax\.management'
+          - 'java\.rmi'
+          - 'sun\.rmi'
+          - "JmxRemote"
+        name: "java-rmi"

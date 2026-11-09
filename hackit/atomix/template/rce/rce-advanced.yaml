@@ -69,25 +69,7 @@ requests:
         condition: or
         name: "time-delay-triggered"
 ---
-id: rce-curl-wget
-info:
-  name: RCE via curl/wget
-  author: AniipID
-  severity: critical
-  description: Tests command injection using curl and wget for SSRF-based detection
-  tags: rce,ssrf,oob
-requests:
-  - method: GET
-    path:
-      - "{{BaseURL}}?cmd=curl+http://127.0.0.1:9999"
-      - "{{BaseURL}}?cmd=wget+http://127.0.0.1:9999"
-      - "{{BaseURL}}?cmd=curl+-s+--connect-timeout+2+http://127.0.0.1/test"
-      - "{{BaseURL}}?cmd=wget+-q+--timeout=2+http://127.0.0.1/test"
-    matchers:
-      - type: status
-        status:
-          - 200
-        name: "curl-wget-executed"
+
 ---
 id: rce-awk-sed
 info:

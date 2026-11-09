@@ -359,6 +359,7 @@ func main() {
 				SColor(ColorGreen, "[+]"), valid, invalid)
 			if validateDeep {
 				ValidateTmux(loaded)
+				PrintFPLintReport(loaded)
 			}
 			if invalid > 0 {
 				os.Exit(1)
@@ -366,6 +367,12 @@ func main() {
 			return
 		}
 		ValidateAll(cfg.TemplateDir)
+		if validateDeep {
+			layered, lerr := LoadTemplatesFromDirs(ResolveTemplateDirs(cfg))
+			if lerr == nil {
+				PrintFPLintReport(layered)
+			}
+		}
 		return
 	}
 

@@ -15,13 +15,13 @@ requests:
     matchers:
       - type: word
         words:
-          - "admin"
           - "cn="
           - "dn="
           - "ou="
           - "dc="
         condition: or
         part: body
+        name: "ldap-directory-leak"
 
   - method: POST
     path:
@@ -33,7 +33,9 @@ requests:
     matchers:
       - type: word
         words:
-          - "Welcome"
-          - "authenticated"
-          - "success"
+          - "cn="
+          - "dn="
+          - "ou="
+          - "dc="
         condition: or
+        name: "ldap-login-directory-leak"

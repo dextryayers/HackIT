@@ -24,6 +24,7 @@ requests:
     headers:
       Content-Type: application/json
     body: '{"selector": {"$where": "1"}}'
+    matchers-condition: and
     matchers:
       - type: status
         status:
@@ -33,3 +34,4 @@ requests:
           - "docs"
           - "bookmark"
         condition: or
+        name: "couchdb-find"

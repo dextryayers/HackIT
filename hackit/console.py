@@ -1,5 +1,6 @@
 import sys
 import os
+import time
 import shlex
 try:
     import termios
@@ -54,7 +55,13 @@ class HackItConsole:
                     _walk(child)
         _walk(self.cli_group)
         self._known_cmds.update(['exit', 'quit', 'help', 'guide', 'version', 'clear', 'banner', 'back', 'whoami', 'config', 'osint', 'hackit', 'run'])
-        
+
+        # Persistent command history (arrow-up recall). The raw-mode
+        # reader maintains its own buffer and never consults readline,
+        # so keep a plain list here and seed the reader with it.
+        self.history = []
+        self._load_history()
+
         # Setup history
         if readline:
             try:
@@ -70,6 +77,16 @@ class HackItConsole:
                 readline.parse_and_bind("bind ^I rl_complete")
             else:
                 readline.parse_and_bind("tab: complete")
+
+    def _load_history(self):
+        """Populate self.history from the history file."""
+        try:
+            if os.path.exists(self.history_file):
+                with open(self.history_file, 'r', errors='ignore') as f:
+                    lines = [l.rstrip('\n') for l in f]
+                    self.history = [l for l in lines if l.strip()][-1000:]
+        except Exception:
+            self.history = []
 
     def completer(self, text: str, state: int) -> str:
         """Tab completion for console commands."""
@@ -197,17 +214,45 @@ class HackItConsole:
         old = termios.tcgetattr(fd)
         suffix = prompt[prompt.rfind('\n') + 1:] if '\n' in prompt else prompt
         buf = []
-        hist = []
+        hist = list(self.history)  # snapshot; appends happen on Enter
         hist_idx = -1
+
+        def _read_escape_tail():
+            # Arrow keys send 3-byte sequences (\x1b[A …). Give the rest of
+            # the sequence 20 ms to arrive; a bare ESC just ends here empty.
+            rest = bytearray()
+            stop = time.time() + 0.02
+            while len(rest) < 2 and time.time() < stop:
+                r, _, _ = select.select([fd], [], [], 0.01)
+                if r:
+                    try:
+                        rest += os.read(fd, 1)
+                    except OSError:
+                        break
+            return bytes(rest).decode('utf-8', errors='ignore')
+
         try:
             tty.setraw(fd)
             sys.stdout.write(prompt)
             sys.stdout.flush()
+            pending = b""
             while True:
-                r, _, _ = select.select([sys.stdin], [], [], 0.05)
+                r, _, _ = select.select([fd], [], [], 0.05)
                 if not r:
                     continue
-                ch = sys.stdin.read(1)
+                try:
+                    chunk = os.read(fd, 1)
+                except OSError:
+                    raise EOFError
+                if not chunk:
+                    raise EOFError
+                pending += chunk
+                try:
+                    ch = pending.decode('utf-8')
+                except UnicodeDecodeError:
+                    # Incomplete multibyte character; wait for more bytes.
+                    continue
+                pending = b""
                 if ch in ('\r', '\n'):
                     sys.stdout.write('\r\n')
                     break
@@ -227,7 +272,7 @@ class HackItConsole:
                     sys.stdout.write('\r\n')
                     raise EOFError
                 elif ch == '\x1b':
-                    seq = ch + sys.stdin.read(2)
+                    seq = ch + _read_escape_tail()
                     if seq == '\x1b[A':
                         if hist_idx < len(hist):
                             hist_idx += 1
@@ -272,6 +317,9 @@ class HackItConsole:
                         readline.add_history(line)
                     except Exception:
                         pass
+                # keep our own list in sync for the raw-mode reader
+                if not self.history or self.history[-1] != line:
+                    self.history.append(line)
                 
                 # Handle universal /AI commands
                 from hackit.agent import handle_ai_command
@@ -286,7 +334,8 @@ class HackItConsole:
                 
                 if line.lower() == 'clear':
                     os.system('cls' if os.name == 'nt' else 'clear')
-                    # Also clear readline history if possible
+                    # Also clear command history
+                    self.history = []
                     if readline:
                         try:
                             readline.clear_history()
@@ -483,6 +532,14 @@ class HackItConsole:
         if readline:
             try:
                 readline.write_history_file(self.history_file)
+            except Exception:
+                pass
+        # Fallback (or when readline-less): persist our own list verbatim,
+        # so arrow-up recall survives sessions even without GNU readline.
+        if self.history:
+            try:
+                with open(self.history_file, 'w') as f:
+                    f.write('\n'.join(self.history[-1000:]) + '\n')
             except Exception:
                 pass
 

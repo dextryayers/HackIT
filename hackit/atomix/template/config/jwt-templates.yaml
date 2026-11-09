@@ -61,11 +61,20 @@ requests:
       - "{{BaseURL}}/api/auth"
     headers:
       Authorization: "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6IjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAifQ.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyLCJhZG1pbiI6dHJ1ZX0.bRFz5bOZTBEJV9mXRp_kMhk8t-PMhaDcJqwlXcUSa1s"
+    matchers-condition: and
     matchers:
+      - type: status
+        status:
+          - 200
       - type: word
         words:
-          - "200 OK"
-        part: header
+          - "\"user\""
+          - "\"email\""
+          - "\"username\""
+          - "\"role\""
+          - "\"sub\""
+          - "\"admin\""
+          - "\"token\""
         name: "jwt-kid-byte-array"
 ---
 id: jwt-alg-confusion
@@ -81,11 +90,20 @@ requests:
       - "{{BaseURL}}/api/user"
     headers:
       Authorization: "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyLCJhZG1pbiI6dHJ1ZX0.XdXxJbHgVnqI0qXXjnLg6vBUhOB7EjsRR5SCes_vMBc"
+    matchers-condition: and
     matchers:
+      - type: status
+        status:
+          - 200
       - type: word
         words:
-          - "200 OK"
-        part: header
+          - "\"user\""
+          - "\"email\""
+          - "\"username\""
+          - "\"role\""
+          - "\"sub\""
+          - "\"admin\""
+          - "\"token\""
         name: "jwt-alg-confusion"
 ---
 id: jwt-jku-injection
@@ -101,11 +119,20 @@ requests:
       - "{{BaseURL}}/api/user"
     headers:
       Authorization: "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImpraSI6Imh0dHBzOi8vZXZpbC5jb20vbXlqd2suanNvbiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyLCJhZG1pbiI6dHJ1ZX0.IXwVzJRu7iwCFmMqNOh6omX_zv2bmVusQSAgKEAeZgU"
+    matchers-condition: and
     matchers:
+      - type: status
+        status:
+          - 200
       - type: word
         words:
-          - "200 OK"
-        part: header
+          - "\"user\""
+          - "\"email\""
+          - "\"username\""
+          - "\"role\""
+          - "\"sub\""
+          - "\"admin\""
+          - "\"token\""
         name: "jwt-jku-injection"
 ---
 id: jwt-iat-future
@@ -121,11 +148,20 @@ requests:
       - "{{BaseURL}}/api/user"
     headers:
       Authorization: "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0Ijo5OTk5OTk5OTk5LCJhZG1pbiI6dHJ1ZX0.nRbuU7hsLCyYHokl9G87kPJF4s3GMFB5mC-WB04bhQQ"
+    matchers-condition: and
     matchers:
+      - type: status
+        status:
+          - 200
       - type: word
         words:
-          - "200 OK"
-        part: header
+          - "\"user\""
+          - "\"email\""
+          - "\"username\""
+          - "\"role\""
+          - "\"sub\""
+          - "\"admin\""
+          - "\"token\""
         name: "jwt-future-iat"
 ---
 id: jwt-exp-bypass
@@ -141,9 +177,18 @@ requests:
       - "{{BaseURL}}/api/user"
     headers:
       Authorization: "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyLCJleHAiOjF9.-AM3Xyrpwe42MOzBKsBJx6R1K2eG48Yj3THcrpP9fBY"
+    matchers-condition: and
     matchers:
+      - type: status
+        status:
+          - 200
       - type: word
         words:
-          - "200 OK"
-        part: header
+          - "\"user\""
+          - "\"email\""
+          - "\"username\""
+          - "\"role\""
+          - "\"sub\""
+          - "\"admin\""
+          - "\"token\""
         name: "jwt-exp-bypass"

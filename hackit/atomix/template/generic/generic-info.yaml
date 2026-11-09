@@ -128,12 +128,14 @@ requests:
   - method: TRACE
     path:
       - "{{BaseURL}}"
+    matchers-condition: and
     matchers:
+      - type: status
+        status:
+          - 200
       - type: word
         words:
-          - "TRACE"
           - "Max-Forwards"
-        condition: or
         name: "trace-enabled"
 ---
 id: generic-cors-preflight

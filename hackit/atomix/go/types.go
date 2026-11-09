@@ -297,35 +297,35 @@ type ScanConfig struct {
 	OOBType          string
 
 	// Section 10: Chaining & Misc
-	Chain         string
-	ChainVars     string
-	CompatMode    bool
-	SmartScan     bool
+	Chain                   string
+	ChainVars               string
+	CompatMode              bool
+	SmartScan               bool
 	SuppressReflectionMatch bool
-	MultiTarget   bool
-	APIDiscovery  bool
-	Passive       bool
-	MinConfidence string
-	Replay        string
-	Diff          string
-	Monitor       string
-	Web           bool
-	WebPort       int
-	WebPath       string
-	WebAuth       string
-	Push          string
-	PushFormat    string
-	TelegramBot   string
-	TelegramChat  string
-	SlackWebhook  string
-	NoBanner      bool
-	NoMeta        bool
-	Pipeline      bool
-	ConfigFile    string
-	Examples      bool
-	Health        bool
-	Completion    string
-	License       bool
+	MultiTarget             bool
+	APIDiscovery            bool
+	Passive                 bool
+	MinConfidence           string
+	Replay                  string
+	Diff                    string
+	Monitor                 string
+	Web                     bool
+	WebPort                 int
+	WebPath                 string
+	WebAuth                 string
+	Push                    string
+	PushFormat              string
+	TelegramBot             string
+	TelegramChat            string
+	SlackWebhook            string
+	NoBanner                bool
+	NoMeta                  bool
+	Pipeline                bool
+	ConfigFile              string
+	Examples                bool
+	Health                  bool
+	Completion              string
+	License                 bool
 
 	// Section 11: Headless Browser
 	Headless      bool

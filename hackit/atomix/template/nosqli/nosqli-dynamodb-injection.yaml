@@ -8,6 +8,7 @@ info:
 
 requests:
   - method: POST
+    matchers-condition: and
     path:
       - "{{BaseURL}}/api/items"
       - "{{BaseURL}}/api/dynamo/query"

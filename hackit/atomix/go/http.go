@@ -238,6 +238,7 @@ func urlPathQueryChar(b byte) bool {
 // the path and query components while preserving:
 //   - already-valid percent-triplets (payloads like %27 pass through),
 //   - structural query characters (&, =, ?) and sub-delims (raw ' stays).
+//
 // Applied at the HTTP boundary; idempotent.
 func sanitizeRequestURL(raw string) string {
 	i := strings.Index(raw, "?")

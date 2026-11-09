@@ -16,13 +16,16 @@ requests:
       Content-Type: application/octet-stream
     body: "gAN9cQAoWAMAAABrZXlxAlgFAAAAdmFsdWVxA3VzLg=="
     matchers:
-      - type: word
-        words:
-          - "pickle"
-          - "unpickle"
+      - type: regex
+        regex:
           - "UnpicklingError"
-          - "loads"
+          - "can.t pickle"
+          - "current magic number"
+          - '_pickle\.'
+          - "cPickle"
+          - 'pickle\.loads?'
         condition: or
+        name: "python-pickle"
 
   - method: POST
     path:
@@ -30,8 +33,15 @@ requests:
     headers:
       Content-Type: application/x-www-form-urlencoded
     body: "session=gAN9cQAoWAQAAABkYXRhcQFYBQAAAHZhbHVlcQJ1cy4="
+    matchers-condition: and
     matchers:
       - type: status
         status:
           - 200
           - 500
+      - type: regex
+        regex:
+          - "UnpicklingError"
+          - "can.t pickle"
+          - '_pickle\.'
+        name: "python-pickle-session"

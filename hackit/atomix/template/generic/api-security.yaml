@@ -144,13 +144,15 @@ requests:
     body: '{"username":{"$ne":""},"password":{"$ne":""}}'
     headers:
       Content-Type: "application/json"
+    matchers-condition: and
     matchers:
-      - type: word
-        words:
-          - "200 OK"
-          - "token"
-          - "success"
-        condition: or
+      - type: status
+        status:
+          - 200
+      - type: regex
+        regex:
+          - '"(access_)?(auth_)?token"\\s*:'
+          - '"success"\\s*:\\s*true'
         name: "nosql-bypass"
   - method: POST
     path:
@@ -158,12 +160,15 @@ requests:
     body: '{"username":{"$gt":""},"password":{"$gt":""}}'
     headers:
       Content-Type: "application/json"
+    matchers-condition: and
     matchers:
-      - type: word
-        words:
-          - "token"
-          - "success"
-        condition: or
+      - type: status
+        status:
+          - 200
+      - type: regex
+        regex:
+          - '"(access_)?(auth_)?token"\s*:'
+          - '"success"\s*:\s*true'
         name: "nosql-gt-bypass"
 ---
 id: api-jsonp-callback

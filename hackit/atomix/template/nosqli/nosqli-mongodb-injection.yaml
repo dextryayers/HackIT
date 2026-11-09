@@ -13,14 +13,15 @@ requests:
       - "{{BaseURL}}?username[$ne]=admin&password[$ne]=x"
       - "{{BaseURL}}?search[$where]=1"
     matchers:
-      - type: word
-        words:
-          - "admin"
-          - "password"
-          - "email"
-          - "token"
+      - type: regex
+        regex:
+          - "Mongo(Server)?Error"
+          - "CastError"
+          - "BsonTypeError"
+          - "Cast to ObjectId failed"
+          - "MongoParseError"
         condition: or
-        part: body
+        name: "mongodb-injection"
 
   - method: POST
     path:
@@ -29,8 +30,16 @@ requests:
     headers:
       Content-Type: application/json
     body: '{"$where": "1"}'
+    matchers-condition: and
     matchers:
       - type: status
         status:
           - 200
           - 201
+      - type: regex
+        regex:
+          - "Mongo(Server)?Error"
+          - "CastError"
+          - "BsonTypeError"
+          - "MongoParseError"
+        name: "mongodb-where"

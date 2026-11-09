@@ -42,7 +42,9 @@ requests:
           - "Welcome"
           - "Dashboard"
           - "Logged in"
-          - "admin"
+          - "Authentication successful"
+          - "Login successful"
+          - "Successfully logged"
         condition: or
         name: "default-creds-accepted"
 ---
