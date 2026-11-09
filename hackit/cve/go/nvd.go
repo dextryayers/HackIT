@@ -210,7 +210,7 @@ func cachedQueryNVDCPE(cpe string) []ExportResult {
 		url.QueryEscape(cpe))
 	debugCVE("NVD CPE query: %s", apiURL)
 
-	client := &http.Client{Timeout: 20 * time.Second}
+	client := &http.Client{Timeout: 8 * time.Second}
 	req, _ := http.NewRequest("GET", apiURL, nil)
 	req.Header.Set("User-Agent", "HackIt-CVE/2.0 (authorised assessment)")
 	req.Header.Set("Accept", "application/json")
@@ -258,7 +258,7 @@ func cachedQueryNVDKeyword(software, version string) []ExportResult {
 	apiURL := fmt.Sprintf("https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch=%s&resultsPerPage=40", query)
 	debugCVE("NVD keyword query: %s %s", software, version)
 
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := &http.Client{Timeout: 8 * time.Second}
 	req, _ := http.NewRequest("GET", apiURL, nil)
 	req.Header.Set("User-Agent", "HackIt-CVE/2.0 (authorised assessment)")
 	req.Header.Set("Accept", "application/json")
@@ -312,7 +312,7 @@ func getCVEInfo(cveID string) *CVEInfo {
 	apiURL := fmt.Sprintf("https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=%s", url.QueryEscape(cveID))
 	debugCVE("Fetching CVE detail: %s", cveID)
 
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := &http.Client{Timeout: 8 * time.Second}
 	req, _ := http.NewRequest("GET", apiURL, nil)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (CVE Scanner)")
 	req.Header.Set("Accept", "application/json")

@@ -3,8 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -93,9 +95,9 @@ func ExportReport(target string, mode string, start time.Time, techs []DetectedT
 	fmt.Printf("\n%s▸ Structured report written to %s%s\n", Green, *outputPtr, Reset)
 }
 
-// ScanSubdomains probes baseHost + each candidate from wordlist or file, and
-// returns full SubdomainReport entries. Never fails; any unreachable host
-// is skipped silently.
+// ScanSubdomains probes reachable subdomains concurrently and returns their
+// SubdomainReport entries. A global phase deadline prevents the pipeline from
+// ever exceeding a fixed budget, even for large wildcard-heavy enumeration sets.
 func ScanSubdomains(baseHost string, passive bool, wordlist []string, extraHosts []string) []SubdomainReport {
 	_ = wordlist // kept for back-compatible signature; passive API enumerates
 
@@ -110,18 +112,29 @@ func ScanSubdomains(baseHost string, passive bool, wordlist []string, extraHosts
 		return nil
 	}
 
+	if isPrivateHost(host) {
+		fmt.Fprintf(os.Stderr, "[Phase 4] private/loopback host %s — skipping OSINT subdomain feeds\n", host)
+		return []SubdomainReport{}
+	}
+
 	candidates := []string{}
 	seen := map[string]bool{}
 
+	// Cap candidate count to keep wildcard-heavy domains usable.
+	const maxCandidates = 40
 	// Primary source: the dedicated subdomain engine with many passive providers
 	// (crt.sh, hackertarget, waybackmachine, rapiddns, commoncrawl, ...).
 	// Wordlist is never the discovery mechanism for this worker.
 	osint := []string{}
 	if passive {
-		osint = enumeratePassiveSubdomains(host, 150*time.Second)
+		osint = enumeratePassiveSubdomains(host, 45*time.Second)
 	}
 	for _, sub := range osint {
-		if seen[sub] {
+		if len(candidates) >= maxCandidates {
+			break
+		}
+		sub = strings.ToLower(strings.TrimSpace(strings.TrimSuffix(sub, ".")))
+		if sub == "" || seen[sub] {
 			continue
 		}
 		seen[sub] = true
@@ -129,6 +142,9 @@ func ScanSubdomains(baseHost string, passive bool, wordlist []string, extraHosts
 	}
 
 	for _, raw := range extraHosts {
+		if len(candidates) >= maxCandidates {
+			break
+		}
 		fqdn := strings.ToLower(strings.TrimSpace(strings.TrimSuffix(raw, ".")))
 		if fqdn == "" {
 			continue
@@ -142,52 +158,99 @@ func ScanSubdomains(baseHost string, passive bool, wordlist []string, extraHosts
 		seen[fqdn] = true
 		candidates = append(candidates, fqdn)
 	}
+	if len(candidates) > maxCandidates {
+		fmt.Fprintf(os.Stderr, "[*] subdomain candidate cap hit at %d — using first %d OSINT hits\n", len(candidates), maxCandidates)
+		candidates = candidates[:maxCandidates]
+	}
 
 	out := make([]SubdomainReport, 0, len(candidates))
-	for _, fqdn := range candidates {
-		if !HostReachable(fqdn) {
+	if len(candidates) == 0 {
+		return out
+	}
+
+	const phaseDeadline = 60 * time.Second
+	deadline := time.Now().Add(phaseDeadline)
+	sem := make(chan struct{}, 12)        // 12 concurrent HTTP probes — enough to saturate but keeps DNS/CDN friendly
+	results := make(chan SubdomainReport, 128)
+	var wg sync.WaitGroup
+
+	for _, raw := range candidates {
+		fqdn := strings.TrimSpace(raw)
+		if fqdn == "" {
 			continue
 		}
-		startCandidate := time.Now()
-		techs := ProbeTarget("https://" + fqdn + "/")
-		if len(techs) == 0 {
-			techs = ProbeTarget("http://" + fqdn + "/")
+		if time.Now().After(deadline) {
+			fmt.Fprintf(os.Stderr, "[Phase 4] global deadline reached; keeping %d results\n", len(out))
+			break
 		}
-		subCVEs := []ExportResult{}
-		techList := []string{}
-		for _, t := range techs {
-			techList = append(techList, t.Software+" "+t.Version)
-			// Cap the NVD contamination: if version unknown, skip NVD for that tech.
-			if t.Version == "" || t.Version == "unknown" {
-				continue
-			}
-			cves := QueryNVD(t.Software, t.Version)
-			if len(cves) == 0 {
-				continue
-			}
-			for i := range cves {
-				cves[i].Software = t.Software + " " + t.Version
-				cves[i].MatchType = "version_match"
-				if cves[i].Confidence == "" {
-					cves[i].Confidence = "medium"
-				}
-			}
-			subCVEs = append(subCVEs, cves...)
-		}
-		// De-duplicate within the subdomain.
-		subCVEs = deduplicateResults(subCVEs)
-		_ = startCandidate
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(fqdn string) {
+			defer wg.Done()
+			defer func() { <-sem }()
 
-		out = append(out, SubdomainReport{
-			Subdomain:    fqdn,
-			Reachable:    true,
-			URL:          "https://" + fqdn + "/",
-			Technologies: techList,
-			CVEs:         subCVEs,
-			ScannedAt:    time.Now().UTC().Format(time.RFC3339),
-		})
+			techs := ProbeTarget("https://" + fqdn + "/")
+			if len(techs) == 0 {
+				techs = ProbeTarget("http://" + fqdn + "/")
+			}
+			if len(techs) == 0 && !HostReachable(fqdn) {
+				return // skip silently — candidate did not respond with HTTPS or HTTP
+			}
+
+			subCVEs := []ExportResult{}
+			techList := []string{}
+			for _, t := range techs {
+				techList = append(techList, t.Software+" "+t.Version)
+				if t.Version == "" || t.Version == "unknown" {
+					continue // no version => no CVE query needed
+				}
+				cves := QueryNVD(t.Software, t.Version)
+				for i := range cves {
+					cves[i].Software = t.Software + " " + t.Version
+					cves[i].MatchType = "version_match"
+					if cves[i].Confidence == "" {
+						cves[i].Confidence = "medium"
+					}
+				}
+				subCVEs = append(subCVEs, cves...)
+			}
+			subCVEs = deduplicateResults(subCVEs)
+			results <- SubdomainReport{
+				Subdomain:    fqdn,
+				Reachable:    true,
+				URL:          "https://" + fqdn + "/",
+				Technologies: techList,
+				CVEs:         subCVEs,
+				ScannedAt:    time.Now().UTC().Format(time.RFC3339),
+			}
+		}(fqdn)
+	}
+
+	wg.Wait()
+	close(results)
+
+	for r := range results {
+		out = append(out, r)
 		fmt.Printf("%s[+] Subdomain %s — tech: %s — CVEs: %d%s\n",
-			Green, fqdn, strings.Join(techList, ", "), len(subCVEs), Reset)
+			Green, r.Subdomain, strings.Join(r.Technologies, ", "), len(r.CVEs), Reset)
 	}
 	return out
+}
+
+
+func isPrivateHost(host string) bool {
+	if host == "" || host == "localhost" {
+		return true
+	}
+	p := net.ParseIP(strings.TrimSpace(host))
+	if p == nil {
+		return strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".internal") || strings.HasSuffix(host, ".lan")
+	}
+	iv4 := p.To4()
+	if iv4 == nil {
+		return p.IsLoopback()
+	}
+	return iv4[0] == 10 || iv4[0] == 127 ||
+		(iv4[0] == 172 && iv4[1] >= 16 && iv4[1] <= 31) ||
+		(iv4[0] == 192 && iv4[1] == 168)
 }
