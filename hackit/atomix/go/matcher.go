@@ -67,6 +67,20 @@ func MatchTemplate(resp *ResponseInfo, t *Template, reqIdx int) *MatchResult {
 	body := resp.Body
 	headers := resp.Headers
 
+	// Pre-lower body/headers once when any matcher is case-insensitive;
+	// per-matcher lowering would make N matchers N full-body scans.
+	needCI := false
+	for _, m := range matchers {
+		if m.CaseInsensitive {
+			needCI = true
+			break
+		}
+	}
+	lowBody, lowHeaders := body, headers
+	if needCI {
+		lowBody = strings.ToLower(body)
+		lowHeaders = strings.ToLower(headers)
+	}
 	andMode := strings.EqualFold(strings.TrimSpace(cond), "and")
 	var firstHit *MatchResult
 
@@ -76,24 +90,33 @@ func MatchTemplate(resp *ResponseInfo, t *Template, reqIdx int) *MatchResult {
 			part = "body"
 		}
 
-		var data string
+		var data, lowData string
 		switch part {
 		case "header":
 			data = headers
+			lowData = lowHeaders
 		case "body":
 			data = body
+			lowData = lowBody
 		case "all", "response":
 			data = headers + "\n" + body
+			if needCI {
+				lowData = lowHeaders + "\n" + lowBody
+			} else {
+				lowData = data
+			}
 		case "status_code":
 			data = ""
+			lowData = ""
 		default:
 			data = body
+			lowData = lowBody
 		}
 
 		match := false
 		switch m.Type {
 		case "word":
-			match = matchWords(data, m.Words, m.Condition, m.CaseInsensitive)
+			match = matchWordsPre(data, lowData, m.Words, m.Condition, m.CaseInsensitive)
 		case "regex":
 			match = matchRegexFast(data, m.Regex, m.Condition, m.CaseInsensitive)
 		case "status":
@@ -103,11 +126,11 @@ func MatchTemplate(resp *ResponseInfo, t *Template, reqIdx int) *MatchResult {
 		case "dsl":
 			match = matchDSL(resp, m)
 		case "and":
-			match = matchAll(resp, data, m)
+			match = matchAll(resp, data, lowData, m)
 		case "or":
-			match = matchAny(resp, data, m)
+			match = matchAny(resp, data, lowData, m)
 		default:
-			match = matchWords(data, m.Words, m.Condition, m.CaseInsensitive)
+			match = matchWordsPre(data, lowData, m.Words, m.Condition, m.CaseInsensitive)
 		}
 
 		if m.Negative {
@@ -168,6 +191,34 @@ func extractAll(data string, resp *ResponseInfo, t *Template, reqIdx ...int) str
 	}
 	collect(t.Extractors)
 	return strings.Join(parts, "; ")
+}
+
+// matchWordsPre matches words, reusing a pre-lowered haystack when the
+// caller computed one for case-insensitive matching (needCI path).
+func matchWordsPre(data, lowData string, words []string, condition string, ci bool) bool {
+	if !ci {
+		return matchWords(data, words, condition, false)
+	}
+	if lowData == "" {
+		lowData = strings.ToLower(data)
+	}
+	howMany := len(words)
+	lower := func(w string) string { return strings.ToLower(w) }
+	matched := func(w string) bool { return strings.Contains(lowData, lower(w)) }
+	if strings.EqualFold(condition, "and") {
+		for _, w := range words {
+			if !matched(w) {
+				return false
+			}
+		}
+		return howMany > 0
+	}
+	for _, w := range words {
+		if matched(w) {
+			return true
+		}
+	}
+	return false
 }
 
 func matchWords(data string, words []string, condition string, caseInsensitive ...bool) bool {
@@ -450,8 +501,8 @@ func evalDSLPositive(expr string, resp *ResponseInfo) bool {
 	return false
 }
 
-func matchAll(resp *ResponseInfo, data string, m MatcherCondition) bool {
-	if len(m.Words) > 0 && !matchWords(data, m.Words, "and", m.CaseInsensitive) {
+func matchAll(resp *ResponseInfo, data, lowData string, m MatcherCondition) bool {
+	if len(m.Words) > 0 && !matchWordsPre(data, lowData, m.Words, "and", m.CaseInsensitive) {
 		return false
 	}
 	if len(m.Regex) > 0 && !matchRegexFast(data, m.Regex, "and", m.CaseInsensitive) {
@@ -466,8 +517,8 @@ func matchAll(resp *ResponseInfo, data string, m MatcherCondition) bool {
 	return true
 }
 
-func matchAny(resp *ResponseInfo, data string, m MatcherCondition) bool {
-	if matchWords(data, m.Words, "or", m.CaseInsensitive) {
+func matchAny(resp *ResponseInfo, data, lowData string, m MatcherCondition) bool {
+	if len(m.Words) > 0 && matchWordsPre(data, lowData, m.Words, "or", m.CaseInsensitive) {
 		return true
 	}
 	if matchRegexFast(data, m.Regex, "or", m.CaseInsensitive) {

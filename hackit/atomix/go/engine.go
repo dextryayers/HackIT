@@ -27,14 +27,16 @@ type Scanner struct {
 	StatsCollector *StatsCollector
 	Debugger       *Debugger
 	StartTime      time.Time
-	vars           *TemplateVars
-	throttler      *Throttler
-	bulkSize       int
-	resume         *ResumeTracker
-	hostErr        sync.Map // host -> *int32 consecutive failures
-	mu             sync.Mutex
-	findingsCh     chan Result
-	doneCh         chan struct{}
+	vars            *TemplateVars
+	throttler       *Throttler
+	bulkSize        int
+	resume          *ResumeTracker
+	hostErr         sync.Map // host -> *int32 consecutive failures
+	customHeaders   []CustomHeader
+	customHeadersOK bool
+	mu              sync.Mutex
+	findingsCh      chan Result
+	doneCh          chan struct{}
 }
 
 func NewScanner(timeout, threads int) *Scanner {
@@ -88,6 +90,9 @@ func (s *Scanner) InitScanner(cfg *ScanConfig) {
 	if cfg.Threads > 0 {
 		s.Threads = cfg.Threads
 	}
+	// Parse -H headers once instead of per request.
+	s.customHeaders = ParseCustomHeaders(cfg)
+	s.customHeadersOK = true
 }
 
 // hostOverrideFor returns the original hostname when the target URL was
@@ -190,7 +195,11 @@ func (s *Scanner) requestHeaders(req Request) map[string]string {
 			headers["Cookie"] = cfg.Cookie
 		}
 	}
-	for _, h := range ParseCustomHeaders(cfg) {
+	customHeaders := s.customHeaders
+	if !s.customHeadersOK && cfg != nil {
+		customHeaders = ParseCustomHeaders(cfg)
+	}
+	for _, h := range customHeaders {
 		if h.Name != "" {
 			headers[h.Name] = h.Value
 		}
@@ -263,10 +272,10 @@ func (s *Scanner) TestTemplate(baseURL string, t *Template, reqIdx int, req Requ
 			hostOverride := hostOverrideFor(targetURL)
 			wg.Add(1)
 			sem <- struct{}{}
-			go func(targetURL string) {
+			go func(targetURL, host, hostOverride string) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				if s.hostCircuitOpen(hostOf(targetURL)) {
+				if s.hostCircuitOpen(host) {
 					return
 				}
 				if s.Stats != nil {
@@ -285,7 +294,7 @@ func (s *Scanner) TestTemplate(baseURL string, t *Template, reqIdx int, req Requ
 					s.throttler.Adapt(err == nil)
 				}
 				if err != nil {
-					s.noteHostError(hostOf(targetURL))
+					s.noteHostError(host)
 					if s.Stats != nil {
 						s.Stats.IncErrors()
 					}
@@ -295,7 +304,7 @@ func (s *Scanner) TestTemplate(baseURL string, t *Template, reqIdx int, req Requ
 					}
 					return
 				}
-				s.noteHostSuccess(hostOf(targetURL))
+				s.noteHostSuccess(host)
 
 				resp.Duration = duration
 
@@ -345,7 +354,7 @@ func (s *Scanner) TestTemplate(baseURL string, t *Template, reqIdx int, req Requ
 				if !quiet {
 					PrintResultRealTime(r)
 				}
-			}(targetURL)
+			}(targetURL, host, hostOverride)
 		}
 	}
 	wg.Wait()

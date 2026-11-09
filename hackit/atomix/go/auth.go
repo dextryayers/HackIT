@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 func trimSpace(s string) string { return strings.TrimSpace(s) }
@@ -117,13 +118,33 @@ func ParseCustomHeaders(cfg *ScanConfig) []CustomHeader {
 	return out
 }
 
+// authProviderMemo memoizes one AuthProvider per *ScanConfig: building one
+// per request is wasteful, and with OAuth2 configured it performed a full
+// token fetch on EVERY scan request.
+var authProviderMemo sync.Map // *ScanConfig -> *AuthProvider
+
+func authProviderFor(cfg *ScanConfig) *AuthProvider {
+	if cfg == nil {
+		return nil
+	}
+	if cached, ok := authProviderMemo.Load(cfg); ok {
+		return cached.(*AuthProvider)
+	}
+	ap := NewAuthProvider(cfg)
+	actual, _ := authProviderMemo.LoadOrStore(cfg, ap)
+	return actual.(*AuthProvider)
+}
+
 // ApplyAuthHeaders merges Basic/Bearer/API-Key auth into the header map
 // without overwriting an explicit Authorization header.
 func ApplyAuthHeaders(headers map[string]string, cfg *ScanConfig) {
 	if cfg == nil || headers == nil {
 		return
 	}
-	ap := NewAuthProvider(cfg)
+	ap := authProviderFor(cfg)
+	if ap == nil {
+		return
+	}
 	for k, v := range ap.Headers {
 		if _, exists := headers[k]; !exists {
 			headers[k] = v

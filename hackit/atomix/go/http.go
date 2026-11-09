@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -28,17 +30,25 @@ var userAgents = []string{
 	"Go-http-client/2.0",
 }
 
+func newTransport() *http.Transport {
+	return &http.Transport{
+		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS10},
+		MaxIdleConns:        500,
+		MaxConnsPerHost:     200,
+		MaxIdleConnsPerHost: 100,
+		IdleConnTimeout:     90 * time.Second,
+		DisableCompression:  false,
+		// Go skips ALPN h2 when TLSClientConfig is set on the Transport
+		// unless ForceAttemptHTTP2 is explicit. Default ON: multiplexed
+		// streams are a meaningful win on h2 targets.
+		ForceAttemptHTTP2: true,
+	}
+}
+
 func NewHTTPClient(timeout int) *http.Client {
 	return &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig:     &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS10},
-			MaxIdleConns:        500,
-			MaxConnsPerHost:     200,
-			MaxIdleConnsPerHost: 100,
-			IdleConnTimeout:     90 * time.Second,
-			DisableCompression:  false,
-		},
-		Timeout: time.Duration(timeout) * time.Second,
+		Transport: newTransport(),
+		Timeout:   time.Duration(timeout) * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return http.ErrUseLastResponse
@@ -54,18 +64,9 @@ func NewConfiguredClient(config *ScanConfig) *http.Client {
 		timeout = 60
 	}
 
-	tlsCfg := &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS10}
+	transport := newTransport()
 	if config.SNI != "" {
-		tlsCfg.ServerName = config.SNI
-	}
-
-	transport := &http.Transport{
-		TLSClientConfig:     tlsCfg,
-		MaxIdleConns:        500,
-		MaxConnsPerHost:     200,
-		MaxIdleConnsPerHost: 100,
-		IdleConnTimeout:     90 * time.Second,
-		DisableCompression:  false,
+		transport.TLSClientConfig.ServerName = config.SNI
 	}
 
 	// Custom DNS resolver (comma-separated, first wins) dialed over UDP/TCP.
@@ -89,9 +90,6 @@ func NewConfiguredClient(config *ScanConfig) *http.Client {
 		}
 	}
 
-	if config.HTTP2 {
-		transport.ForceAttemptHTTP2 = true
-	}
 	if config.DisableHTTP2 {
 		transport.TLSNextProto = make(map[string]func(authority string, c *tls.Conn) http.RoundTripper)
 	}
@@ -218,6 +216,31 @@ func RandomUserAgent() string {
 
 const maxBodyBytes = 5 << 20 // 5 MiB cap on response bodies
 
+// bodyBufPool recycles read buffers across responses to reduce
+// allocation churn on large template fan-outs. Buffers larger than
+// poolBufMax are dropped instead of returned.
+var bodyBufPool = sync.Pool{New: func() interface{} {
+	b := &bytes.Buffer{}
+	b.Grow(128 * 1024)
+	return b
+}}
+
+const poolBufMax = 2 << 20
+
+// readBodyPooled reads a bounded body using a recycled buffer. The
+// returned string is a fresh copy safe for the caller to retain.
+func readBodyPooled(r io.Reader, limit int64) string {
+	buf := bodyBufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	_, _ = buf.ReadFrom(io.LimitReader(r, limit))
+	s := buf.String()
+	if buf.Cap() <= poolBufMax {
+		buf.Reset()
+		bodyBufPool.Put(buf)
+	}
+	return s
+}
+
 func ResolveURL(baseURL string, pathTmpl string, payload string) string {
 	result := strings.ReplaceAll(pathTmpl, "{{BaseURL}}", strings.TrimRight(baseURL, "/"))
 	result = strings.ReplaceAll(result, "{{URL}}", baseURL)
@@ -264,7 +287,6 @@ func SendRequest(client *http.Client, reqURL, method, body string, headers map[s
 	// Do NOT set Accept-Encoding manually: Go auto-decompresses gzip
 	// only when the header is absent. Setting it manually previously
 	// delivered gzip bytes to matchers.
-	req.Header.Set("Connection", "keep-alive")
 	req.Header.Set("Upgrade-Insecure-Requests", "1")
 
 	for k, v := range headers {
@@ -280,11 +302,14 @@ func SendRequest(client *http.Client, reqURL, method, body string, headers map[s
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	respBody := readBodyPooled(resp.Body, maxBodyBytes)
 	var headerStr strings.Builder
 	for k, vals := range resp.Header {
 		for _, v := range vals {
-			headerStr.WriteString(fmt.Sprintf("%s: %s\n", k, v))
+			headerStr.WriteString(k)
+			headerStr.WriteString(": ")
+			headerStr.WriteString(v)
+			headerStr.WriteString("\n")
 		}
 	}
 
@@ -293,7 +318,7 @@ func SendRequest(client *http.Client, reqURL, method, body string, headers map[s
 	return &ResponseInfo{
 		StatusCode:  resp.StatusCode,
 		Headers:     headerStr.String(),
-		Body:        string(respBody),
+		Body:        respBody,
 		BodyLen:     len(respBody),
 		Duration:    duration,
 		ContentType: contentType,
