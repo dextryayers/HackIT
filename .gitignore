@@ -60,7 +60,7 @@ target_custom/
 Cargo.lock.bk
 
 # Go
-go.sum
+# go.sum is committed for reproducible builds — do not ignore it.
 
 # Node / Frontend (webUI)
 node_modules/
