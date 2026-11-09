@@ -778,7 +778,7 @@ afterScan:
 	}
 
 	// Handle results
-	if !cfg.Silent {
+	if !cfg.Silent && !cfg.JSON {
 		scanner.Progress.Stop()
 		scanner.Progress.Summary()
 	}

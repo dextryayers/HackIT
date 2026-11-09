@@ -11,6 +11,7 @@ import (
 )
 
 type Scanner struct {
+	Interactive     bool
 	Client          *http.Client
 	Templates       []*Template
 	URL             string
@@ -39,6 +40,7 @@ func NewScanner(timeout, threads int) *Scanner {
 	client := NewHTTPClient(timeout)
 	client.Timeout = time.Duration(timeout) * time.Second
 	s := &Scanner{
+		Interactive: true,
 		Client:     client,
 		Threads:    threads,
 		Timeout:    timeout,
@@ -298,7 +300,9 @@ func (s *Scanner) Scan(baseURL string) []Result {
 	atomic.StoreInt32(&s.Progress.Errors, 0)
 	s.Progress.Total = int32(len(s.Templates))
 	s.Progress.StartTime = time.Now()
-	s.Progress.Start()
+	if s.Interactive {
+		s.Progress.Start()
+	}
 
 	// Recreate doneCh every scan to avoid "close of closed channel".
 	s.doneCh = make(chan struct{})
@@ -308,9 +312,11 @@ func (s *Scanner) Scan(baseURL string) []Result {
 		threads = 20
 	}
 
-	PrintScanStart(baseURL, threads, s.Timeout, len(s.Templates))
+	if s.Interactive {
+		PrintScanStart(baseURL, threads, s.Timeout, len(s.Templates))
+	}
 
-	if !s.Verbose {
+	if !s.Verbose && s.Interactive {
 		go s.progressRoutine()
 	}
 
