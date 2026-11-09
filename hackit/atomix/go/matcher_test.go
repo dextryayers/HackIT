@@ -102,7 +102,7 @@ func TestDSLBoolExpressions(t *testing.T) {
 		{"status_code == 200 && content_length > 5", true},
 	}
 	for _, tc := range cases {
-		got, err := evalDSLBool(tc.expr, resp)
+		got, err := evalDSLBool(tc.expr, resp, nil)
 		if err != nil {
 			t.Fatalf("expr %q: %v", tc.expr, err)
 		}
@@ -118,15 +118,15 @@ func TestDSLMatcherAndOrCondition(t *testing.T) {
 		Type: "dsl",
 		DSL:  []string{"status_code == 200", "contains(body, 'Admin Panel')"},
 	}
-	if !matchDSL(resp, m) { // default OR across list
+	if !matchDSL(resp, m, nil) { // default OR across list
 		t.Fatal("or-dsl must match")
 	}
 	m.Condition = "and"
-	if !matchDSL(resp, m) {
+	if !matchDSL(resp, m, nil) {
 		t.Fatal("and-dsl must match")
 	}
 	m.DSL = []string{"status_code == 200", "contains(body, 'nope')"}
-	if matchDSL(resp, m) {
+	if matchDSL(resp, m, nil) {
 		t.Fatal("and-dsl must not match when one atom fails")
 	}
 }
@@ -206,7 +206,7 @@ func TestNegativeMatcher(t *testing.T) {
 
 func TestExtractRegex(t *testing.T) {
 	resp := testResp()
-	extracted := extractData(resp.Body, resp, &Extractor{Type: "regex", Regex: []string{`<title>([^<]+)</title>`}})
+	extracted := extractData(resp.Body, resp, &Extractor{Type: "regex", Regex: []string{`<title>([^<]+)</title>`}}, nil)
 	if extracted != "Admin Panel" {
 		t.Fatalf("regex extractor got %q", extracted)
 	}
@@ -226,7 +226,7 @@ func TestExtractJSON(t *testing.T) {
 
 func TestExtractKval(t *testing.T) {
 	resp := testResp()
-	extracted := extractData("", resp, &Extractor{Type: "kval", Kval: []string{"server", "set-cookie"}})
+	extracted := extractData("", resp, &Extractor{Type: "kval", Kval: []string{"server", "set-cookie"}}, nil)
 	if !strings.Contains(extracted, "nginx/1.25.3") {
 		t.Fatalf("kval extractor got %q", extracted)
 	}
@@ -237,7 +237,7 @@ func TestExtractKval(t *testing.T) {
 
 func TestExtractDSL(t *testing.T) {
 	resp := testResp()
-	extracted := extractDSL(resp, []string{"to_upper('abc')", "status_code"})
+	extracted := extractDSL(resp, []string{"to_upper('abc')", "status_code"}, nil)
 	if !strings.Contains(extracted, "ABC") {
 		t.Fatalf("dsl extractor got %q", extracted)
 	}
@@ -247,9 +247,11 @@ func TestJoinRequestURL(t *testing.T) {
 	cases := []struct{ base, path, want string }{
 		{"https://a.example.com", "/login", "https://a.example.com/login"},
 		{"https://a.example.com/", "login", "https://a.example.com/login"},
-		{"https://a.example.com", "{{BaseURL}}/x", "https://a.example.com/{{BaseURL}}/x"}, // vars pre-resolved by engine
+		{"https://a.example.com", "{{BaseURL}}/x", "https://a.example.com/%7B%7BBaseURL%7D%7D/x"}, // vars pre-resolved by engine; raw braces get encoded
 		{"https://a.example.com", "http://other.example.com/y", "http://other.example.com/y"},
 		{"https://a.example.com/sub/", "/abs", "https://a.example.com/sub/abs"},
+		{"https://a.example.com", "/search?q=a b&lang=en", "https://a.example.com/search?q=a%20b&lang=en"},
+		{"https://a.example.com", "/q?x=%27&y=a%zz", "https://a.example.com/q?x=%27&y=a%25zz"},
 	}
 	for _, tc := range cases {
 		if got := joinRequestURL(tc.base, tc.path); got != tc.want {

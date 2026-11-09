@@ -57,7 +57,7 @@ SECTIONS = {
         "fuzz", "fuzz_thread", "fuzz_recursive", "path", "payloads",
         "detect_tech", "waf_skip", "waf_bypass", "api_discovery",
         "auth", "auth_token", "api_key", "custom_agent", "rand_agent",
-        "cookie", "cookie_jar", "header", "scan_all_ips",
+        "cookie", "cookie_jar", "header", "scan_all_ips", "suppress_reflection_match",
         "exclude_ports", "interactsh", "oob_server", "oob_token", "oob_type",
         "monitor", "diff", "replay", "resume",
     ],
@@ -214,6 +214,7 @@ class _GroupedHelpCommand(click.Command):
 @click.option("--payloads", default="", help="Custom payloads file")
 @click.option("--detect-tech", "--tech-detect", is_flag=True, help="Detect technologies")
 @click.option("--waf-skip", is_flag=True, help="Skip WAF detection")
+@click.option("--suppress-reflection-match", is_flag=True, help="Suppress findings whose evidence appears in the request itself")
 @click.option("--waf-bypass", is_flag=True, help="WAF bypass attempts")
 @click.option("--api-discovery", is_flag=True, help="Discover API endpoints")
 @click.option("--auth", default="", help="Basic auth: user:pass")

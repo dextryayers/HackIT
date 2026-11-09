@@ -51,7 +51,11 @@ func getHeadersMap(headers string) map[string]string {
 	return result
 }
 
-func MatchTemplate(resp *ResponseInfo, t *Template, reqIdx int) *MatchResult {
+func MatchTemplate(resp *ResponseInfo, t *Template, reqIdx int, baseline ...*ResponseInfo) *MatchResult {
+	var base *ResponseInfo
+	if len(baseline) > 0 {
+		base = baseline[0]
+	}
 	matchers := t.Matchers
 	cond := t.MatchersCondition
 	if len(matchers) == 0 && reqIdx < len(t.Requests) {
@@ -63,6 +67,10 @@ func MatchTemplate(resp *ResponseInfo, t *Template, reqIdx int) *MatchResult {
 	if len(matchers) == 0 {
 		return &MatchResult{Matched: false}
 	}
+
+	// Haystack of the request itself — used to detect payload-reflection
+	// matchers (evidence the request can produce without a flaw).
+	reqHaystack := requestHaystack(t, reqIdx)
 
 	body := resp.Body
 	headers := resp.Headers
@@ -124,7 +132,7 @@ func MatchTemplate(resp *ResponseInfo, t *Template, reqIdx int) *MatchResult {
 		case "size":
 			match = matchSize(resp.BodyLen, m.Size)
 		case "dsl":
-			match = matchDSL(resp, m)
+			match = matchDSL(resp, m, base)
 		case "and":
 			match = matchAll(resp, data, lowData, m)
 		case "or":
@@ -142,16 +150,22 @@ func MatchTemplate(resp *ResponseInfo, t *Template, reqIdx int) *MatchResult {
 		}
 
 		if match && firstHit == nil {
-			extracted := extractAll(data, resp, t, reqIdx)
+			extracted := extractAll(data, resp, t, base, reqIdx)
 			name := m.Name
 			if name == "" {
 				name = t.ID
+			}
+			confidence := scoreMatcherConfidence(m, data, andMode)
+			reflection := matcherTouchesRequest(m, reqHaystack)
+			if reflection {
+				confidence = "low"
 			}
 			firstHit = &MatchResult{
 				Matched:     true,
 				Extracted:   extracted,
 				MatcherName: name,
-				Confidence:  scoreMatcherConfidence(m, data, andMode),
+				Confidence:  confidence,
+				Reflection:  reflection,
 			}
 			if !andMode {
 				return firstHit
@@ -167,16 +181,53 @@ func MatchTemplate(resp *ResponseInfo, t *Template, reqIdx int) *MatchResult {
 	return &MatchResult{Matched: false}
 }
 
+func requestHaystack(t *Template, reqIdx int) string {
+	if reqIdx < 0 || reqIdx >= len(t.Requests) {
+		return ""
+	}
+	req := t.Requests[reqIdx]
+	var b strings.Builder
+	for _, p := range req.Path {
+		b.WriteString(strings.ToLower(p))
+		b.WriteByte(0)
+	}
+	b.WriteString(strings.ToLower(req.Body))
+	return b.String()
+}
+
+// matcherTouchesRequest reports whether the matcher's evidence also
+// appears inside the request itself.
+func matcherTouchesRequest(m MatcherCondition, haystack string) bool {
+	if haystack == "" {
+		return false
+	}
+	for _, w := range m.Words {
+		tw := strings.ToLower(strings.TrimSpace(w))
+		if tw != "" && strings.Contains(haystack, tw) {
+			return true
+		}
+	}
+	for _, r := range m.Regex {
+		if re, err := getRegex(r); err == nil && re.MatchString(haystack) {
+			return true
+		}
+	}
+	for _, d := range m.DSL {
+		_ = d // DSL attribution is not attemptable cheaply; skip penalty
+	}
+	return false
+}
+
 // extractAll gathers output from request-scoped extractors, the legacy
 // single template-level extractor and the plural template-level form.
-func extractAll(data string, resp *ResponseInfo, t *Template, reqIdx ...int) string {
+func extractAll(data string, resp *ResponseInfo, t *Template, base *ResponseInfo, reqIdx ...int) string {
 	parts := []string{}
 	collect := func(list []*Extractor) {
 		for _, e := range list {
 			if e == nil {
 				continue
 			}
-			if x := extractData(data, resp, e); x != "" {
+			if x := extractData(data, resp, e, base); x != "" {
 				parts = append(parts, x)
 			}
 		}
@@ -185,7 +236,7 @@ func extractAll(data string, resp *ResponseInfo, t *Template, reqIdx ...int) str
 		collect(t.Requests[reqIdx[0]].Extractors)
 	}
 	if t.Extractor != nil {
-		if e := extractData(data, resp, t.Extractor); e != "" {
+		if e := extractData(data, resp, t.Extractor, base); e != "" {
 			parts = append(parts, e)
 		}
 	}
@@ -297,7 +348,7 @@ func matchSize(size int, sizes []int) bool {
 	return false
 }
 
-func matchDSL(resp *ResponseInfo, m MatcherCondition) bool {
+func matchDSL(resp *ResponseInfo, m MatcherCondition, base *ResponseInfo) bool {
 	exprs := m.DSL
 	if len(exprs) == 0 {
 		exprs = m.Words
@@ -308,7 +359,7 @@ func matchDSL(resp *ResponseInfo, m MatcherCondition) bool {
 		if e == "" {
 			continue
 		}
-		ok, err := evalDSLBool(e, resp)
+		ok, err := evalDSLBool(e, resp, base)
 		if err != nil {
 			// Legacy fallback: the pre-expr engine understood a small
 			// atom language; keep it alive for archaic templates.
@@ -534,7 +585,7 @@ func matchAny(resp *ResponseInfo, data, lowData string, m MatcherCondition) bool
 }
 
 // extractData supports regex, json, kval and dsl extractor types.
-func extractData(data string, resp *ResponseInfo, e *Extractor) string {
+func extractData(data string, resp *ResponseInfo, e *Extractor, base *ResponseInfo) string {
 	if e == nil {
 		return ""
 	}
@@ -544,7 +595,7 @@ func extractData(data string, resp *ResponseInfo, e *Extractor) string {
 	case "kval":
 		return extractKval(resp.Headers, e.Kval)
 	case "dsl":
-		return extractDSL(resp, e.DSL)
+		return extractDSL(resp, e.DSL, base)
 	default:
 		return extractRegex(data, e.Regex)
 	}
@@ -636,14 +687,14 @@ func extractKval(headers string, keys []string) string {
 	return strings.Join(found, "; ")
 }
 
-func extractDSL(resp *ResponseInfo, exprs []string) string {
+func extractDSL(resp *ResponseInfo, exprs []string, base *ResponseInfo) string {
 	var found []string
 	for _, e := range exprs {
 		e = strings.TrimSpace(e)
 		if e == "" {
 			continue
 		}
-		v, err := evalDSLValue(e, resp)
+		v, err := evalDSLValue(e, resp, base)
 		if err == nil && v != "" {
 			found = append(found, v)
 		}

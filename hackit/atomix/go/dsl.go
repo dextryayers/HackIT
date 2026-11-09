@@ -94,9 +94,17 @@ func headerValue(allHeaders, name string) string {
 	return ""
 }
 
-func buildDSLEnv(resp *ResponseInfo) map[string]interface{} {
+func buildDSLEnv(resp *ResponseInfo, baseline *ResponseInfo) map[string]interface{} {
 	body := resp.Body
 	headers := resp.Headers
+
+	// Baseline env: zeros when the template has no baseline (values fetched).
+	var baseDuration, baseBodyLen, baseStatus float64
+	if baseline != nil {
+		baseDuration = baseline.Duration.Seconds()
+		baseBodyLen = float64(baseline.BodyLen)
+		baseStatus = float64(baseline.StatusCode)
+	}
 
 	contains := func(hay, needle interface{}) bool {
 		return strings.Contains(toStr(hay), toStr(needle))
@@ -194,6 +202,9 @@ func buildDSLEnv(resp *ResponseInfo) map[string]interface{} {
 		"header":         headers,
 		"all_headers":    headers,
 		"content_type":   resp.ContentType,
+		"baseline_duration":    baseDuration,
+		"baseline_body_length": baseBodyLen,
+		"baseline_status_code": baseStatus,
 
 		// "contains" is an infix operator in expr-lang; the function form
 		// lives under __contains and expressions are rewritten by
@@ -289,7 +300,7 @@ func compileDSL(expression string, asBool bool) (*vm.Program, error) {
 	var program *vm.Program
 	var err error
 	opts := []expr.Option{
-		expr.Env(buildDSLEnv(&ResponseInfo{})),
+		expr.Env(buildDSLEnv(&ResponseInfo{}, &ResponseInfo{})),
 		expr.DisableAllBuiltins(),
 	}
 	if asBool {
@@ -304,12 +315,12 @@ func compileDSL(expression string, asBool bool) (*vm.Program, error) {
 }
 
 // evalDSLBool evaluates an expression that must yield a boolean.
-func evalDSLBool(expression string, resp *ResponseInfo) (bool, error) {
+func evalDSLBool(expression string, resp *ResponseInfo, baseline *ResponseInfo) (bool, error) {
 	program, err := compileDSL(expression, true)
 	if err != nil {
 		return false, err
 	}
-	env := buildDSLEnv(resp)
+	env := buildDSLEnv(resp, baseline)
 	out, err := expr.Run(program, env)
 	if err != nil {
 		return false, err
@@ -330,12 +341,12 @@ func evalDSLBool(expression string, resp *ResponseInfo) (bool, error) {
 
 // evalDSLValue evaluates an expression and stringifies the result
 // (used by `type: dsl` extractors).
-func evalDSLValue(expression string, resp *ResponseInfo) (string, error) {
+func evalDSLValue(expression string, resp *ResponseInfo, baseline *ResponseInfo) (string, error) {
 	program, err := compileDSL(expression, false)
 	if err != nil {
 		return "", err
 	}
-	out, err := expr.Run(program, buildDSLEnv(resp))
+	out, err := expr.Run(program, buildDSLEnv(resp, baseline))
 	if err != nil {
 		return "", err
 	}

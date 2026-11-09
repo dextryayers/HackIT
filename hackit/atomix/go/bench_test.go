@@ -79,7 +79,7 @@ func BenchmarkDSLBool(b *testing.B) {
 	resp := benchResp()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		evalDSLBool("len(body) > 100 && status_code == 200 && contains(body, 'admin-panel')", resp)
+		evalDSLBool("len(body) > 100 && status_code == 200 && contains(body, 'admin-panel')", resp, nil)
 	}
 }
 

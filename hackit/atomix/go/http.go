@@ -216,6 +216,70 @@ func RandomUserAgent() string {
 
 const maxBodyBytes = 5 << 20 // 5 MiB cap on response bodies
 
+// urlPathQueryChar reports whether b is legal raw in the path component
+// or the query component. Go's transport writes RequestURI verbatim, so
+// raw spaces (or quotes/brackets from payloads) produce malformed request
+// lines and 400s from strict servers.
+func urlPathQueryChar(b byte) bool {
+	switch {
+	case b >= 'A' && b <= 'Z', b >= 'a' && b <= 'z', b >= '0' && b <= '9':
+		return true
+	}
+	switch b {
+	case '-', '.', '_', '~', // unreserved
+		'!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=', // sub-delims
+		':', '/', '?', '@': // allowed in query/path (pchar, path also '/')
+		return true
+	}
+	return false
+}
+
+// sanitizeRequestURL percent-encodes characters that are illegal raw in
+// the path and query components while preserving:
+//   - already-valid percent-triplets (payloads like %27 pass through),
+//   - structural query characters (&, =, ?) and sub-delims (raw ' stays).
+// Applied at the HTTP boundary; idempotent.
+func sanitizeRequestURL(raw string) string {
+	i := strings.Index(raw, "?")
+	if i < 0 {
+		return sanitizeSegment(raw, false)
+	}
+	return sanitizeSegment(raw[:i], false) + "?" + sanitizeSegment(raw[i+1:], true)
+}
+
+func sanitizeSegment(s string, isQuery bool) string {
+	var b strings.Builder
+	b.Grow(len(s) + 16)
+	hex := "0123456789ABCDEF"
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '%' && i+2 < len(s) && isHex(s[i+1]) && isHex(s[i+2]) {
+			b.WriteByte(c)
+			b.WriteByte(s[i+1])
+			b.WriteByte(s[i+2])
+			i += 2
+			continue
+		}
+		if urlPathQueryChar(c) {
+			if !isQuery && c == '?' {
+				// path segment may not carry '?' raw
+				b.WriteString("%3F")
+				continue
+			}
+			b.WriteByte(c)
+			continue
+		}
+		b.WriteByte('%')
+		b.WriteByte(hex[c>>4])
+		b.WriteByte(hex[c&0x0f])
+	}
+	return b.String()
+}
+
+func isHex(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}
+
 // bodyBufPool recycles read buffers across responses to reduce
 // allocation churn on large template fan-outs. Buffers larger than
 // poolBufMax are dropped instead of returned.
@@ -262,7 +326,7 @@ func SendRequest(client *http.Client, reqURL, method, body string, headers map[s
 		method = "GET"
 	}
 
-	req, err := http.NewRequest(method, reqURL, reqBody)
+	req, err := http.NewRequest(method, sanitizeRequestURL(reqURL), reqBody)
 	if err != nil {
 		return nil, err
 	}

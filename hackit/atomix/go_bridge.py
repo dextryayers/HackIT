@@ -29,6 +29,7 @@ FLAG_MAP = {
     "follow_redirects": "-follow-redirects", "max_redirects": "-max-redirects",
     "auth": "-auth", "auth_token": "-auth-token", "api_key": "-api-key",
     "waf_skip": "-waf-skip", "waf_bypass": "-waf-bypass",
+    "suppress_reflection_match": "-suppress-reflection-match",
     "detect_tech": "-tech-detect", "api_discovery": "-api-discovery",
     "interactsh": "-interactsh", "oob_server": "-oob-server",
     "oob_token": "-oob-token", "oob_type": "-oob-type",

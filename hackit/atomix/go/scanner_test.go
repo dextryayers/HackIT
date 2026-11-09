@@ -88,3 +88,29 @@ func TestDeduplicator(t *testing.T) {
 		t.Fatal("different matcher must not be a duplicate")
 	}
 }
+
+func TestSanitizeRequestURL(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"http://a.example.com/?q=1' UNION SELECT NULL--", "http://a.example.com/?q=1'%20UNION%20SELECT%20NULL--"},
+		{"http://a.example.com/?q=%27%20%22", "http://a.example.com/?q=%27%20%22"}, // valid triplets preserved
+		{"http://a.example.com/?x=%zz", "http://a.example.com/?x=%25zz"},          // invalid triplet → %25
+		{"http://a.example.com/a b/c[d]?e=f g&h=<x>", "http://a.example.com/a%20b/c%5Bd%5D?e=f%20g&h=%3Cx%3E"},
+		{"http://a.example.com/search?q=test&lang=en", "http://a.example.com/search?q=test&lang=en"},
+	}
+	for _, tc := range cases {
+		if got := sanitizeRequestURL(tc.in); got != tc.want {
+			t.Errorf("sanitizeRequestURL(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestBaselineURLFor(t *testing.T) {
+	got := baselineURLFor("http://a.example.com/?q=1'%20OR%20SLEEP(5)--&x=y")
+	want := "http://a.example.com/?q=1&x=1"
+	if got != want {
+		t.Fatalf("baselineURLFor = %q, want %q", got, want)
+	}
+	if baselineURLFor("http://a.example.com/path") != "http://a.example.com/path" {
+		t.Fatal("no query → must return unchanged")
+	}
+}

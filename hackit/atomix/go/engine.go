@@ -34,9 +34,55 @@ type Scanner struct {
 	hostErr         sync.Map // host -> *int32 consecutive failures
 	customHeaders   []CustomHeader
 	customHeadersOK bool
+	baselineCache   sync.Map // baseline URL -> *ResponseInfo
 	mu              sync.Mutex
 	findingsCh      chan Result
 	doneCh          chan struct{}
+}
+
+// baselineURLFor rewrites every query value to "1" — the benign
+// counterpart of an injected payload URL, used for differential
+// (time-based) detection.
+func baselineURLFor(rawURL string) string {
+	i := strings.Index(rawURL, "?")
+	if i < 0 {
+		return rawURL
+	}
+	path, query := rawURL[:i], rawURL[i+1:]
+	pairs := strings.Split(query, "&")
+	for j, p := range pairs {
+		if eq := strings.Index(p, "="); eq >= 0 {
+			pairs[j] = p[:eq+1] + "1"
+		}
+	}
+	return sanitizeRequestURL(path + "?" + strings.Join(pairs, "&"))
+}
+
+// baselineFor fetches (once per scan, cached) the benign counterpart of
+// the payload URL. GET only; other methods return nil. Stored response
+// powers baseline_* DSL variables.
+func (s *Scanner) baselineFor(targetURL, method string, headers map[string]string, hostOverride string) *ResponseInfo {
+	if method != "" && method != "GET" {
+		return nil
+	}
+	bu := baselineURLFor(targetURL)
+	if bu == targetURL {
+		return nil // no query string → same URL, differential is meaningless
+	}
+	if cached, ok := s.baselineCache.Load(bu); ok {
+		b, _ := cached.(*ResponseInfo)
+		return b
+	}
+	start := time.Now()
+	resp, err := SendRequest(s.Client, bu, "GET", "", headers, hostOverride)
+	duration := time.Since(start)
+	if err != nil {
+		s.baselineCache.Store(bu, &ResponseInfo{})
+		return &ResponseInfo{}
+	}
+	resp.Duration = duration
+	s.baselineCache.Store(bu, resp)
+	return resp
 }
 
 func NewScanner(timeout, threads int) *Scanner {
@@ -112,19 +158,20 @@ func hostOverrideFor(targetURL string) string {
 // joinRequestURL maps a template path onto the scan target. Paths that
 // already carry a scheme are used verbatim; absolute paths are joined
 // onto the origin; everything else is resolved relative to the base.
+// Illegal raw characters are percent-encoded so the request line is valid.
 func joinRequestURL(baseURL, path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return baseURL
+		return sanitizeRequestURL(baseURL)
 	}
 	if strings.Contains(path, "://") {
-		return path
+		return sanitizeRequestURL(path)
 	}
 	trimmedBase := strings.TrimRight(baseURL, "/")
 	if strings.HasPrefix(path, "/") {
-		return trimmedBase + path
+		return sanitizeRequestURL(trimmedBase + path)
 	}
-	return trimmedBase + "/" + path
+	return sanitizeRequestURL(trimmedBase + "/" + path)
 }
 
 // hostErrorThreshold: <=0 means the circuit breaker is disabled.
@@ -270,9 +317,13 @@ func (s *Scanner) TestTemplate(baseURL string, t *Template, reqIdx int, req Requ
 				continue
 			}
 			hostOverride := hostOverrideFor(targetURL)
+			var baseline *ResponseInfo
+			if req.Baseline {
+				baseline = s.baselineFor(targetURL, method, headers, hostOverride)
+			}
 			wg.Add(1)
 			sem <- struct{}{}
-			go func(targetURL, host, hostOverride string) {
+			go func(targetURL, host, hostOverride string, baseline *ResponseInfo) {
 				defer wg.Done()
 				defer func() { <-sem }()
 				if s.hostCircuitOpen(host) {
@@ -308,8 +359,15 @@ func (s *Scanner) TestTemplate(baseURL string, t *Template, reqIdx int, req Requ
 
 				resp.Duration = duration
 
-				match := MatchTemplate(resp, t, reqIdx)
+				match := MatchTemplate(resp, t, reqIdx, baseline)
 				if match == nil || !match.Matched {
+					return
+				}
+				if match.Reflection && s.Config != nil && s.Config.SuppressReflectionMatch {
+					if s.Verbose {
+						fmt.Fprintf(os.Stderr, "  %s Suppressed (payload reflection): %s %s\n",
+							SColor(ColorDim, "•"), t.ID, targetURL)
+					}
 					return
 				}
 				if s.Deduplicator.IsDuplicate(t.ID, targetURL, match.MatcherName) {
@@ -354,7 +412,7 @@ func (s *Scanner) TestTemplate(baseURL string, t *Template, reqIdx int, req Requ
 				if !quiet {
 					PrintResultRealTime(r)
 				}
-			}(targetURL, host, hostOverride)
+			}(targetURL, host, hostOverride, baseline)
 		}
 	}
 	wg.Wait()

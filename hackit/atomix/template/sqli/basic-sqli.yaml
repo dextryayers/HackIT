@@ -48,11 +48,34 @@ requests:
       - "{{BaseURL}}?q=1' AND 1=1--"
       - "{{BaseURL}}?q=1' AND 1=2--"
     matchers:
-      - type: word
-        words:
-          - "1' AND '1'='1"
+      - type: regex
+        regex:
+          - "You have an error in your SQL"
+          - "SQL syntax.*MySQL"
+          - "Warning.*mysql_"
+          - "MySqlException"
+          - "Unclosed quotation mark"
+          - "Unclosed quotation"
+          - "Microsoft OLE DB.*SQL"
+          - "ODBC SQL Server Driver"
+          - "You have an error"
+          - "PostgreSQL.*ERROR"
+          - "ERROR:  syntax error"
+          - "ERROR:  unterminated"
+          - "PG::Error"
+          - "pg_query"
+          - "Driver.*SQL Server"
+          - "SQLite/JDBCDriver"
+          - "SQLite.Exception"
+          - "System.Data.SQLite"
+          - "org.sqlite."
+          - "SQLSTATE\\[[0-9]"
+          - "ORA-009[0-9][0-9][0-9]"
+          - "ORA-01785"
+          - "Microsoft Access.*(syntax|error)"
+          - "Unterminated quoted string"
         condition: or
-        name: "boolean-sqli-response-diff"
+        name: "boolean-blind-sqli"
 ---
 id: time-based-sqli
 info:
@@ -63,15 +86,16 @@ info:
   tags: sqli,blind,time-based
 requests:
   - method: GET
+    baseline: true
     path:
       - "{{BaseURL}}?q=1' OR SLEEP(5)--"
       - "{{BaseURL}}?q=1' WAITFOR DELAY '0:0:5'--"
       - "{{BaseURL}}?q=1' AND SLEEP(5)--"
       - "{{BaseURL}}?q=1; SELECT SLEEP(5)"
     matchers:
-      - type: word
-        words:
-          - "SLEEP"
+      - type: dsl
+        dsl:
+          - "duration > 4 && baseline_duration > 0 && duration > baseline_duration * 2"
         name: "time-based-sqli"
 ---
 id: union-based-sqli
@@ -90,8 +114,31 @@ requests:
     matchers:
       - type: regex
         regex:
-          - "1.*2.*3"
-          - "NULL"
+          - "You have an error in your SQL"
+          - "SQL syntax.*MySQL"
+          - "Warning.*mysql_"
+          - "MySqlException"
+          - "Unclosed quotation mark"
+          - "Unclosed quotation"
+          - "Microsoft OLE DB.*SQL"
+          - "ODBC SQL Server Driver"
+          - "You have an error"
+          - "PostgreSQL.*ERROR"
+          - "ERROR:  syntax error"
+          - "ERROR:  unterminated"
+          - "PG::Error"
+          - "pg_query"
+          - "Driver.*SQL Server"
+          - "SQLite/JDBCDriver"
+          - "SQLite.Exception"
+          - "System.Data.SQLite"
+          - "org.sqlite."
+          - "SQLSTATE\\[[0-9]"
+          - "ORA-009[0-9][0-9][0-9]"
+          - "ORA-01785"
+          - "Microsoft Access.*(syntax|error)"
+          - "Unterminated quoted string"
+        condition: or
         name: "union-based-sqli"
 ---
 id: postgres-sqli
@@ -109,8 +156,13 @@ requests:
     matchers:
       - type: regex
         regex:
-          - "pg_sleep"
-          - "PostgreSQL"
+          - "ERROR:  syntax error"
+          - "ERROR:  unterminated quoted string"
+          - "ERROR:  invalid input syntax"
+          - "PG::Error"
+          - "pg_query"
+          - "PostgreSQL.*ERROR"
+          - "org.postgresql"
         condition: or
         name: "postgres-sqli"
 ---
@@ -128,11 +180,16 @@ requests:
       - "{{BaseURL}}?q=1' HAVING 1=1--"
       - "{{BaseURL}}?q=1' EXEC xp_cmdshell('whoami')--"
     matchers:
-      - type: word
-        words:
-          - "WAITFOR"
-          - "HAVING"
-          - "xp_cmdshell"
+      - type: regex
+        regex:
+          - "Incorrect syntax near"
+          - "Unclosed quotation mark"
+          - "Microsoft OLE DB Provider for SQL"
+          - "Microsoft SQL Native Client"
+          - "ODBC SQL Server Driver"
+          - "Microsoft OLE DB.*SQL Server"
+          - "System.Data.SqlClient"
+          - "Microsoft.SqlServer"
         condition: or
         name: "mssql-sqli"
 ---
@@ -152,10 +209,32 @@ requests:
       - "{{BaseURL}}?q=1' A%ND 1=1--"
       - "{{BaseURL}}?q=1'%20AND%201=1--"
     matchers:
-      - type: word
-        words:
-          - "AND 1=1"
-          - "A%ND 1=1"
+      - type: regex
+        regex:
+          - "You have an error in your SQL"
+          - "SQL syntax.*MySQL"
+          - "Warning.*mysql_"
+          - "MySqlException"
+          - "Unclosed quotation mark"
+          - "Unclosed quotation"
+          - "Microsoft OLE DB.*SQL"
+          - "ODBC SQL Server Driver"
+          - "You have an error"
+          - "PostgreSQL.*ERROR"
+          - "ERROR:  syntax error"
+          - "ERROR:  unterminated"
+          - "PG::Error"
+          - "pg_query"
+          - "Driver.*SQL Server"
+          - "SQLite/JDBCDriver"
+          - "SQLite.Exception"
+          - "System.Data.SQLite"
+          - "org.sqlite."
+          - "SQLSTATE\\[[0-9]"
+          - "ORA-009[0-9][0-9][0-9]"
+          - "ORA-01785"
+          - "Microsoft Access.*(syntax|error)"
+          - "Unterminated quoted string"
         condition: or
         name: "sqli-waf-bypass"
 ---
@@ -172,9 +251,33 @@ requests:
       - "{{BaseURL}}"
     body: "name=test' OR '1'='1&email=test@test.com"
     matchers:
-      - type: word
-        words:
-          - "OR '1'='1"
+      - type: regex
+        regex:
+          - "You have an error in your SQL"
+          - "SQL syntax.*MySQL"
+          - "Warning.*mysql_"
+          - "MySqlException"
+          - "Unclosed quotation mark"
+          - "Unclosed quotation"
+          - "Microsoft OLE DB.*SQL"
+          - "ODBC SQL Server Driver"
+          - "You have an error"
+          - "PostgreSQL.*ERROR"
+          - "ERROR:  syntax error"
+          - "ERROR:  unterminated"
+          - "PG::Error"
+          - "pg_query"
+          - "Driver.*SQL Server"
+          - "SQLite/JDBCDriver"
+          - "SQLite.Exception"
+          - "System.Data.SQLite"
+          - "org.sqlite."
+          - "SQLSTATE\\[[0-9]"
+          - "ORA-009[0-9][0-9][0-9]"
+          - "ORA-01785"
+          - "Microsoft Access.*(syntax|error)"
+          - "Unterminated quoted string"
+        condition: or
         name: "second-order-sqli"
 ---
 id: nosql-injection
@@ -192,11 +295,14 @@ requests:
       - "{{BaseURL}}?q[$regex]=.*"
       - "{{BaseURL}}?user[$ne]=admin&pass[$ne]=admin"
     matchers:
-      - type: word
-        words:
-          - "$ne"
-          - "$gt"
-          - "$regex"
+      - type: regex
+        regex:
+          - "Mongo(Server)?Error"
+          - "CastError"
+          - "BsonTypeError"
+          - "BSON field"
+          - "unrecognized( operator| option)"
+          - "Unexpected token \\$"
         condition: or
         name: "nosql-injection"
 ---
@@ -217,9 +323,29 @@ requests:
     matchers:
       - type: regex
         regex:
-          - "version"
-          - "database()"
-          - "user()"
-          - "table_name"
+          - "You have an error in your SQL"
+          - "SQL syntax.*MySQL"
+          - "Warning.*mysql_"
+          - "MySqlException"
+          - "Unclosed quotation mark"
+          - "Unclosed quotation"
+          - "Microsoft OLE DB.*SQL"
+          - "ODBC SQL Server Driver"
+          - "You have an error"
+          - "PostgreSQL.*ERROR"
+          - "ERROR:  syntax error"
+          - "ERROR:  unterminated"
+          - "PG::Error"
+          - "pg_query"
+          - "Driver.*SQL Server"
+          - "SQLite/JDBCDriver"
+          - "SQLite.Exception"
+          - "System.Data.SQLite"
+          - "org.sqlite."
+          - "SQLSTATE\\[[0-9]"
+          - "ORA-009[0-9][0-9][0-9]"
+          - "ORA-01785"
+          - "Microsoft Access.*(syntax|error)"
+          - "Unterminated quoted string"
         condition: or
         name: "sqli-data-exfil"

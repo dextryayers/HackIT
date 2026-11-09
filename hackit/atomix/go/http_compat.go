@@ -93,6 +93,7 @@ type HTTPRequestBlock struct {
 	Redirects         bool                `yaml:"redirects,omitempty"`
 	MaxRedirects      int                 `yaml:"max-redirects,omitempty"`
 	Extractors        []*Extractor        `yaml:"extractors,omitempty"`
+	Baseline          bool                `yaml:"baseline,omitempty"`
 }
 
 var attackMarkerRe = regexp.MustCompile(`§([^§]+)§`)
@@ -109,6 +110,8 @@ func expandAttack(nr HTTPRequestBlock) []Request {
 			StopAtFirstMatch:  nr.StopAtFirstMatch,
 			Redirects:         nr.Redirects,
 			MaxRedirects:      nr.MaxRedirects,
+			Extractors:        nr.Extractors,
+			Baseline:          nr.Baseline,
 		}}
 	}
 
@@ -176,6 +179,8 @@ func expandAttack(nr HTTPRequestBlock) []Request {
 			StopAtFirstMatch:  nr.StopAtFirstMatch,
 			Redirects:         nr.Redirects,
 			MaxRedirects:      nr.MaxRedirects,
+			Extractors:        nr.Extractors,
+			Baseline:          nr.Baseline,
 		})
 	}
 	return out

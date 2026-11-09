@@ -15,15 +15,24 @@ requests:
     headers:
       Content-Type: "application/json"
     matchers:
-      - type: word
-        words:
-          - "SELECT"
-          - "FROM"
-          - "WHERE"
-          - "mysql"
-          - "sql"
+      - type: regex
+        regex:
+          - "You have an error in your SQL"
+          - "SQL syntax.*MySQL"
+          - "You have an error"
+          - "Unclosed quotation"
+          - "Microsoft OLE DB.*SQL"
+          - "ODBC SQL Server Driver"
+          - "Incorrect syntax near"
+          - "ERROR:  syntax error"
+          - "ERROR:  unterminated"
+          - "PG::Error"
+          - "pg_query"
+          - "SQLSTATE\\[[0-9]"
+          - "ORA-009[0-9][0-9][0-9]"
+          - "Microsoft Access.*(syntax|error)"
         condition: or
-        name: "json-sql-reflection"
+        name: "json-sqli"
 ---
 id: sqli-header-injection
 info:
@@ -42,13 +51,20 @@ requests:
       User-Agent: "' OR SLEEP(5)--"
       Cookie: "session=' OR '1'='1'--"
     matchers:
-      - type: word
-        words:
-          - "Warning:"
+      - type: regex
+        regex:
+          - "Warning.*mysql_"
           - "mysql_fetch"
+          - "MySqlException"
           - "SQL syntax"
-          - "unclosed quotation"
-          - "Incorrect syntax"
+          - "Unclosed quotation"
+          - "Incorrect syntax near"
+          - "Microsoft OLE DB"
+          - "You have an error"
+          - "PostgreSQL.*ERROR"
+          - "PG::Error"
+          - "SQLite.Exception"
+          - "System.Data.SqlClient"
         condition: or
         name: "header-sqli"
 ---
@@ -68,12 +84,14 @@ requests:
       - "{{BaseURL}}?id=1+ORDER+BY+4"
       - "{{BaseURL}}?id=1+ORDER+BY+5"
     matchers:
-      - type: word
-        words:
-          - "ORDER BY"
+      - type: regex
+        regex:
           - "Unknown column"
+          - "column ['\"]?[0-9]+['\"]? does not exist"
+          - "ORA-01785"
+          - "ORDER BY clause"
         condition: or
-        name: "order-by-reflected"
+        name: "order-by-error"
 ---
 id: sqli-like-clause
 info:
@@ -89,12 +107,18 @@ requests:
       - "{{BaseURL}}?id=1+AND+'1'LIKE'1"
       - "{{BaseURL}}?id=1+AND+'admin'LIKE'a%25"
     matchers:
-      - type: word
-        words:
-          - "LIKE"
-          - "%"
+      - type: regex
+        regex:
+          - "You have an error in your SQL"
+          - "SQL syntax.*MySQL"
+          - "You have an error"
+          - "Unclosed quotation"
+          - "Incorrect syntax near"
+          - "ERROR:  syntax error"
+          - "PG::Error"
+          - "Microsoft OLE DB.*SQL"
         condition: or
-        name: "like-reflected"
+        name: "like-sqli"
 ---
 id: sqli-insert-injection
 info:
@@ -111,11 +135,17 @@ requests:
       - "{{BaseURL}}/user/create"
     body: "username=test'+AND+1=1--&password=test&email=test@test.com"
     matchers:
-      - type: word
-        words:
+      - type: regex
+        regex:
           - "Duplicate entry"
           - "SQL syntax"
-          - "INSERT INTO"
+          - "You have an error"
+          - "Unclosed quotation"
+          - "Incorrect syntax near"
+          - "ERROR:  syntax error"
+          - "PG::Error"
+          - "Microsoft OLE DB.*SQL"
+          - "SQLSTATE\\[[0-9]"
         condition: or
         name: "insert-sqli"
 ---
@@ -133,11 +163,16 @@ requests:
       - "{{BaseURL}}/user/edit"
     body: "email=test@test.com'+AND+1=1--&name=test"
     matchers:
-      - type: word
-        words:
+      - type: regex
+        regex:
           - "SQL syntax"
-          - "UPDATE"
-          - "SET"
+          - "You have an error in your SQL"
+          - "You have an error"
+          - "Unclosed quotation"
+          - "Incorrect syntax near"
+          - "ERROR:  syntax error"
+          - "PG::Error"
+          - "Microsoft OLE DB.*SQL"
         condition: or
         name: "update-sqli"
 ---
@@ -154,12 +189,13 @@ requests:
       - "{{BaseURL}}?id=1+HAVING+1=1"
       - "{{BaseURL}}?id=1+GROUP+BY+1+HAVING+1=1"
     matchers:
-      - type: word
-        words:
-          - "HAVING"
-          - "Column"
+      - type: regex
+        regex:
+          - "Unknown column"
+          - "Column .* in 'having clause'"
+          - "HAVING clause"
         condition: or
-        name: "having-reflected"
+        name: "having-sqli"
 ---
 id: sqli-comment-injection
 info:
@@ -177,10 +213,15 @@ requests:
       - "{{BaseURL}}?id=1%23"
       - "{{BaseURL}}?id=1'/*!*/"
     matchers:
-      - type: word
-        words:
-          - "1'--"
-          - "1%23"
-          - "/**/"
+      - type: regex
+        regex:
+          - "You have an error in your SQL"
+          - "SQL syntax.*MySQL"
+          - "You have an error"
+          - "Unclosed quotation"
+          - "Incorrect syntax near"
+          - "ERROR:  syntax error"
+          - "PG::Error"
+          - "Microsoft OLE DB.*SQL"
         condition: or
-        name: "comment-injection"
+        name: "comment-sqli"

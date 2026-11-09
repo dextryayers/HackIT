@@ -152,6 +152,7 @@ func main() {
 
 	// Section 9: Advanced
 	flag.BoolVar(&cfg.WafSkip, "waf-skip", false, "Skip hosts protected by WAF")
+	flag.BoolVar(&cfg.SuppressReflectionMatch, "suppress-reflection-match", false, "Suppress findings whose evidence appears in the request itself (payload reflection)")
 	flag.BoolVar(&cfg.WafBypass, "waf-bypass", false, "Attempt WAF bypass techniques")
 	flag.BoolVar(&cfg.DetectTech, "tech-detect", false, "Detect technologies used by target")
 	flag.StringVar(&cfg.TechDB, "tech-db", "", "Custom technology signatures database")
@@ -564,9 +565,10 @@ func main() {
 		}
 	}
 
-	// Deep validation
+	// Deep validation (incl. FP-risk lint of the whole library)
 	if validateDeep {
 		ValidateTmux(templates)
+		PrintFPLintReport(templates)
 		return
 	}
 

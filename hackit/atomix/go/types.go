@@ -55,6 +55,10 @@ type Request struct {
 	MaxRedirects      int                `yaml:"max-redirects,omitempty"`
 	// Extractors scoped to this request (nuclei-style nesting).
 	Extractors []*Extractor `yaml:"extractors,omitempty"`
+	// Baseline issues one benign counterpart request (all query values
+	// rewritten to "1") and exposes baseline_* in the DSL environment.
+	// Use for time-based detection: dsl "duration > baseline_duration * 2".
+	Baseline bool `yaml:"baseline,omitempty"`
 }
 
 type MatcherCondition struct {
@@ -138,6 +142,11 @@ type MatchResult struct {
 	Extracted   string
 	MatcherName string
 	Confidence  string
+	// Reflection is true when the firing matcher's evidence also
+	// appears inside the request itself (payload echo). Findings with
+	// Reflection=true are low-confidence — the response may have been
+	// produced by the request, not the target's vulnerability.
+	Reflection bool
 }
 
 type FilterOptions struct {
@@ -292,6 +301,7 @@ type ScanConfig struct {
 	ChainVars     string
 	CompatMode    bool
 	SmartScan     bool
+	SuppressReflectionMatch bool
 	MultiTarget   bool
 	APIDiscovery  bool
 	Passive       bool
