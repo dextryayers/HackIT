@@ -159,12 +159,14 @@ func LoadTemplatesFromDirs(dirs []string) ([]*Template, error) {
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "%s Loaded %d unique templates from %d directories",
-		SColor(ColorGreen, "[+]"), len(all), len(dirs))
-	if overridden > 0 {
-		fmt.Fprintf(os.Stderr, " (%d overridden by custom sources)", overridden)
+	if !hasFlag("silent") {
+		fmt.Fprintf(os.Stderr, "%s Loaded %d unique templates from %d directories",
+			SColor(ColorGreen, "[+]"), len(all), len(dirs))
+		if overridden > 0 {
+			fmt.Fprintf(os.Stderr, " (%d overridden by custom sources)", overridden)
+		}
+		fmt.Fprintf(os.Stderr, "\n")
 	}
-	fmt.Fprintf(os.Stderr, "\n")
 	return all, nil
 }
 

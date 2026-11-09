@@ -91,7 +91,7 @@ type HTTPRequestBlock struct {
 	Attack            string              `yaml:"attack,omitempty"`
 	StopAtFirstMatch  bool                `yaml:"stop-at-first-match,omitempty"`
 	Redirects         bool                `yaml:"redirects,omitempty"`
-	MaxRedirects       int                 `yaml:"max-redirects,omitempty"`
+	MaxRedirects      int                 `yaml:"max-redirects,omitempty"`
 	Extractors        []*Extractor        `yaml:"extractors,omitempty"`
 }
 
@@ -108,7 +108,7 @@ func expandAttack(nr HTTPRequestBlock) []Request {
 			MatchersCondition: nr.MatchersCondition,
 			StopAtFirstMatch:  nr.StopAtFirstMatch,
 			Redirects:         nr.Redirects,
-			MaxRedirects:       nr.MaxRedirects,
+			MaxRedirects:      nr.MaxRedirects,
 		}}
 	}
 
@@ -175,7 +175,7 @@ func expandAttack(nr HTTPRequestBlock) []Request {
 			MatchersCondition: nr.MatchersCondition,
 			StopAtFirstMatch:  nr.StopAtFirstMatch,
 			Redirects:         nr.Redirects,
-			MaxRedirects:       nr.MaxRedirects,
+			MaxRedirects:      nr.MaxRedirects,
 		})
 	}
 	return out
@@ -205,7 +205,8 @@ func cartesian(lists [][]string) [][]string {
 // NormalizeTemplate converts portable `http:` blocks into the engine
 // model. Safe to call on native-style templates (no-op for them).
 func NormalizeTemplate(t *Template) {
-	if len(t.HTTP) > 0 {		for _, nr := range t.HTTP {
+	if len(t.HTTP) > 0 {
+		for _, nr := range t.HTTP {
 			expanded := expandAttack(nr)
 			for i := range expanded {
 				if expanded[i].MatchersCondition == "" {
@@ -214,9 +215,10 @@ func NormalizeTemplate(t *Template) {
 				if !expanded[i].StopAtFirstMatch {
 					expanded[i].StopAtFirstMatch = t.StopAtFirstMatch
 				}
+				// Keep request-scoped extractors with their request.
+				expanded[i].Extractors = nr.Extractors
 			}
 			t.Requests = append(t.Requests, expanded...)
-			t.Extractors = append(t.Extractors, nr.Extractors...)
 		}
 		t.HTTP = nil
 	}

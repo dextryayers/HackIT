@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bufio"
+	"encoding/csv"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -8,6 +11,10 @@ import (
 	"strings"
 	"time"
 )
+
+// Version is the single source of truth for the binary version,
+// reported by --version and embedded in SARIF reports.
+const Version = "3.0.0"
 
 type flagSet struct {
 	*flag.FlagSet
@@ -58,13 +65,15 @@ func main() {
 	// Section 3: Performance
 	flag.IntVar(&cfg.Threads, "c", 20, "Concurrency (number of parallel templates)")
 	flag.IntVar(&cfg.Threads, "concurrency", 20, "Concurrency (alias)")
-	flag.IntVar(&cfg.Concurrency, "threads", 10, "Max parallel requests per template")
+	flag.IntVar(&cfg.Threads, "threads", 20, "Concurrency (alias of -c / --concurrency)")
 	flag.IntVar(&cfg.Timeout, "timeout", 60, "Request timeout in seconds")
 	flag.IntVar(&cfg.Retries, "retries", 0, "Max retries per request")
 	flag.IntVar(&cfg.MaxHostError, "max-host-error", 30, "Max errors per host before skip")
 	// Rate limit / bulk
 	flag.IntVar(&cfg.RateLimit, "rate-limit", 0, "Rate limit (requests per second)")
-	flag.IntVar(&cfg.BulkSize, "bulk-size", 0, "Bulk size for batch processing")
+	flag.IntVar(&cfg.RateLimitMinute, "rate-limit-minute", 0, "Rate limit (requests per minute; derived to rps)")
+	flag.IntVar(&cfg.Delay, "delay", 0, "Fixed delay between requests in milliseconds")
+	flag.IntVar(&cfg.BulkSize, "bulk-size", 0, "Max parallel path/payload probes per template")
 	flag.Bool("stream", false, "Stream mode (output findings in real-time)")
 	flag.BoolVar(&cfg.AdaptiveRate, "adaptive-rate", false, "Adaptive rate limiting based on success rate")
 
@@ -78,8 +87,8 @@ func main() {
 	flag.StringVar(&cfg.Path, "path", "", "Custom request path to use")
 	flag.StringVar(&cfg.Method, "m", "", "HTTP method override (GET,POST,PUT,DELETE,etc.)")
 	flag.StringVar(&cfg.Method, "method", "", "HTTP method override (alias)")
-	flag.Bool("pn", false, "Pipeline mode (continuous scanning)")
-	flag.Bool("pipeline", false, "Pipeline mode (alias)")
+	flag.BoolVar(&cfg.Pipeline, "pn", false, "Pipeline mode: read targets from stdin, scan until EOF")
+	flag.BoolVar(&cfg.Pipeline, "pipeline", false, "Pipeline mode (alias)")
 	flag.StringVar(&cfg.Payloads, "payloads", "", "Custom payloads file path")
 	flag.StringVar(&cfg.Fuzz, "fuzz", "", "Fuzz mode (parameter/path/header)")
 	flag.IntVar(&cfg.FuzzThread, "fuzz-thread", 10, "Fuzzer thread count")
@@ -108,8 +117,8 @@ func main() {
 	flag.BoolVar(&cfg.MultiTarget, "multi", false, "Multi-target coordinated scanning")
 	flag.StringVar(&cfg.TraceLog, "trace", "", "Enable trace logging to file")
 	flag.StringVar(&cfg.TraceLog, "trace-log", "", "Trace log path (alias)")
-	flag.StringVar(&cfg.ResumeCfg, "no-meta", "", "Disable metadata output")
-	flag.StringVar(&cfg.ResumeCfg, "resume-cfg", "", "Resume configuration file")
+	flag.StringVar(&cfg.ResumeCfg, "resume-cfg", "", "Resume configuration file (merged after --config)")
+	flag.BoolVar(&cfg.NoMeta, "no-meta", false, "Disable metadata output")
 
 	// Section 6: Network Config
 	flag.StringVar(&cfg.Proxy, "p", "", "HTTP proxy URL (http://host:port)")
@@ -237,7 +246,7 @@ func main() {
 
 	// Handle --version
 	if hasFlag("version") {
-		fmt.Printf("Atomix v2.2.0 - High-Precision Template Scanner\n")
+		fmt.Printf("Atomix v%s - High-Precision Template Scanner\n", Version)
 		fmt.Printf("Part of HackIT V2.1 - By: AniipID\n")
 		return
 	}
@@ -298,6 +307,16 @@ func main() {
 		if defaultCfg != nil {
 			MergeConfig(cfg, defaultCfg)
 		}
+	}
+
+	// Resume-configuration file merges on top of everything else.
+	if cfg.ResumeCfg != "" {
+		fileCfg, err := LoadConfigFile(cfg.ResumeCfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s Resume-cfg error: %v\n", SColor(ColorRed, "[!]"), err)
+			os.Exit(1)
+		}
+		MergeConfig(cfg, fileCfg)
 	}
 
 	listFlag := hasFlag("l") || hasFlag("list")
@@ -392,8 +411,8 @@ func main() {
 		return
 	}
 
-	// Need URL for most operations
-	if cfg.URL == "" && cfg.TargetFile == "" {
+	// Need URL for most operations (pipeline mode streams targets from stdin instead)
+	if cfg.URL == "" && cfg.TargetFile == "" && !cfg.Pipeline {
 		if probeFlag {
 			fmt.Fprintf(os.Stderr, "%s Need a target URL: atomix --probe -u <url>\n", SColor(ColorRed, "[!]"))
 			os.Exit(1)
@@ -412,7 +431,9 @@ func main() {
 
 	// Protocol scan mode (doesn't need templates)
 	if cfg.Protocol != "" {
-		if !noBanner { PrintBanner() }
+		if !noBanner {
+			PrintBanner()
+		}
 		if !cfg.Silent {
 			fmt.Fprintf(os.Stderr, "%s Protocol scan: %s mode\n",
 				SColor(ColorBCyan, "►"), strings.ToUpper(cfg.Protocol))
@@ -423,7 +444,9 @@ func main() {
 
 	// Headless scan mode
 	if cfg.Headless {
-		if !noBanner { PrintBanner() }
+		if !noBanner {
+			PrintBanner()
+		}
 		if !cfg.Silent {
 			fmt.Fprintf(os.Stderr, "%s Headless browser scan: %s\n",
 				SColor(ColorBCyan, "►"), cfg.URL)
@@ -438,7 +461,9 @@ func main() {
 
 	// Uncover target discovery
 	if cfg.Uncover && cfg.UncoverQuery != "" {
-		if !noBanner { PrintBanner() }
+		if !noBanner {
+			PrintBanner()
+		}
 		discoveredTargets := HandleUncoverMode(cfg)
 		if len(discoveredTargets) > 0 {
 			cfg.Targets = append(cfg.Targets, discoveredTargets...)
@@ -509,10 +534,13 @@ func main() {
 		templates = append(templates, loaded...)
 	}
 
-	// Load from stdin pipe
-	stdinTemplates, err := LoadTemplatesFromStdin()
-	if err == nil && len(stdinTemplates) > 0 {
-		templates = append(templates, stdinTemplates...)
+	// Load from stdin pipe (template YAML). Pipeline mode reserves stdin
+	// for the target list instead.
+	if !cfg.Pipeline {
+		stdinTemplates, err := LoadTemplatesFromStdin()
+		if err == nil && len(stdinTemplates) > 0 {
+			templates = append(templates, stdinTemplates...)
+		}
 	}
 
 	// Last-wins: --load / --from-git / stdin override the library.
@@ -590,6 +618,7 @@ func main() {
 		passiveResults = FilterByConfidence(passiveResults, cfg.MinConfidence)
 		SortResults(passiveResults)
 		tmpScanner := NewScanner(cfg.Timeout, 1)
+		tmpScanner.Interactive = false
 		tmpScanner.InitScanner(cfg)
 		tmpScanner.Stats = &ScanStats{
 			TemplatesTotal: int32(len(templates)),
@@ -607,6 +636,12 @@ func main() {
 		PrintSmartInfo(before, len(filtered))
 	}
 
+	// Pipeline mode: scan targets streamed from stdin until EOF.
+	if cfg.Pipeline {
+		runPipelineMode(cfg, filtered)
+		return
+	}
+
 	// Print banner
 	if !cfg.JSON && !cfg.Silent && !noBanner {
 		PrintBanner()
@@ -622,7 +657,9 @@ func main() {
 		waf := DetectWAF(cfg.URL, client)
 		if waf != nil && waf.Detected && !cfg.Silent {
 			blockStr := ""
-			if waf.BlockedCode > 0 { blockStr = fmt.Sprintf("blocked %d", waf.BlockedCode) }
+			if waf.BlockedCode > 0 {
+				blockStr = fmt.Sprintf("blocked %d", waf.BlockedCode)
+			}
 			fmt.Fprintf(os.Stderr, "%s WAF Detected: %s %s\n",
 				SColor(ColorYellow, "[!]"), waf.Product, blockStr)
 		}
@@ -654,6 +691,9 @@ func main() {
 	scanner.InitScanner(cfg)
 	scanner.Templates = filtered
 	scanner.Verbose = cfg.Verbose || cfg.Debug
+	if cfg.Silent || cfg.JSON || cfg.JSONL || cfg.CSV || cfg.SARIF {
+		scanner.Interactive = false
+	}
 	scanner.Deduplicator = NewDeduplicator()
 	scanner.Stats = &ScanStats{
 		TemplatesTotal: int32(len(filtered)),
@@ -683,7 +723,9 @@ func main() {
 	// Adaptive rate limiter
 	if cfg.AdaptiveRate || cfg.RateLimit > 0 {
 		baseRate := cfg.RateLimit
-		if baseRate == 0 { baseRate = 100 }
+		if baseRate == 0 {
+			baseRate = 100
+		}
 		arl := NewAdaptiveRateLimiter(baseRate, baseRate*2)
 		_ = arl
 		if cfg.Verbose && !cfg.Silent {
@@ -881,7 +923,9 @@ func handleResults(results []Result, cfg *ScanConfig, scanner *Scanner) {
 	}
 	if cfg.HTML {
 		fn := cfg.OutputFile
-		if fn == "" { fn = "report.html" }
+		if fn == "" {
+			fn = "report.html"
+		}
 		err := WriteReport(results, scanner.Stats, "html", fn)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s Error: %v\n", SColor(ColorRed, "[!]"), err)
@@ -898,7 +942,56 @@ func handleResults(results []Result, cfg *ScanConfig, scanner *Scanner) {
 
 	// Stats
 	if cfg.Stats || cfg.Metrics {
-		PrintStats(scanner.Stats)
+		PrintStatsWithCount(scanner.Stats, len(results))
+	}
+}
+
+// runPipelineMode reads targets from stdin (one per line) until EOF and
+// scans each with the given template set. Findings stream out one per
+// line: JSONL by default, CSV with -csv. This is the machine-facing
+// mode — stdout carries only findings, stderr stays silent.
+func runPipelineMode(cfg *ScanConfig, templates []*Template) {
+	threads := cfg.Threads
+	if threads <= 0 {
+		threads = 20
+	}
+	scanner := NewScanner(cfg.Timeout, threads)
+	scanner.InitScanner(cfg)
+	scanner.Templates = templates
+	scanner.Interactive = false
+	scanner.Deduplicator = NewDeduplicator()
+
+	csvWriter := csv.NewWriter(os.Stdout)
+	if cfg.CSV {
+		_ = csvWriter.Write([]string{"TemplateID", "TemplateName", "Severity", "Confidence", "URL", "MatcherName", "Extracted", "Tags", "Timestamp"})
+	}
+
+	stdin := bufio.NewScanner(os.Stdin)
+	stdin.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	for stdin.Scan() {
+		line := strings.TrimSpace(stdin.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		target := EnsureScheme(line)
+		results := scanner.Scan(target)
+		for _, r := range results {
+			if cfg.CSV {
+				_ = csvWriter.Write([]string{
+					r.TemplateID, r.TemplateName, r.Severity, r.Confidence, r.URL,
+					r.MatcherName, r.Extracted, r.Tags, r.Timestamp,
+				})
+			} else {
+				j, _ := json.Marshal(r)
+				fmt.Println(string(j))
+			}
+		}
+		if cfg.CSV {
+			csvWriter.Flush()
+		}
+	}
+	if cfg.CSV {
+		csvWriter.Flush()
 	}
 }
 

@@ -62,10 +62,10 @@ type SarifLocation struct {
 }
 
 type SarifResult struct {
-	RuleID    string         `json:"ruleId"`
-	Message   SarifMessage   `json:"message"`
+	RuleID    string          `json:"ruleId"`
+	Message   SarifMessage    `json:"message"`
 	Locations []SarifLocation `json:"locations"`
-	Level     string         `json:"level"`
+	Level     string          `json:"level"`
 }
 
 type SarifRule struct {
@@ -92,12 +92,13 @@ type SarifRun struct {
 }
 
 type SarifLog struct {
-	Version string    `json:"version"`
-	Schema  string    `json:"$schema"`
+	Version string     `json:"version"`
+	Schema  string     `json:"$schema"`
 	Runs    []SarifRun `json:"runs"`
 }
 
 func FormatResultsSarif(results []Result) string {
+	ruleIndex := make(map[string]int)
 	rules := make([]SarifRule, 0)
 	sarifResults := make([]SarifResult, 0)
 	for _, r := range results {
@@ -110,18 +111,21 @@ func FormatResultsSarif(results []Result) string {
 		case "low":
 			level = "note"
 		}
-		rules = append(rules, SarifRule{
-			ID: r.TemplateID,
-			ShortDescription: SarifMessage{Text: r.TemplateName},
-			FullDescription:  SarifMessage{Text: r.Description},
-		})
+		if _, seen := ruleIndex[r.TemplateID]; !seen {
+			ruleIndex[r.TemplateID] = len(rules)
+			rules = append(rules, SarifRule{
+				ID:               r.TemplateID,
+				ShortDescription: SarifMessage{Text: r.TemplateName},
+				FullDescription:  SarifMessage{Text: r.Description},
+			})
+		}
 		sarifResults = append(sarifResults, SarifResult{
 			RuleID:  r.TemplateID,
 			Message: SarifMessage{Text: r.MatcherName},
 			Locations: []SarifLocation{{
 				PhysicalLocation: SarifPhysicalLocation{
 					ArtifactLocation: SarifArtifactLocation{URI: r.URL},
-					Region: SarifRegion{StartLine: 1},
+					Region:           SarifRegion{StartLine: 1},
 				},
 			}},
 			Level: level,
@@ -133,9 +137,9 @@ func FormatResultsSarif(results []Result) string {
 		Runs: []SarifRun{{
 			Tool: SarifTool{
 				Driver: SarifDriver{
-					Name: "Atomix", Version: "2.1.0",
+					Name: "Atomix", Version: Version,
 					InformationURI: "https://github.com/aniipid/hackit",
-					Rules: rules,
+					Rules:          rules,
 				},
 			},
 			Results: sarifResults,
@@ -146,7 +150,9 @@ func FormatResultsSarif(results []Result) string {
 }
 
 func PrintResults(results []Result) {
-	if len(results) == 0 { return }
+	if len(results) == 0 {
+		return
+	}
 	PrintFindingsTable(results)
 }
 
@@ -201,16 +207,26 @@ func PrintTemplateList(templates []*Template) {
 func PrintLoadingInfo(count int, filters FilterOptions) {
 	if noColor {
 		fmt.Fprintf(os.Stderr, "[*] Loaded %d templates\n", count)
-		if filters.Severity != "" { fmt.Fprintf(os.Stderr, "    Filter: severity=%s\n", filters.Severity) }
-		if len(filters.Tags) > 0 { fmt.Fprintf(os.Stderr, "    Filter: tags=%s\n", strings.Join(filters.Tags, ",")) }
+		if filters.Severity != "" {
+			fmt.Fprintf(os.Stderr, "    Filter: severity=%s\n", filters.Severity)
+		}
+		if len(filters.Tags) > 0 {
+			fmt.Fprintf(os.Stderr, "    Filter: tags=%s\n", strings.Join(filters.Tags, ","))
+		}
 		return
 	}
 	fmt.Fprintf(os.Stderr, "%s %s\n", SColor(ColorGreen, "[+]"), SColor(ColorBWhite, fmt.Sprintf("Loaded %d templates", count)))
 	if filters.Severity != "" || len(filters.Tags) > 0 || len(filters.ExcludeTags) > 0 {
 		parts := []string{}
-		if filters.Severity != "" { parts = append(parts, fmt.Sprintf("severity=%s", filters.Severity)) }
-		if len(filters.Tags) > 0 { parts = append(parts, fmt.Sprintf("tags=%s", strings.Join(filters.Tags, ","))) }
-		if len(filters.ExcludeTags) > 0 { parts = append(parts, fmt.Sprintf("exclude-tags=%s", strings.Join(filters.ExcludeTags, ","))) }
+		if filters.Severity != "" {
+			parts = append(parts, fmt.Sprintf("severity=%s", filters.Severity))
+		}
+		if len(filters.Tags) > 0 {
+			parts = append(parts, fmt.Sprintf("tags=%s", strings.Join(filters.Tags, ",")))
+		}
+		if len(filters.ExcludeTags) > 0 {
+			parts = append(parts, fmt.Sprintf("exclude-tags=%s", strings.Join(filters.ExcludeTags, ",")))
+		}
 		fmt.Fprintf(os.Stderr, "%s %s\n", SColor(ColorDim, "   Filter:"), SColor(ColorYellow, strings.Join(parts, ", ")))
 	}
 }
@@ -252,7 +268,9 @@ func PrintError(url string, err error) {
 }
 
 func PrintFindingsTable(results []Result) {
-	if len(results) == 0 { return }
+	if len(results) == 0 {
+		return
+	}
 	fmt.Println()
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
 	fmt.Fprintln(w, "SEVERITY\tCONF\tTEMPLATE\tURL\tMATCHER\tTAGS")
@@ -270,16 +288,20 @@ func PrintFindingsTable(results []Result) {
 }
 
 func PrintStats(stats *ScanStats) {
+	PrintStatsWithCount(stats, int(stats.Findings))
+}
+
+func PrintStatsWithCount(stats *ScanStats, findings int) {
 	if noColor {
 		fmt.Fprintf(os.Stderr, "\n[STATS] Templates: %d/%d | Requests: %d | Findings: %d | Errors: %d | Duration: %s\n",
 			stats.TemplatesTested, stats.TemplatesTotal, stats.RequestsSent,
-			stats.Findings, stats.Errors, stats.Duration)
+			findings, stats.Errors, stats.Duration)
 		return
 	}
 	fmt.Fprintf(os.Stderr, "\n%s %s\n", SColor(ColorBCyan, "═══"), SColor(ColorBWhite, "SCAN STATISTICS"))
 	fmt.Fprintf(os.Stderr, "  %s %s\n", SColor(ColorBWhite, "Templates tested:"), SColor(ColorGreen, fmt.Sprintf("%d/%d", stats.TemplatesTested, stats.TemplatesTotal)))
 	fmt.Fprintf(os.Stderr, "  %s %s\n", SColor(ColorBWhite, "Requests sent:"), SColor(ColorCyan, fmt.Sprintf("%d", stats.RequestsSent)))
-	fmt.Fprintf(os.Stderr, "  %s %s\n", SColor(ColorBWhite, "Findings:"), SColor(ColorBRed, fmt.Sprintf("%d", stats.Findings)))
+	fmt.Fprintf(os.Stderr, "  %s %s\n", SColor(ColorBWhite, "Findings:"), SColor(ColorBRed, fmt.Sprintf("%d", findings)))
 	fmt.Fprintf(os.Stderr, "  %s %s\n", SColor(ColorBWhite, "Errors:"), SColor(ColorRed, fmt.Sprintf("%d", stats.Errors)))
 	fmt.Fprintf(os.Stderr, "  %s %s\n", SColor(ColorBWhite, "Duration:"), SColor(ColorYellow, stats.Duration))
 }

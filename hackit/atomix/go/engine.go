@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -11,26 +12,29 @@ import (
 )
 
 type Scanner struct {
-	Interactive     bool
-	Client          *http.Client
-	Templates       []*Template
-	URL             string
-	Threads         int
-	Timeout         int
-	Results         []Result
-	Config          *ScanConfig
-	Verbose         bool
-	Deduplicator    *Deduplicator
-	Stats           *ScanStats
-	Progress        *ProgressDisplay
-	StatsCollector  *StatsCollector
-	Debugger        *Debugger
-	StartTime       time.Time
-	vars            *TemplateVars
-	throttler       *Throttler
-	mu              sync.Mutex
-	findingsCh      chan Result
-	doneCh          chan struct{}
+	Interactive    bool
+	Client         *http.Client
+	Templates      []*Template
+	URL            string
+	Threads        int
+	Timeout        int
+	Results        []Result
+	Config         *ScanConfig
+	Verbose        bool
+	Deduplicator   *Deduplicator
+	Stats          *ScanStats
+	Progress       *ProgressDisplay
+	StatsCollector *StatsCollector
+	Debugger       *Debugger
+	StartTime      time.Time
+	vars           *TemplateVars
+	throttler      *Throttler
+	bulkSize       int
+	resume         *ResumeTracker
+	hostErr        sync.Map // host -> *int32 consecutive failures
+	mu             sync.Mutex
+	findingsCh     chan Result
+	doneCh         chan struct{}
 }
 
 func NewScanner(timeout, threads int) *Scanner {
@@ -41,14 +45,14 @@ func NewScanner(timeout, threads int) *Scanner {
 	client.Timeout = time.Duration(timeout) * time.Second
 	s := &Scanner{
 		Interactive: true,
-		Client:     client,
-		Threads:    threads,
-		Timeout:    timeout,
-		Progress:   NewProgressDisplay(),
-		throttler:  NewThrottlerFromRPS(0), // disabled unless -rate-limit set
-		StartTime:  time.Now(),
-		findingsCh: make(chan Result, 1000),
-		doneCh:     make(chan struct{}),
+		Client:      client,
+		Threads:     threads,
+		Timeout:     timeout,
+		Progress:    NewProgressDisplay(),
+		throttler:   NewThrottlerFromRPS(0), // disabled unless -rate-limit set
+		StartTime:   time.Now(),
+		findingsCh:  make(chan Result, 1000),
+		doneCh:      make(chan struct{}),
 	}
 	return s
 }
@@ -59,6 +63,13 @@ func (s *Scanner) InitScanner(cfg *ScanConfig) {
 	}
 	s.Config = cfg
 	s.Client = NewConfiguredClient(cfg)
+	// Rate-limit minute is expressed per-minute; derive requests/second.
+	if cfg.RateLimitMinute > 0 && cfg.RateLimit == 0 {
+		cfg.RateLimit = cfg.RateLimitMinute / 60
+		if cfg.RateLimit < 1 {
+			cfg.RateLimit = 1
+		}
+	}
 	// RateLimit is requests-per-second with exact global pacing.
 	// Adaptive mode starts fast and backs off on error storms.
 	switch {
@@ -66,14 +77,89 @@ func (s *Scanner) InitScanner(cfg *ScanConfig) {
 		s.throttler = NewAdaptiveThrottler(cfg.RateLimit)
 	case cfg.RateLimit > 0:
 		s.throttler = NewThrottlerFromRPS(cfg.RateLimit)
+	case cfg.Delay > 0:
+		s.throttler = NewThrottler(cfg.Delay)
 	default:
 		s.throttler = NewThrottlerFromRPS(0)
 	}
+	if cfg.BulkSize > 0 {
+		s.bulkSize = cfg.BulkSize
+	}
 	if cfg.Threads > 0 {
 		s.Threads = cfg.Threads
-	} else if cfg.Concurrency > 0 {
-		s.Threads = cfg.Concurrency
 	}
+}
+
+// hostOverrideFor returns the original hostname when the target URL was
+// rewritten to a literal IP by -scan-all-ips.
+func hostOverrideFor(targetURL string) string {
+	u, err := url.Parse(targetURL)
+	if err != nil {
+		return ""
+	}
+	origin := u.Scheme + "://" + u.Host
+	if h, ok := HostOverrides.Load(origin); ok {
+		return h.(string)
+	}
+	return ""
+}
+
+// joinRequestURL maps a template path onto the scan target. Paths that
+// already carry a scheme are used verbatim; absolute paths are joined
+// onto the origin; everything else is resolved relative to the base.
+func joinRequestURL(baseURL, path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return baseURL
+	}
+	if strings.Contains(path, "://") {
+		return path
+	}
+	trimmedBase := strings.TrimRight(baseURL, "/")
+	if strings.HasPrefix(path, "/") {
+		return trimmedBase + path
+	}
+	return trimmedBase + "/" + path
+}
+
+// hostErrorThreshold: <=0 means the circuit breaker is disabled.
+func (s *Scanner) hostErrorThreshold() int {
+	if s.Config == nil {
+		return 30
+	}
+	if s.Config.MaxHostError <= 0 {
+		return 0
+	}
+	return s.Config.MaxHostError
+}
+
+func hostOf(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	return u.Hostname()
+}
+
+func (s *Scanner) hostFailures(host string) *int32 {
+	v, _ := s.hostErr.LoadOrStore(host, new(int32))
+	return v.(*int32)
+}
+
+func (s *Scanner) noteHostError(host string) {
+	atomic.AddInt32(s.hostFailures(host), 1)
+}
+
+func (s *Scanner) noteHostSuccess(host string) {
+	atomic.StoreInt32(s.hostFailures(host), 0)
+}
+
+func (s *Scanner) hostCircuitOpen(host string) bool {
+	th := s.hostErrorThreshold()
+	if th <= 0 {
+		return false
+	}
+	return atomic.LoadInt32(s.hostFailures(host)) >= int32(th)
 }
 
 // requestHeaders merges template headers with global CLI overrides.
@@ -132,8 +218,10 @@ func effectiveRetries(cfg *ScanConfig) int {
 
 func (s *Scanner) perTemplateParallelism() int {
 	n := 10
-	if s.Config != nil && s.Config.Concurrency > 0 {
-		n = s.Config.Concurrency
+	if s.bulkSize > 0 {
+		n = s.bulkSize
+	} else if s.Config != nil && s.Config.Threads > 0 {
+		n = s.Config.Threads
 	}
 	if n < 1 {
 		n = 1
@@ -166,12 +254,21 @@ func (s *Scanner) TestTemplate(baseURL string, t *Template, reqIdx int, req Requ
 	for _, pathTmpl := range req.Path {
 		for _, pay := range payloads {
 			resolvedPath := ResolvePayload(t.ResolveRequestPart(pathTmpl, s.vars), pay, s.vars)
-			targetURL := s.vars.Resolve(resolvedPath)
+			targetURL := joinRequestURL(s.vars.BaseURL, resolvedPath)
+			host := hostOf(targetURL)
+			if s.hostCircuitOpen(host) {
+				// Host has exceeded its consecutive-error budget; skip.
+				continue
+			}
+			hostOverride := hostOverrideFor(targetURL)
 			wg.Add(1)
 			sem <- struct{}{}
 			go func(targetURL string) {
 				defer wg.Done()
 				defer func() { <-sem }()
+				if s.hostCircuitOpen(hostOf(targetURL)) {
+					return
+				}
 				if s.Stats != nil {
 					atomic.AddInt32(&s.Stats.RequestsSent, 1)
 				}
@@ -181,13 +278,14 @@ func (s *Scanner) TestTemplate(baseURL string, t *Template, reqIdx int, req Requ
 				}
 
 				startTime := time.Now()
-				resp, err := SendRequestWithRetry(s.Client, targetURL, method, body, headers, retries)
+				resp, err := SendRequestWithRetry(s.Client, targetURL, method, body, headers, retries, hostOverride)
 				duration := time.Since(startTime)
 
 				if s.throttler != nil && adaptive {
 					s.throttler.Adapt(err == nil)
 				}
 				if err != nil {
+					s.noteHostError(hostOf(targetURL))
 					if s.Stats != nil {
 						s.Stats.IncErrors()
 					}
@@ -197,6 +295,7 @@ func (s *Scanner) TestTemplate(baseURL string, t *Template, reqIdx int, req Requ
 					}
 					return
 				}
+				s.noteHostSuccess(hostOf(targetURL))
 
 				resp.Duration = duration
 
@@ -242,7 +341,10 @@ func (s *Scanner) TestTemplate(baseURL string, t *Template, reqIdx int, req Requ
 				s.Stats.IncFindings()
 				atomic.AddInt32(&s.Progress.Findings, 1)
 
-				PrintResultRealTime(r)
+				quiet := s.Config != nil && (s.Config.Silent || s.Config.JSON || s.Config.JSONL || s.Config.CSV || s.Config.SARIF)
+				if !quiet {
+					PrintResultRealTime(r)
+				}
 			}(targetURL)
 		}
 	}
@@ -290,6 +392,17 @@ func (s *Scanner) Scan(baseURL string) []Result {
 	s.vars = NewTemplateVars(baseURL)
 	s.StartTime = time.Now()
 
+	// Resume support: replay checkpoint, skip completed (target, template) pairs.
+	if s.Config != nil && s.Config.ResumeFile != "" {
+		tracker, err := NewResumeTracker(s.Config.ResumeFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[!] resume: %v\n", err)
+		} else {
+			s.resume = tracker
+			defer tracker.Close()
+		}
+	}
+
 	// Fresh progress + completion channel per Scan (multi-target safe).
 	if s.Progress == nil {
 		s.Progress = NewProgressDisplay()
@@ -335,11 +448,21 @@ func (s *Scanner) Scan(baseURL string) []Result {
 				}
 				atomic.AddInt32(&s.Progress.Current, 1)
 			}()
+			if s.resume != nil && s.resume.Done(baseURL, tmpl.ID) {
+				if s.Verbose {
+					fmt.Fprintf(os.Stderr, "  %s Skipping (resumed): %s\n",
+						SColor(ColorDim, "•"), tmpl.ID)
+				}
+				return
+			}
 			if s.Verbose {
 				fmt.Fprintf(os.Stderr, "  %s Testing: %s\n",
 					SColor(ColorDim, "•"), tmpl.ID)
 			}
 			s.ProcessTemplate(baseURL, tmpl)
+			if s.resume != nil {
+				s.resume.Mark(baseURL, tmpl.ID)
+			}
 		}(t)
 	}
 	wg.Wait()
@@ -350,7 +473,9 @@ func (s *Scanner) Scan(baseURL string) []Result {
 		close(s.doneCh)
 	}
 	time.Sleep(50 * time.Millisecond)
-	s.Progress.Render()
+	if s.Interactive {
+		s.Progress.Render()
+	}
 
 	return s.Results
 }

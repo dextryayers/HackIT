@@ -1,12 +1,17 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -26,9 +31,9 @@ var userAgents = []string{
 func NewHTTPClient(timeout int) *http.Client {
 	return &http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS10},
-			MaxIdleConns:    500,
-			MaxConnsPerHost: 200,
+			TLSClientConfig:     &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS10},
+			MaxIdleConns:        500,
+			MaxConnsPerHost:     200,
 			MaxIdleConnsPerHost: 100,
 			IdleConnTimeout:     90 * time.Second,
 			DisableCompression:  false,
@@ -45,15 +50,43 @@ func NewHTTPClient(timeout int) *http.Client {
 
 func NewConfiguredClient(config *ScanConfig) *http.Client {
 	timeout := config.Timeout
-	if timeout <= 0 { timeout = 60 }
+	if timeout <= 0 {
+		timeout = 60
+	}
+
+	tlsCfg := &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS10}
+	if config.SNI != "" {
+		tlsCfg.ServerName = config.SNI
+	}
 
 	transport := &http.Transport{
-		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS10},
+		TLSClientConfig:     tlsCfg,
 		MaxIdleConns:        500,
 		MaxConnsPerHost:     200,
 		MaxIdleConnsPerHost: 100,
 		IdleConnTimeout:     90 * time.Second,
 		DisableCompression:  false,
+	}
+
+	// Custom DNS resolver (comma-separated, first wins) dialed over UDP/TCP.
+	if raw := strings.Split(config.Resolver, ","); len(raw) > 0 {
+		if dns := strings.TrimSpace(raw[0]); dns != "" {
+			dnsAddr := dns
+			if !strings.Contains(dnsAddr, ":") {
+				dnsAddr = net.JoinHostPort(dnsAddr, "53")
+			}
+			resolver := &net.Resolver{
+				PreferGo: true,
+				Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+					d := net.Dialer{Timeout: 5 * time.Second}
+					return d.DialContext(ctx, "udp", dnsAddr)
+				},
+			}
+			dialer := &net.Dialer{Timeout: 10 * time.Second, Resolver: resolver}
+			transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return dialer.DialContext(ctx, network, addr)
+			}
+		}
 	}
 
 	if config.HTTP2 {
@@ -69,15 +102,35 @@ func NewConfiguredClient(config *ScanConfig) *http.Client {
 		proxyURL, err := url.Parse(config.Proxy)
 		if err == nil {
 			transport.Proxy = http.ProxyURL(proxyURL)
+			if config.ProxyAuth != "" {
+				parts := strings.SplitN(config.ProxyAuth, ":", 2)
+				if len(parts) == 2 {
+					proxyURL.User = url.UserPassword(parts[0], parts[1])
+					transport.Proxy = http.ProxyURL(proxyURL)
+				}
+			}
 		}
 	}
 
 	maxRedir := config.MaxRedirects
-	if maxRedir <= 0 { maxRedir = 10 }
+	if maxRedir <= 0 {
+		maxRedir = 10
+	}
 
 	client := &http.Client{
 		Transport: transport,
 		Timeout:   time.Duration(timeout) * time.Second,
+	}
+
+	// Cookie jar: load Netscape or JSON cookie files.
+	if config.CookieJar != "" {
+		if jar, err := cookiejar.New(&cookiejar.Options{}); err == nil {
+			if err := LoadCookieJar(config.CookieJar, jar); err == nil {
+				client.Jar = jar
+			} else {
+				fmt.Fprintf(os.Stderr, "[!] cookie-jar: %v\n", err)
+			}
+		}
 	}
 
 	if config.FollowRedirects {
@@ -96,6 +149,69 @@ func NewConfiguredClient(config *ScanConfig) *http.Client {
 	return client
 }
 
+// LoadCookieJar reads a cookie file in either JSON (array of
+// {name,value,domain,path,secure}) or Netscape (domain\tflag\tpath\tsecure\t
+// expires\tname\tvalue) format and populates jar.
+func LoadCookieJar(path string, jar http.CookieJar) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	trimmed := strings.TrimSpace(string(data))
+	if strings.HasPrefix(trimmed, "[") {
+		var entries []struct {
+			Name   string `json:"name"`
+			Value  string `json:"value"`
+			Domain string `json:"domain"`
+			Path   string `json:"path"`
+			Secure bool   `json:"secure"`
+		}
+		if err := json.Unmarshal([]byte(trimmed), &entries); err != nil {
+			return fmt.Errorf("cookie-jar JSON: %w", err)
+		}
+		for _, e := range entries {
+			setJarCookie(jar, e.Domain, e.Path, e.Secure, e.Name, e.Value)
+		}
+		return nil
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimRight(line, "\r")
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		if len(fields) < 7 {
+			continue
+		}
+		domain, path, secure := fields[0], fields[2], strings.EqualFold(fields[3], "TRUE")
+		name, value := fields[5], fields[6]
+		setJarCookie(jar, domain, path, secure, name, value)
+	}
+	return nil
+}
+
+func setJarCookie(jar http.CookieJar, domain, path string, secure bool, name, value string) {
+	if domain == "" {
+		return
+	}
+	if path == "" {
+		path = "/"
+	}
+	host := strings.TrimPrefix(domain, ".")
+	u, err := url.Parse("https://" + host + path)
+	if err != nil {
+		return
+	}
+	jar.SetCookies(u, []*http.Cookie{{
+		Name:     name,
+		Value:    value,
+		Path:     path,
+		Domain:   domain,
+		Secure:   secure,
+		HttpOnly: false,
+	}})
+}
+
 func RandomUserAgent() string {
 	return userAgents[rand.Intn(len(userAgents))]
 }
@@ -111,16 +227,24 @@ func ResolveURL(baseURL string, pathTmpl string, payload string) string {
 	return result
 }
 
-func SendRequest(client *http.Client, reqURL, method, body string, headers map[string]string) (*ResponseInfo, error) {
+// SendRequest issues one request. If hostOverride is set, it replaces the
+// Host header (used by -scan-all-ips, where the URL points at a literal IP
+// but virtual hosting needs the original hostname).
+func SendRequest(client *http.Client, reqURL, method, body string, headers map[string]string, hostOverride ...string) (*ResponseInfo, error) {
 	var reqBody io.Reader
 	if body != "" {
 		reqBody = strings.NewReader(body)
 	}
-	if method == "" { method = "GET" }
+	if method == "" {
+		method = "GET"
+	}
 
 	req, err := http.NewRequest(method, reqURL, reqBody)
 	if err != nil {
 		return nil, err
+	}
+	if len(hostOverride) > 0 && hostOverride[0] != "" {
+		req.Host = hostOverride[0]
 	}
 
 	// Default UA only when caller did not supply one (custom-agent /
@@ -176,7 +300,7 @@ func SendRequest(client *http.Client, reqURL, method, body string, headers map[s
 	}, nil
 }
 
-func SendRequestWithRetry(client *http.Client, reqURL, method, body string, headers map[string]string, maxRetries int) (*ResponseInfo, error) {
+func SendRequestWithRetry(client *http.Client, reqURL, method, body string, headers map[string]string, maxRetries int, hostOverride ...string) (*ResponseInfo, error) {
 	if maxRetries < 0 {
 		maxRetries = 0
 	}
@@ -189,7 +313,7 @@ func SendRequestWithRetry(client *http.Client, reqURL, method, body string, head
 			backoff := time.Duration(i*300) * time.Millisecond
 			time.Sleep(backoff)
 		}
-		resp, err := SendRequest(client, reqURL, method, body, headers)
+		resp, err := SendRequest(client, reqURL, method, body, headers, hostOverride...)
 		if err == nil {
 			return resp, nil
 		}

@@ -48,7 +48,7 @@ SECTIONS = {
         "scope_file", "exclude_file",
     ],
     "PERFORMANCE": [
-        "concurrency", "retries", "rate_limit", "bulk_size",
+        "concurrency", "retries", "rate_limit", "rate_limit_minute", "delay", "bulk_size", "pipeline",
         "follow_redirects", "max_redirects", "priority", "no_cache",
         "adaptive_rate", "keep_alive", "http2", "http2_downgrade",
     ],
@@ -185,7 +185,10 @@ class _GroupedHelpCommand(click.Command):
 @click.option("--concurrency", default=10, type=int, help="Max parallel requests per template")
 @click.option("--retries", default=0, type=int, help="Max retries per request")
 @click.option("--rate-limit", default=0, type=int, help="Rate limit (req/sec)")
-@click.option("--bulk-size", default=0, type=int, help="Batch processing size")
+@click.option("--rate-limit-minute", default=0, type=int, help="Rate limit (req/min; derived to rps)")
+@click.option("--delay", default=0, type=int, help="Fixed delay between requests (ms)")
+@click.option("--pipeline", "-pn", "pipeline", is_flag=True, help="Pipeline mode: read targets from stdin until EOF")
+@click.option("--bulk-size", default=0, type=int, help="Max parallel probes per template")
 @click.option("--follow-redirects", is_flag=True, help="Follow HTTP redirects")
 @click.option("--max-redirects", default=10, type=int, help="Max redirects")
 @click.option("--priority", is_flag=True, help="Priority: critical/high templates first")
@@ -357,7 +360,7 @@ def atomix_command(**kwargs):
 
     # Non-JSON structured outputs stream directly from Go engine.
     if kwargs.get("jsonl") or kwargs.get("csv") or kwargs.get("html") or kwargs.get("sarif") or kwargs.get("markdown"):
-        args = engine.build_args(kwargs.get("url", ""), **kwargs)
+        args = engine.build_args(**kwargs)
         import subprocess as _sp
         try:
             p = _sp.run([engine.binary] + args[1:], capture_output=False, timeout=1800)

@@ -113,6 +113,11 @@ func (tc *TemplateCache) Set(id string, ct *CompiledTemplate) {
 	tc.entries[id] = ct
 }
 
+// PrecompileAll compiles each template's matcher/extractor regular
+// expressions so the first scan pays the compilation cost once instead of
+// per goroutine. It also populates the shared getRegex cache used by the
+// matcher itself — the previous implementation built side maps that the
+// hot path never read.
 func (tc *TemplateCache) PrecompileAll(templates []*Template) int {
 	count := 0
 	for _, t := range templates {
@@ -120,10 +125,40 @@ func (tc *TemplateCache) PrecompileAll(templates []*Template) int {
 			continue
 		}
 		ct := CompileTemplate(t)
+		warmMatcherRegexes(t)
 		tc.Set(t.ID, ct)
 		count++
 	}
 	return count
+}
+
+// warmMatcherRegexes seeds the global regex cache for every pattern the
+// template can reach at match time. Compile failures are ignored here —
+// the matcher reports them on demand.
+func warmMatcherRegexes(t *Template) {
+	warm := func(patterns []string, ci bool) {
+		for _, p := range patterns {
+			_, _ = getRegexCI(p, ci)
+		}
+	}
+	for _, req := range t.Requests {
+		for _, m := range req.Matchers {
+			warm(m.Regex, m.CaseInsensitive)
+		}
+	}
+	for _, m := range t.Matchers {
+		warm(m.Regex, m.CaseInsensitive)
+	}
+	warmExtractors := func(ex *Extractor) {
+		if ex == nil {
+			return
+		}
+		warm(ex.Regex, false)
+	}
+	warmExtractors(t.Extractor)
+	for _, e := range t.Extractors {
+		warmExtractors(e)
+	}
 }
 
 func (tc *TemplateCache) Clear() {
@@ -151,8 +186,12 @@ func NewTemplateWatcher(dir string) *TemplateWatcher {
 func (tw *TemplateWatcher) LoadAndCache() ([]*Template, error) {
 	var templates []*Template
 	err := filepath.Walk(tw.dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil { return err }
-		if info.IsDir() { return nil }
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
 		valid := false
 		for _, p := range tw.patterns {
 			if matched, _ := filepath.Match(p, info.Name()); matched {
@@ -160,7 +199,9 @@ func (tw *TemplateWatcher) LoadAndCache() ([]*Template, error) {
 				break
 			}
 		}
-		if !valid { return nil }
+		if !valid {
+			return nil
+		}
 		loaded, err := LoadAllTemplatesFromFile(path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s Skipping %s: %v\n",

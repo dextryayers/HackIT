@@ -92,6 +92,7 @@ func MergeConfig(cfg *ScanConfig, fileCfg *ConfigFile) {
 	if cfg.TemplateDir == "" && fileCfg.TemplateDir != "" { cfg.TemplateDir = fileCfg.TemplateDir }
 	if cfg.Threads == 0 && fileCfg.Threads != 0 { cfg.Threads = fileCfg.Threads }
 	if cfg.Concurrency == 0 && fileCfg.Concurrency != 0 { cfg.Concurrency = fileCfg.Concurrency }
+	if cfg.Threads == 0 && cfg.Concurrency > 0 { cfg.Threads = cfg.Concurrency }
 	if cfg.Timeout == 0 && fileCfg.Timeout != 0 { cfg.Timeout = fileCfg.Timeout }
 	if cfg.Severity == "" && fileCfg.Severity != "" { cfg.Severity = fileCfg.Severity }
 	if cfg.ExcludeSeverity == "" && fileCfg.ExcludeSeverity != "" { cfg.ExcludeSeverity = fileCfg.ExcludeSeverity }

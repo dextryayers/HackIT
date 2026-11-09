@@ -131,7 +131,6 @@ func ApplyAuthHeaders(headers map[string]string, cfg *ScanConfig) {
 	}
 }
 
-func LoadCookieJar(path string) (map[string][]string, error) {
-	cookies := make(map[string][]string)
-	return cookies, nil
-}
+// LoadCookieJar stub replaced by the real implementation in http.go:
+// LoadCookieJar(path string, jar http.CookieJar) error. It reads Netscape
+// and JSON cookie files and populates a net/http/cookiejar.

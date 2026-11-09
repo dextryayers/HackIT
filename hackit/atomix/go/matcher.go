@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -25,6 +26,18 @@ func getRegex(pattern string) (*regexp.Regexp, error) {
 		atomic.AddInt32(&regexCacheCount, 1)
 	}
 	return re, nil
+}
+
+// getRegexCI compiles pattern case-insensitively when ci is set. The
+// cache key is prefixed so case variants stay distinct.
+func getRegexCI(pattern string, ci bool) (*regexp.Regexp, error) {
+	if !ci {
+		return getRegex(pattern)
+	}
+	if strings.HasPrefix(pattern, "(?i)") {
+		return getRegex(pattern)
+	}
+	return getRegex("(?i)" + pattern)
 }
 
 func getHeadersMap(headers string) map[string]string {
@@ -54,7 +67,7 @@ func MatchTemplate(resp *ResponseInfo, t *Template, reqIdx int) *MatchResult {
 	body := resp.Body
 	headers := resp.Headers
 
-	andMode := strings.ToLower(strings.TrimSpace(cond)) == "and"
+	andMode := strings.EqualFold(strings.TrimSpace(cond), "and")
 	var firstHit *MatchResult
 
 	for _, m := range matchers {
@@ -69,7 +82,7 @@ func MatchTemplate(resp *ResponseInfo, t *Template, reqIdx int) *MatchResult {
 			data = headers
 		case "body":
 			data = body
-		case "all":
+		case "all", "response":
 			data = headers + "\n" + body
 		case "status_code":
 			data = ""
@@ -80,21 +93,21 @@ func MatchTemplate(resp *ResponseInfo, t *Template, reqIdx int) *MatchResult {
 		match := false
 		switch m.Type {
 		case "word":
-			match = matchWords(data, m.Words, m.Condition)
+			match = matchWords(data, m.Words, m.Condition, m.CaseInsensitive)
 		case "regex":
-			match = matchRegexFast(data, m.Regex, m.Condition)
+			match = matchRegexFast(data, m.Regex, m.Condition, m.CaseInsensitive)
 		case "status":
 			match = matchStatus(resp.StatusCode, m.Status)
 		case "size":
-			match = matchSize(len(body), m.Size)
+			match = matchSize(resp.BodyLen, m.Size)
 		case "dsl":
 			match = matchDSL(resp, m)
 		case "and":
-			match = matchAll(data, m.Words, m.Regex, m.Status, m.Size)
+			match = matchAll(resp, data, m)
 		case "or":
-			match = matchAny(data, m.Words, m.Regex, m.Status, m.Size)
+			match = matchAny(resp, data, m)
 		default:
-			match = matchWords(data, m.Words, m.Condition)
+			match = matchWords(data, m.Words, m.Condition, m.CaseInsensitive)
 		}
 
 		if m.Negative {
@@ -106,7 +119,7 @@ func MatchTemplate(resp *ResponseInfo, t *Template, reqIdx int) *MatchResult {
 		}
 
 		if match && firstHit == nil {
-			extracted := extractAll(data, t)
+			extracted := extractAll(data, resp, t, reqIdx)
 			name := m.Name
 			if name == "" {
 				name = t.ID
@@ -131,52 +144,71 @@ func MatchTemplate(resp *ResponseInfo, t *Template, reqIdx int) *MatchResult {
 	return &MatchResult{Matched: false}
 }
 
-// extractAll runs the legacy single extractor plus the plural form.
-func extractAll(data string, t *Template) string {
+// extractAll gathers output from request-scoped extractors, the legacy
+// single template-level extractor and the plural template-level form.
+func extractAll(data string, resp *ResponseInfo, t *Template, reqIdx ...int) string {
 	parts := []string{}
+	collect := func(list []*Extractor) {
+		for _, e := range list {
+			if e == nil {
+				continue
+			}
+			if x := extractData(data, resp, e); x != "" {
+				parts = append(parts, x)
+			}
+		}
+	}
+	if len(reqIdx) > 0 && reqIdx[0] >= 0 && reqIdx[0] < len(t.Requests) {
+		collect(t.Requests[reqIdx[0]].Extractors)
+	}
 	if t.Extractor != nil {
-		if e := extractData(data, t.Extractor); e != "" {
+		if e := extractData(data, resp, t.Extractor); e != "" {
 			parts = append(parts, e)
 		}
 	}
-	for _, e := range t.Extractors {
-		if e == nil {
-			continue
-		}
-		if x := extractData(data, e); x != "" {
-			parts = append(parts, x)
-		}
-	}
+	collect(t.Extractors)
 	return strings.Join(parts, "; ")
 }
 
-func matchWords(data string, words []string, condition string) bool {
+func matchWords(data string, words []string, condition string, caseInsensitive ...bool) bool {
 	if len(words) == 0 {
 		return false
 	}
-	if condition == "and" {
+	ci := len(caseInsensitive) > 0 && caseInsensitive[0]
+	hay := data
+	if ci {
+		hay = strings.ToLower(data)
+	}
+	wordAt := func(w string) string {
+		if ci {
+			return strings.ToLower(w)
+		}
+		return w
+	}
+	if strings.EqualFold(condition, "and") {
 		for _, w := range words {
-			if !strings.Contains(data, w) {
+			if !strings.Contains(hay, wordAt(w)) {
 				return false
 			}
 		}
 		return true
 	}
 	for _, w := range words {
-		if strings.Contains(data, w) {
+		if strings.Contains(hay, wordAt(w)) {
 			return true
 		}
 	}
 	return false
 }
 
-func matchRegexFast(data string, patterns []string, condition string) bool {
+func matchRegexFast(data string, patterns []string, condition string, caseInsensitive ...bool) bool {
 	if len(patterns) == 0 {
 		return false
 	}
-	if condition == "and" {
+	ci := len(caseInsensitive) > 0 && caseInsensitive[0]
+	if strings.EqualFold(condition, "and") {
 		for _, p := range patterns {
-			re, err := getRegex(p)
+			re, err := getRegexCI(p, ci)
 			if err != nil || !re.MatchString(data) {
 				return false
 			}
@@ -184,7 +216,7 @@ func matchRegexFast(data string, patterns []string, condition string) bool {
 		return true
 	}
 	for _, p := range patterns {
-		re, err := getRegex(p)
+		re, err := getRegexCI(p, ci)
 		if err == nil && re.MatchString(data) {
 			return true
 		}
@@ -219,25 +251,58 @@ func matchDSL(resp *ResponseInfo, m MatcherCondition) bool {
 	if len(exprs) == 0 {
 		exprs = m.Words
 	}
-	// Overall semantic: OR across || groups, AND within && atoms.
+	results := make([]bool, 0, len(exprs))
 	for _, e := range exprs {
-		for _, group := range strings.Split(e, "||") {
-			ok := true
-			any := false
-			for _, atom := range strings.Split(group, "&&") {
-				atom = strings.TrimSpace(atom)
-				if atom == "" {
-					continue
-				}
-				any = true
-				if !evalDSLAtom(atom, resp) {
-					ok = false
-					break
-				}
+		e = strings.TrimSpace(e)
+		if e == "" {
+			continue
+		}
+		ok, err := evalDSLBool(e, resp)
+		if err != nil {
+			// Legacy fallback: the pre-expr engine understood a small
+			// atom language; keep it alive for archaic templates.
+			ok = matchDSLLegacyExpr(e, resp)
+		}
+		results = append(results, ok)
+	}
+	if len(results) == 0 {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(m.Condition), "and") {
+		for _, r := range results {
+			if !r {
+				return false
 			}
-			if any && ok {
-				return true
+		}
+		return true
+	}
+	for _, r := range results {
+		if r {
+			return true
+		}
+	}
+	return false
+}
+
+// matchDSLLegacyExpr handles one expression with the old atom language
+// (`a && b || c`, function-call atoms like `contains(body, 'x')`).
+func matchDSLLegacyExpr(e string, resp *ResponseInfo) bool {
+	for _, group := range strings.Split(e, "||") {
+		ok := true
+		any := false
+		for _, atom := range strings.Split(group, "&&") {
+			atom = strings.TrimSpace(atom)
+			if atom == "" {
+				continue
 			}
+			any = true
+			if !evalDSLAtom(atom, resp) {
+				ok = false
+				break
+			}
+		}
+		if any && ok {
+			return true
 		}
 	}
 	return false
@@ -288,11 +353,10 @@ func evalDSLPositive(expr string, resp *ResponseInfo) bool {
 						return field.val >= want
 					case "<=":
 						return field.val <= want
-					case "!=", "=":
-						if op == "=" {
-							return field.val == want
-						}
+					case "!=":
 						return field.val != want
+					case "=":
+						return field.val == want
 					case "==":
 						return field.val == want
 					case ">":
@@ -383,72 +447,157 @@ func evalDSLPositive(expr string, resp *ResponseInfo) bool {
 		}
 		return strings.HasSuffix(hay, needle)
 	}
-	// Legacy single-arg contains(...) fallback.
-	return legacyMatchDSL(resp, expr)
-}
-
-func legacyMatchDSL(resp *ResponseInfo, expr string) bool {
-	expr = strings.TrimSpace(expr)
-	switch {
-	case strings.Contains(expr, "status_code"):
-		return false
-	case strings.Contains(expr, "content_length"):
-		return false
-	case strings.Contains(expr, "contains"):
-		parts := strings.SplitN(expr, "(", 2)
-		if len(parts) == 2 {
-			arg := strings.TrimRight(parts[1], ")")
-			arg = strings.Trim(arg, "'\"")
-			return strings.Contains(resp.Body, arg) || strings.Contains(resp.Headers, arg)
-		}
-	}
 	return false
 }
 
-func matchAll(data string, words []string, patterns []string, statuses []int, sizes []int) bool {
-	if len(words) > 0 && !matchWords(data, words, "and") {
+func matchAll(resp *ResponseInfo, data string, m MatcherCondition) bool {
+	if len(m.Words) > 0 && !matchWords(data, m.Words, "and", m.CaseInsensitive) {
 		return false
 	}
-	if len(patterns) > 0 && !matchRegexFast(data, patterns, "and") {
+	if len(m.Regex) > 0 && !matchRegexFast(data, m.Regex, "and", m.CaseInsensitive) {
 		return false
 	}
-	// status/size need response context; when only they are set, the
-	// caller (MatchTemplate) already evaluated them. Here require at
-	// least one body signal to avoid vacuous-true.
-	if len(words) == 0 && len(patterns) == 0 {
+	if len(m.Status) > 0 && !matchStatus(resp.StatusCode, m.Status) {
+		return false
+	}
+	if len(m.Size) > 0 && !matchSize(resp.BodyLen, m.Size) {
 		return false
 	}
 	return true
 }
 
-func matchAny(data string, words []string, patterns []string, statuses []int, sizes []int) bool {
-	if matchWords(data, words, "or") {
+func matchAny(resp *ResponseInfo, data string, m MatcherCondition) bool {
+	if matchWords(data, m.Words, "or", m.CaseInsensitive) {
 		return true
 	}
-	if matchRegexFast(data, patterns, "or") {
+	if matchRegexFast(data, m.Regex, "or", m.CaseInsensitive) {
+		return true
+	}
+	if len(m.Status) > 0 && matchStatus(resp.StatusCode, m.Status) {
+		return true
+	}
+	if len(m.Size) > 0 && matchSize(resp.BodyLen, m.Size) {
 		return true
 	}
 	return false
 }
 
-func extractData(data string, e *Extractor) string {
+// extractData supports regex, json, kval and dsl extractor types.
+func extractData(data string, resp *ResponseInfo, e *Extractor) string {
 	if e == nil {
 		return ""
 	}
-	for _, p := range e.Regex {
+	switch strings.ToLower(strings.TrimSpace(e.Type)) {
+	case "json":
+		return extractJSON(resp.Body, e.JSON)
+	case "kval":
+		return extractKval(resp.Headers, e.Kval)
+	case "dsl":
+		return extractDSL(resp, e.DSL)
+	default:
+		return extractRegex(data, e.Regex)
+	}
+}
+
+func extractRegex(data string, patterns []string) string {
+	var found []string
+	for _, p := range patterns {
 		re, err := getRegex(p)
 		if err != nil {
 			continue
 		}
 		matches := re.FindStringSubmatch(data)
 		if len(matches) > 1 {
-			return matches[1]
+			found = append(found, matches[1])
+			continue
 		}
-		if len(matches) > 0 {
-			return matches[0]
+		if len(matches) == 1 {
+			found = append(found, matches[0])
 		}
 	}
-	return ""
+	return strings.Join(found, "; ")
+}
+
+var jsonPathTokenRe = regexp.MustCompile(`[^.\[\]]+`)
+
+// extractJSON walks dotted paths (`a.b`, `a.b[0]`) into the response body.
+func extractJSON(body string, paths []string) string {
+	if len(paths) == 0 || strings.TrimSpace(body) == "" {
+		return ""
+	}
+	var doc interface{}
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return ""
+	}
+	var found []string
+	for _, p := range paths {
+		p = strings.TrimPrefix(strings.TrimSpace(p), "$")
+		p = strings.TrimPrefix(p, ".")
+		if p == "" {
+			found = append(found, toStr(doc))
+			continue
+		}
+		cur := doc
+		ok := true
+		for _, tok := range jsonPathTokenRe.FindAllString(p, -1) {
+			switch node := cur.(type) {
+			case map[string]interface{}:
+				v, exists := node[tok]
+				if !exists {
+					ok = false
+					break
+				}
+				cur = v
+			case []interface{}:
+				var idx int
+				if _, err := fmt.Sscanf(tok, "%d", &idx); err != nil || idx < 0 || idx >= len(node) {
+					ok = false
+					break
+				}
+				cur = node[idx]
+			default:
+				ok = false
+			}
+			if !ok {
+				break
+			}
+		}
+		if ok && cur != nil {
+			found = append(found, toStr(cur))
+		}
+	}
+	return strings.Join(found, "; ")
+}
+
+// extractKval turns `key: value` header lines into `value` entries
+// (one per requested key, in request order).
+func extractKval(headers string, keys []string) string {
+	if len(keys) == 0 {
+		return ""
+	}
+	m := getHeadersMap(headers)
+	var found []string
+	for _, k := range keys {
+		if v, ok := m[strings.ToLower(strings.TrimSpace(k))]; ok && v != "" {
+			found = append(found, v)
+		}
+	}
+	return strings.Join(found, "; ")
+}
+
+func extractDSL(resp *ResponseInfo, exprs []string) string {
+	var found []string
+	for _, e := range exprs {
+		e = strings.TrimSpace(e)
+		if e == "" {
+			continue
+		}
+		v, err := evalDSLValue(e, resp)
+		if err == nil && v != "" {
+			found = append(found, v)
+		}
+	}
+	return strings.Join(found, "; ")
 }
 
 func truncateMatch(data string, words []string, maxLen int) string {

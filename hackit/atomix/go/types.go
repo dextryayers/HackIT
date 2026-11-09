@@ -32,27 +32,29 @@ var SeverityFromStr = map[string]Severity{
 }
 
 type TemplateInfo struct {
-	Name        string `yaml:"name"`
-	Author      string `yaml:"author"`
-	Severity    string `yaml:"severity"`
-	Description string `yaml:"description"`
-	Tags        TagsField `yaml:"tags"`
-	Type        string `yaml:"type,omitempty"`
-	Reference   StringSlice `yaml:"reference,omitempty"`
+	Name           string                  `yaml:"name"`
+	Author         string                  `yaml:"author"`
+	Severity       string                  `yaml:"severity"`
+	Description    string                  `yaml:"description"`
+	Tags           TagsField               `yaml:"tags"`
+	Type           string                  `yaml:"type,omitempty"`
+	Reference      StringSlice             `yaml:"reference,omitempty"`
 	Classification *TemplateClassification `yaml:"classification,omitempty"`
 }
 
 type Request struct {
-	Method   string              `yaml:"method"`
-	Path     []string            `yaml:"path"`
-	Headers  map[string]string   `yaml:"headers,omitempty"`
-	Body     string              `yaml:"body,omitempty"`
-	Matchers []MatcherCondition  `yaml:"matchers,omitempty"`
-	Payloads []string            `yaml:"payloads,omitempty"`
-	MatchersCondition string     `yaml:"matchers-condition,omitempty"`
-	StopAtFirstMatch  bool       `yaml:"stop-at-first-match,omitempty"`
-	Redirects         bool       `yaml:"redirects,omitempty"`
-	MaxRedirects       int       `yaml:"max-redirects,omitempty"`
+	Method            string             `yaml:"method"`
+	Path              []string           `yaml:"path"`
+	Headers           map[string]string  `yaml:"headers,omitempty"`
+	Body              string             `yaml:"body,omitempty"`
+	Matchers          []MatcherCondition `yaml:"matchers,omitempty"`
+	Payloads          []string           `yaml:"payloads,omitempty"`
+	MatchersCondition string             `yaml:"matchers-condition,omitempty"`
+	StopAtFirstMatch  bool               `yaml:"stop-at-first-match,omitempty"`
+	Redirects         bool               `yaml:"redirects,omitempty"`
+	MaxRedirects      int                `yaml:"max-redirects,omitempty"`
+	// Extractors scoped to this request (nuclei-style nesting).
+	Extractors []*Extractor `yaml:"extractors,omitempty"`
 }
 
 type MatcherCondition struct {
@@ -66,27 +68,36 @@ type MatcherCondition struct {
 	Name      string   `yaml:"name,omitempty"`
 	Negative  bool     `yaml:"negative,omitempty"`
 	DSL       []string `yaml:"dsl,omitempty"`
+	// CaseInsensitive makes word/regex matching ignore case (nuclei:
+	// `case-insensitive: true`).
+	CaseInsensitive bool `yaml:"case-insensitive,omitempty"`
 }
 
 type Extractor struct {
 	Type  string   `yaml:"type"`
 	Name  string   `yaml:"name"`
 	Regex []string `yaml:"regex"`
+	// JSON lists dotted paths (`a.b.c`, `a.b[0].c`) for `type: json`.
+	JSON []string `yaml:"json,omitempty"`
+	// Kval lists header key names for `type: kval`.
+	Kval []string `yaml:"kval,omitempty"`
+	// DSL lists expressions evaluated per response for `type: dsl`.
+	DSL []string `yaml:"dsl,omitempty"`
 }
 
 type Template struct {
-	ID        string              `yaml:"id"`
-	Info      TemplateInfo        `yaml:"info"`
-	Requests  []Request           `yaml:"requests"`
-	Matchers  []MatcherCondition  `yaml:"matchers,omitempty"`
-	Extractor *Extractor          `yaml:"extractor,omitempty"`
+	ID        string             `yaml:"id"`
+	Info      TemplateInfo       `yaml:"info"`
+	Requests  []Request          `yaml:"requests"`
+	Matchers  []MatcherCondition `yaml:"matchers,omitempty"`
+	Extractor *Extractor         `yaml:"extractor,omitempty"`
 	// Portable `http:` blocks are normalized into Requests on load.
-	HTTP      []HTTPRequestBlock  `yaml:"http,omitempty"`
-	Variables map[string]string    `yaml:"variables,omitempty"`
-	MatchersCondition string       `yaml:"matchers-condition,omitempty"`
-	StopAtFirstMatch  bool         `yaml:"stop-at-first-match,omitempty"`
-	Extractors []*Extractor        `yaml:"extractors,omitempty"`
-	FilePath  string              `yaml:"-"`
+	HTTP              []HTTPRequestBlock `yaml:"http,omitempty"`
+	Variables         map[string]string  `yaml:"variables,omitempty"`
+	MatchersCondition string             `yaml:"matchers-condition,omitempty"`
+	StopAtFirstMatch  bool               `yaml:"stop-at-first-match,omitempty"`
+	Extractors        []*Extractor       `yaml:"extractors,omitempty"`
+	FilePath          string             `yaml:"-"`
 }
 
 type ResponseInfo struct {
@@ -140,22 +151,22 @@ type FilterOptions struct {
 }
 
 type ScanStats struct {
-	TemplatesTotal   int32  `json:"templates_total"`
-	TemplatesTested  int32  `json:"templates_tested"`
-	RequestsSent     int32  `json:"requests_sent"`
-	Findings         int32  `json:"findings"`
-	Errors           int32  `json:"errors"`
-	StartedAt        string `json:"started_at"`
-	Duration         string `json:"duration"`
-	TargetsScanned   int32  `json:"targets_scanned"`
-	Retries          int32  `json:"retries"`
+	TemplatesTotal  int32  `json:"templates_total"`
+	TemplatesTested int32  `json:"templates_tested"`
+	RequestsSent    int32  `json:"requests_sent"`
+	Findings        int32  `json:"findings"`
+	Errors          int32  `json:"errors"`
+	StartedAt       string `json:"started_at"`
+	Duration        string `json:"duration"`
+	TargetsScanned  int32  `json:"targets_scanned"`
+	Retries         int32  `json:"retries"`
 }
 
-func (s *ScanStats) IncTested()    { atomic.AddInt32(&s.TemplatesTested, 1) }
-func (s *ScanStats) IncRequests()  { atomic.AddInt32(&s.RequestsSent, 1) }
-func (s *ScanStats) IncFindings()  { atomic.AddInt32(&s.Findings, 1) }
-func (s *ScanStats) IncErrors()    { atomic.AddInt32(&s.Errors, 1) }
-func (s *ScanStats) IncRetries()   { atomic.AddInt32(&s.Retries, 1) }
+func (s *ScanStats) IncTested()   { atomic.AddInt32(&s.TemplatesTested, 1) }
+func (s *ScanStats) IncRequests() { atomic.AddInt32(&s.RequestsSent, 1) }
+func (s *ScanStats) IncFindings() { atomic.AddInt32(&s.Findings, 1) }
+func (s *ScanStats) IncErrors()   { atomic.AddInt32(&s.Errors, 1) }
+func (s *ScanStats) IncRetries()  { atomic.AddInt32(&s.Retries, 1) }
 
 type ScanConfig struct {
 	// Section 1: Target & Scope
@@ -169,25 +180,25 @@ type ScanConfig struct {
 	ScopePat    []string
 
 	// Section 2: Template Management
-	Template        string
-	TemplateDir     string
-	Tags            string
-	ExcludeTags     string
-	ExcludeSeverity string
-	Severity        string
-	Author          string
-	ID              string
-	Type            string
-	TemplateVersion string
-	UpdateTemplates bool
-	Validate            bool
-	CustomTemplateDir    string
-	ValidateDeep        bool
-	NoCache             bool
-	Priority            bool
-	AdaptiveRate        bool
-	LoadFiles           string
-	FromGit             string
+	Template          string
+	TemplateDir       string
+	Tags              string
+	ExcludeTags       string
+	ExcludeSeverity   string
+	Severity          string
+	Author            string
+	ID                string
+	Type              string
+	TemplateVersion   string
+	UpdateTemplates   bool
+	Validate          bool
+	CustomTemplateDir string
+	ValidateDeep      bool
+	NoCache           bool
+	Priority          bool
+	AdaptiveRate      bool
+	LoadFiles         string
+	FromGit           string
 
 	// Section 3: Performance
 	Threads      int
@@ -199,15 +210,15 @@ type ScanConfig struct {
 	BulkSize     int
 
 	// Section 4: Network
-	ScanAllIps   bool
-	IP           string
-	Port         string
-	Path         string
-	Method       string
-	Payloads     string
-	Fuzz         string
-	FuzzThread   int
-	FuzzRecurse  bool
+	ScanAllIps  bool
+	IP          string
+	Port        string
+	Path        string
+	Method      string
+	Payloads    string
+	Fuzz        string
+	FuzzThread  int
+	FuzzRecurse bool
 
 	// Section 5: Output
 	OutputFile string
@@ -277,46 +288,48 @@ type ScanConfig struct {
 	OOBType          string
 
 	// Section 10: Chaining & Misc
-	Chain        string
-	ChainVars    string
-	CompatMode   bool
-	SmartScan    bool
-	MultiTarget  bool
-	APIDiscovery bool
-	Passive      bool
+	Chain         string
+	ChainVars     string
+	CompatMode    bool
+	SmartScan     bool
+	MultiTarget   bool
+	APIDiscovery  bool
+	Passive       bool
 	MinConfidence string
-	Replay       string
-	Diff         string
-	Monitor      string
-	Web          bool
-	WebPort      int
-	WebPath      string
-	WebAuth      string
-	Push         string
-	PushFormat   string
-	TelegramBot  string
-	TelegramChat string
-	SlackWebhook string
-	NoBanner     bool
-	ConfigFile   string
-	Examples     bool
-	Health       bool
-	Completion   string
-	License      bool
+	Replay        string
+	Diff          string
+	Monitor       string
+	Web           bool
+	WebPort       int
+	WebPath       string
+	WebAuth       string
+	Push          string
+	PushFormat    string
+	TelegramBot   string
+	TelegramChat  string
+	SlackWebhook  string
+	NoBanner      bool
+	NoMeta        bool
+	Pipeline      bool
+	ConfigFile    string
+	Examples      bool
+	Health        bool
+	Completion    string
+	License       bool
 
 	// Section 11: Headless Browser
-	Headless          bool
-	HeadlessOpts      string
-	NoSandbox         bool
-	ShowBrowser       bool
-	SystemChrome      bool
-	UseChrome         string
-	PageTimeout       int
-	ActionTimeout     int
+	Headless      bool
+	HeadlessOpts  string
+	NoSandbox     bool
+	ShowBrowser   bool
+	SystemChrome  bool
+	UseChrome     string
+	PageTimeout   int
+	ActionTimeout int
 
 	// Section 12: Project Database
-	Project         string
-	ProjectPath     string
+	Project          string
+	ProjectPath      string
 	AllowLocalAccess bool
 
 	// Section 13: Protocol Scanning
@@ -332,10 +345,10 @@ type ScanConfig struct {
 	UncoverField  string
 
 	// Section 15: Template Signing
-	Sign     string
-	Verify   string
-	SignKey  string
-	SignPass string
+	Sign      string
+	Verify    string
+	SignKey   string
+	SignPass  string
 	VerifyKey string
 }
 
