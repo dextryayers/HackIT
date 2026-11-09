@@ -39,7 +39,7 @@ func BenchmarkMatchWordsCaseInsensitivePreLogged(b *testing.B) {
 }
 
 func BenchmarkMatchWordsCaseInsensitivePerCall(b *testing.B) {
-	// v3.0.0 behavior: lower the body on every matcher call.
+	// pre-upgrade behavior: lower the body on every matcher call.
 	words := []string{"ADMIN-PANEL", "DASHBOARD", "WELCOME"}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

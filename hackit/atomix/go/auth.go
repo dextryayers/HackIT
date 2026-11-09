@@ -67,7 +67,9 @@ func fetchOAuthToken(url, data string) (string, error) {
 	resp, err := SendRequest(client, url, "POST", data, map[string]string{
 		"Content-Type": "application/json",
 	})
-	if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("oauth failed: status %d", resp.StatusCode)
 	}
@@ -81,7 +83,9 @@ func (ap *AuthProvider) Apply(req *http.Request) {
 }
 
 func ParseCookieString(s string) []string {
-	if s == "" { return nil }
+	if s == "" {
+		return nil
+	}
 	return []string{s}
 }
 

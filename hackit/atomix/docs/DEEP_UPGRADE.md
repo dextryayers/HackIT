@@ -1,8 +1,10 @@
 # Atomix — Deep Upgrade Audit & Roadmap
 
-Status: living document. v3.0.0 deep-upgrade pass completed and verified against
+Release line unchanged: V2.1 (HackIT V2.1). The `3.0.0`/`3.1.0` labels used in this document during internal iteration are retired — the tool stays V2.1 everywhere.
+
+Status: living document. V2.1 deep-upgrade pass completed and verified against
 `atomix/go` (build + vet + gofmt + 34 unit tests + E2E fixture scan). Items
-marked **[DONE]** shipped in v3.0.0. Everything else is the remaining backlog,
+marked **[DONE]** shipped in the V2.1 deep-upgrade pass. Everything else is the remaining backlog,
 ordered by impact.
 
 ---
@@ -14,7 +16,7 @@ bridge) that handles nuclei-style `http:` template blocks by normalizing them
 into its internal `requests:` model. Baseline: builds clean, `--validate`
 reports 310/310 templates valid.
 
-The audit found the usual generated-code skeleton, and v3.0.0 closes it:
+The audit found the usual generated-code skeleton, and the V2.1 pass closes it:
 **a real DSL expression engine** (expr-lang), **request-scoped extractors**
 (nuclei-style `json`/`kval`/`dsl`/`regex`), **per-request `case-insensitive`
 matchers**, **relative-path template support**, and **everything the CLI
@@ -124,7 +126,7 @@ breaker) → `SendRequestWithRetry` (host override for -scan-all-ips) →
 ### 3.4 Quality gaps — status
 - Unit tests: **34 tests**, `go test ./...` green
 - `go vet` clean; `go mod tidy` applied (expr-lang/expr v1.17.8 direct)
-- `gofmt -l`: repo was never gofmt-clean; v3.0.0-formatted files are clean,
+- `gofmt -l`: repo was never gofmt-clean; deep-upgrade-formatted files are clean,
   remaining pre-existing files listed for a follow-up sweep
 - No `golangci-lint` config; no CI gate for `--validate` on template changes
 
@@ -132,7 +134,7 @@ breaker) → `SendRequestWithRetry` (host override for -scan-all-ips) →
 
 ## 4. Nuclei parity matrix
 
-| Capability | nuclei | atomix v2.2 | atomix v3.0 |
+| Capability | nuclei | atomix v2.2 (pre-upgrade) | atomix V2.1 (post deep-upgrade) |
 |---|---|---|---|
 | YAML templates, multi-doc | ✅ | ✅ | ✅ |
 | `requests:` native style | n/a | ✅ | ✅ |
@@ -185,8 +187,19 @@ breaker) → `SendRequestWithRetry` (host override for -scan-all-ips) →
 - [x] `-bulk-size` fan-out cap
 - [x] `-delay` fixed pacing
 - [x] `-rate-limit-minute` derived rps
-- [ ] Body-arena pooling (`sync.Pool`), zero-alloc target scanner
-- [ ] Benchmark suite with baseline in docs/
+- [x] Body-arena pooling via `sync.Pool` (`readBodyPooled`)
+- [x] Case-insensitive matchers: pre-lowered haystack per response (~770×
+      per CI matcher call)
+- [x] HTTP/2 default-on (`ForceAttemptHTTP2`) instead of opt-in
+- [x] `-H` header parse memoized per scan; auth provider memoized
+      (OAuth2 was fetching a token per request)
+- [x] `hostOf` computed once per probe (was 3–4 `url.Parse` per request)
+- [x] Header string construction without `fmt.Sprintf`
+- [x] Benchmark suite (`bench_test.go`) + baseline in `docs/PERFORMANCE.md`
+      (E2E: 4.23s → 3.47–3.83s, identical findings)
+- [ ] DNS TTL cache in the custom dialer (multi-target sweeps)
+- [ ] DSL env preallocation/pooled closures (4.8µs → ?)
+- [ ] Zero-alloc target-file scanner for >10M-host lists
 
 ### Phase 4 — Robustness / operations
 - [x] `-resume <file>` (verified: skips completed pairs on rerun)
@@ -244,3 +257,6 @@ breaker) → `SendRequestWithRetry` (host override for -scan-all-ips) →
 11. SARIF: 1 rule for 3 results (deduped) — verified
 12. Python bridge: `python3 main.py vuln atomix -u … --silent --jsonl`
     → findings emitted through `hackit vuln atomix`
+13. Performance Part 2: `go test -bench . -benchtime=100ms -benchmem`
+    → results in `docs/PERFORMANCE.md`; E2E wall 4.23s → 3.47–3.83s,
+    finding set identical before/after (46/46 tuples)

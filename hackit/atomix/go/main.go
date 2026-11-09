@@ -14,7 +14,7 @@ import (
 
 // Version is the single source of truth for the binary version,
 // reported by --version and embedded in SARIF reports.
-const Version = "3.0.0"
+const Version = "2.1.0"
 
 type flagSet struct {
 	*flag.FlagSet

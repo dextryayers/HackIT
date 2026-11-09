@@ -12,21 +12,21 @@ import (
 )
 
 type Scanner struct {
-	Interactive    bool
-	Client         *http.Client
-	Templates      []*Template
-	URL            string
-	Threads        int
-	Timeout        int
-	Results        []Result
-	Config         *ScanConfig
-	Verbose        bool
-	Deduplicator   *Deduplicator
-	Stats          *ScanStats
-	Progress       *ProgressDisplay
-	StatsCollector *StatsCollector
-	Debugger       *Debugger
-	StartTime      time.Time
+	Interactive     bool
+	Client          *http.Client
+	Templates       []*Template
+	URL             string
+	Threads         int
+	Timeout         int
+	Results         []Result
+	Config          *ScanConfig
+	Verbose         bool
+	Deduplicator    *Deduplicator
+	Stats           *ScanStats
+	Progress        *ProgressDisplay
+	StatsCollector  *StatsCollector
+	Debugger        *Debugger
+	StartTime       time.Time
 	vars            *TemplateVars
 	throttler       *Throttler
 	bulkSize        int
