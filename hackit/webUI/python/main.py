@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse, JSONResponse
 import uuid
 import time
 import asyncio
+import re
 import os
 import ssl
 import socket
@@ -21,6 +22,9 @@ from settings_store import load_settings, save_settings, get_api_key, DEFAULT_AP
 from typing import Dict, Optional, List, Any
 import httpx
 import dns.resolver
+# Hard ceiling on DNS waits — a dead/slow resolver must never hang the scan loop.
+dns.resolver.timeout = 3.0
+dns.resolver.lifetime = 3.0
 from datetime import datetime, timezone
 from osint_common import (
     get_ssl_cert_info, parse_cert_to_dict, check_email_security,
@@ -344,71 +348,199 @@ async def http_headers(url: str = Query(..., description="Target URL or domain")
         url = f"https://{url}"
     domain = normalize_target(url)
 
-    security_header_map = {
-        "content-security-policy": ("CSP", "critical"),
-        "strict-transport-security": ("HSTS", "critical"),
-        "x-frame-options": ("X-Frame-Options", "high"),
-        "x-content-type-options": ("X-Content-Type-Options", "high"),
-        "referrer-policy": ("Referrer-Policy", "medium"),
-        "permissions-policy": ("Permissions-Policy", "medium"),
-        "x-xss-protection": ("X-XSS-Protection", "medium"),
-        "cross-origin-opener-policy": ("COOP", "medium"),
-        "cross-origin-resource-policy": ("CORP", "medium"),
+    # header_key -> (display name, severity, remediation)
+    inventory = {
+        "content-security-policy": ("Content-Security-Policy", "critical",
+            "Define a policy; avoid 'unsafe-inline'/'unsafe-eval' and wildcard sources."),
+        "strict-transport-security": ("Strict-Transport-Security", "critical",
+            "Set 'max-age=31536000; includeSubDomains; preload' on HTTPS responses."),
+        "x-frame-options": ("X-Frame-Options", "high",
+            "Set 'DENY' or 'SAMEORIGIN', or CSP frame-ancestors 'none'."),
+        "x-content-type-options": ("X-Content-Type-Options", "high",
+            "Set to 'nosniff'."),
+        "referrer-policy": ("Referrer-Policy", "medium",
+            "Set 'no-referrer' or 'strict-origin-when-cross-origin'."),
+        "permissions-policy": ("Permissions-Policy", "medium",
+            "Deny camera, microphone, geolocation unless required."),
+        "x-xss-protection": ("X-XSS-Protection", "low",
+            "Set to '0' (modern browsers removed the auditor); CSP supersedes it."),
+        "cross-origin-opener-policy": ("Cross-Origin-Opener-Policy", "medium",
+            "Set 'same-origin' to isolate browsing contexts."),
+        "cross-origin-resource-policy": ("Cross-Origin-Resource-Policy", "medium",
+            "Set 'same-origin' or 'same-site' where applicable."),
     }
 
     try:
         async with httpx.AsyncClient(verify=False, timeout=15.0, follow_redirects=True) as client:
             resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
-            headers = dict(resp.headers)
+            headers = {k.lower(): v for k, v in resp.headers.items()}
+            all_headers = {}
+            for k in set(headers):
+                vals = resp.headers.get_list(k)
+                all_headers[k] = "\n".join(vals)
             status_code = resp.status_code
 
             sec_headers = {}
             missing_sec = []
-            for header_key, (display_name, severity) in security_header_map.items():
+            findings = []
+
+            for header_key, (display_name, severity, remediation) in inventory.items():
                 val = headers.get(header_key)
                 if val:
-                    sec_headers[display_name] = {"present": True, "value": val[:200], "severity": severity}
+                    sec_headers[display_name] = {"present": True, "value": val[:300], "severity": severity}
                 else:
                     missing_sec.append(display_name)
+                    findings.append({
+                        "id": f"missing-{header_key}",
+                        "title": f"Missing {display_name}",
+                        "severity": severity,
+                        "evidence": f"No {display_name} header in response",
+                        "remediation": remediation,
+                    })
 
-            server = headers.get("server") or headers.get("x-powered-by")
+            # HSTS quality
+            hsts = headers.get("strict-transport-security", "")
+            if hsts:
+                m = re.search(r"max-age\s*=\s*(\d+)", hsts, re.I)
+                max_age = int(m.group(1)) if m else 0
+                if max_age and max_age < 31536000:
+                    findings.append({
+                        "id": "hsts-max-age-low",
+                        "title": "HSTS max-age too low",
+                        "severity": "medium",
+                        "evidence": f"max-age={max_age} (< 31536000)",
+                        "remediation": "Set max-age=31536000 (1 year) or higher.",
+                    })
+                if "includesubdomains" not in hsts.lower():
+                    findings.append({
+                        "id": "hsts-no-subdomains",
+                        "title": "HSTS missing includeSubDomains",
+                        "severity": "low",
+                        "evidence": "includeSubDomains directive absent",
+                        "remediation": "Add '; includeSubDomains' after validating subdomains.",
+                    })
+
+            # CSP quality
+            csp = headers.get("content-security-policy", "")
+            if csp:
+                if "unsafe-inline" in csp.lower():
+                    findings.append({
+                        "id": "csp-unsafe-inline",
+                        "title": "CSP allows 'unsafe-inline'",
+                        "severity": "high",
+                        "evidence": "unsafe-inline in Content-Security-Policy",
+                        "remediation": "Remove unsafe-inline; use nonces or hashes instead.",
+                    })
+                if "unsafe-eval" in csp.lower():
+                    findings.append({
+                        "id": "csp-unsafe-eval",
+                        "title": "CSP allows 'unsafe-eval'",
+                        "severity": "high",
+                        "evidence": "unsafe-eval in Content-Security-Policy",
+                        "remediation": "Remove unsafe-eval from script-src.",
+                    })
+                if "*" in csp.lower():
+                    findings.append({
+                        "id": "csp-wildcard",
+                        "title": "CSP contains wildcard sources",
+                        "severity": "medium",
+                        "evidence": "wildcard '*' in Content-Security-Policy",
+                        "remediation": "Restrict source lists to required hosts.",
+                    })
+
+            # Server version disclosure
+            server = headers.get("server") or headers.get("x-powered-by") or ""
+            if server and any(ch.isdigit() for ch in server):
+                findings.append({
+                    "id": "server-version-disclosure",
+                    "title": "Server version disclosed",
+                    "severity": "low",
+                    "evidence": f"Server header exposes version: {server[:80]}",
+                    "remediation": "Suppress version tokens (e.g. ServerTokens Prod, server_tokens off).",
+                })
+
+            # Cookie attribute audit
+            raw_cookies = resp.headers.get_list("set-cookie")
+            cookie_audit = []
+            for raw in raw_cookies:
+                parts = [p.strip() for p in raw.split(";")]
+                name_value = parts[0] if parts else ""
+                name = name_value.split("=")[0].strip().lower()
+                attrs = {p.lower() for p in parts[1:]}
+                flags = {a.split("=")[0]: a.split("=", 1)[1].strip() if "=" in a else True for a in attrs}
+                issues = []
+                if not any(a.startswith("secure") for a in attrs):
+                    issues.append("missing Secure")
+                if not any(a.startswith("httponly") for a in attrs):
+                    issues.append("missing HttpOnly")
+                samesite = next((a for a in attrs if a.startswith("samesite")), None)
+                if not samesite:
+                    issues.append("missing SameSite")
+                elif samesite.split("=", 1)[1].strip().lower() == "none" and not any(a.startswith("secure") for a in attrs):
+                    issues.append("SameSite=None without Secure")
+                sev = "high" if any(i.startswith("missing Secure") or i.startswith("missing HttpOnly") for i in issues) else ("medium" if issues else "info")
+                cookie_audit.append({
+                    "name": name,
+                    "issues": issues,
+                    "severity": sev,
+                    "raw": raw[:300],
+                })
+                for issue in issues:
+                    findings.append({
+                        "id": f"cookie-{name}-{issue.replace(' ', '-').lower()}",
+                        "title": f"Cookie '{name}' {issue}",
+                        "severity": sev,
+                        "evidence": f"Set-Cookie: {raw[:200]}",
+                        "remediation": "Set Secure; HttpOnly; SameSite=Lax (or Strict) on session cookies.",
+                    })
+
             cdn = None
             cdn_indicators = {
-                "cf-ray": "Cloudflare", "x-akamai-transformed": "Akamai",
-                "x-fastly-request-id": "Fastly", "x-amz-cf-id": "AWS CloudFront",
-                "x-cdn": "Generic CDN", "server": None
+                "cf-ray": "Cloudflare",
+                "x-akamai-transformed": "Akamai",
+                "x-fastly-request-id": "Fastly",
+                "x-amz-cf-id": "AWS CloudFront",
             }
             for key, name in cdn_indicators.items():
-                if key == "server":
-                    sv = headers.get("server", "").lower()
-                    if "cloudflare" in sv: cdn = "Cloudflare"
-                    elif "akamai" in sv: cdn = "Akamai"
-                    elif "cloudfront" in sv or "amazons3" in sv: cdn = "AWS"
-                elif headers.get(key):
+                if headers.get(key):
                     cdn = name
                     break
-
-            cookies = []
-            if "set-cookie" in headers:
-                cookies = [c.strip() for c in headers["set-cookie"].split("\n") if c.strip()]
+            if not cdn:
+                sv = (headers.get("server") or "").lower()
+                if "cloudflare" in sv: cdn = "Cloudflare"
+                elif "akamai" in sv: cdn = "Akamai"
+                elif "cloudfront" in sv or "amazons3" in sv: cdn = "AWS"
 
             tech = []
             if server: tech.append(f"Server: {server}")
-            if "x-powered-by" in headers: tech.append(f"Powered by: {headers['x-powered-by']}")
-            if "x-generator" in headers: tech.append(f"Generator: {headers['x-generator']}")
+            if headers.get("x-powered-by"): tech.append(f"Powered by: {headers['x-powered-by']}")
+            if headers.get("x-generator"): tech.append(f"Generator: {headers['x-generator']}")
             if cdn: tech.append(f"CDN: {cdn}")
+
+            # Weighted security score
+            sev_weight = {"critical": 25, "high": 10, "medium": 5, "low": 2, "info": 0}
+            score = max(0, 100 - sum(sev_weight.get(f["severity"], 0) for f in findings))
+            if score >= 90: grade = "A"
+            elif score >= 75: grade = "B"
+            elif score >= 60: grade = "C"
+            elif score >= 40: grade = "D"
+            else: grade = "F"
 
             return HTTPHeaderResponse(
                 url=str(resp.url),
                 status_code=status_code,
-                headers=headers,
+                headers=all_headers,
                 security_headers=sec_headers,
                 missing_security_headers=missing_sec,
-                server=server,
+                server=server or None,
                 technology=tech,
                 cdn=cdn,
-                cookies=cookies,
-                redirect_chain=[str(r.url) for r in resp.history] if hasattr(resp, 'history') else []
+                cookies=raw_cookies,
+                redirect_chain=[str(r.url) for r in resp.history] if hasattr(resp, 'history') else [],
+                score=score,
+                grade=grade,
+                findings=findings,
+                cookie_audit=cookie_audit,
             )
     except Exception as e:
         return HTTPHeaderResponse(url=url, error=str(e))
@@ -660,10 +792,14 @@ async def domain_subdomains(domain: str = Query(..., description="Target domain"
                                 subdomains.append({"subdomain": sub, "resolution": ip, "source": "HackerTarget"})
         except: pass
 
+    st_key = get_api_key("securitytrails")
+
     async def from_securitytrails():
+        if not st_key:
+            return  # no key configured — skip instead of firing a doomed request
         try:
             async with httpx.AsyncClient(timeout=15.0) as c:
-                resp = await c.get(f"https://api.securitytrails.com/v1/domain/{domain}/subdomains?apikey=")
+                resp = await c.get(f"https://api.securitytrails.com/v1/domain/{domain}/subdomains?apikey={st_key}")
                 if resp.status_code == 200:
                     sources.append("SecurityTrails")
                     for sub in resp.json().get("subdomains", []):
@@ -702,7 +838,21 @@ async def domain_subdomains(domain: str = Query(..., description="Target domain"
                             subdomains.append({"subdomain": sub, "source": "RapidDNS"})
         except: pass
 
+    # Wildcard DNS check: brute-forcing a wildcard domain yields garbage.
+    # If a random label resolves, brute results are unusable — skip them.
+    wildcard = False
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None, lambda: dns.resolver.resolve(f"hz-{uuid.uuid4().hex[:10]}.{domain}", "A")
+        )
+        wildcard = True
+    except Exception:
+        wildcard = False
+
     async def from_common_brute():
+        if wildcard:
+            return
         prefixes = [
             "www", "mail", "ftp", "admin", "api", "dev", "staging", "vpn", "cdn",
             "blog", "app", "webmail", "remote", "portal", "ssh", "git", "jenkins",
@@ -732,14 +882,42 @@ async def domain_subdomains(domain: str = Query(..., description="Target domain"
 
     await asyncio.gather(from_crtsh(), from_hackertarget(), from_bufferover(), from_rapiddns(), from_common_brute())
 
+    # Resolve every discovered name so the UI can separate live hosts from
+    # stale records. Batched with a small concurrency cap.
+    async def resolve_entry(sd):
+        if sd.get("resolution"):
+            sd["resolved"] = "true"
+            return
+        loop = asyncio.get_event_loop()
+        try:
+            answers = await loop.run_in_executor(None, lambda: dns.resolver.resolve(sd["subdomain"], "A"))
+            ips = [str(a) for a in answers]
+            sd["resolution"] = ips[0]
+            sd["all_ips"] = ",".join(ips)
+            sd["resolved"] = "true"
+        except Exception:
+            sd["resolved"] = "false"
+
+    for i in range(0, len(subdomains), 20):
+        await asyncio.gather(*[resolve_entry(sd) for sd in subdomains[i:i + 20]])
+
     for sd in subdomains:
         sd.pop("_seen", None)
 
+    # Only report sources that actually returned something
+    src_counts = {}
+    for sd in subdomains:
+        src_counts[sd["source"]] = src_counts.get(sd["source"], 0) + 1
+    active_sources = [s for s in dict.fromkeys(sources) if src_counts.get(s, 0) > 0]
+    if wildcard:
+        active_sources.append("Wildcard DNS detected — brute force skipped")
+
+    subdomains.sort(key=lambda x: (x.get("resolved") != "true", x["subdomain"]))
     return SubdomainResponse(
         domain=domain,
-        subdomains=sorted(subdomains, key=lambda x: x["subdomain"]),
+        subdomains=subdomains,
         total=len(subdomains),
-        sources=list(dict.fromkeys(sources))
+        sources=active_sources
     )
 
 

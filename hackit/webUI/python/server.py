@@ -46,12 +46,17 @@ async def run_scan_task(job_id: str, target: str):
         risk_dist = {"High Risk": 0, "Elevated Risk": 0, "Standard Target": 0, "Informational": 0}
         type_dist = {}
         
+        STRONG = ('admin', 'vpn', 'cpanel', 'leak', 'breach', 'secret', 'password')
+        MODERATE = ('exposed', 'outdated', 'deprecated', 'misconfig', 'redirect', 'open')
         for f in job.findings:
-            # Simple heuristic
-            if any(x in f.entity.lower() for x in ['admin', 'vpn', 'cpanel']):
-                f.threat_level = "High Risk"
-                f.color = "red"
-            
+            current = (getattr(f, "threat_level", "") or "Informational")
+            entity = (f.entity or "").lower()
+            if current in ("Informational", "Standard Target", ""):
+                if any(x in entity for x in STRONG):
+                    f.threat_level = "High Risk"
+                    f.color = "red"
+                elif any(x in entity for x in MODERATE):
+                    f.threat_level = "Elevated Risk"
             risk_dist[f.threat_level] = risk_dist.get(f.threat_level, 0) + 1
             type_dist[f.type] = type_dist.get(f.type, 0) + 1
 

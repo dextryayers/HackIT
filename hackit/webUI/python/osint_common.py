@@ -7,6 +7,9 @@ from urllib.parse import urlparse, urljoin
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 import dns.resolver
+# Hard ceiling on DNS waits — a dead/slow resolver must never hang the scan loop.
+dns.resolver.timeout = 3.0
+dns.resolver.lifetime = 3.0
 from models import IntelligenceFinding
 
 

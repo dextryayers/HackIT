@@ -210,10 +210,22 @@ import Layout from '../layouts/Layout.astro';
 						</button>
 						<span id="browse-detail-type" class="px-3 py-1 bg-sf-lightbg text-sf-text rounded-md text-[11px] font-medium border border-sf-border uppercase"></span>
 					</div>
-					<div class="relative">
-						<i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-sf-muted text-xs"></i>
-						<input type="text" id="browse-detail-search" placeholder="Search..." aria-label="Search findings" class="pl-8 pr-4 py-1.5 text-xs border border-sf-border rounded-md bg-sf-lightbg w-64 text-sf-text focus:outline-none focus:border-sf-muted transition-all">
+					<div class="flex items-center gap-3">
+						<div class="relative">
+							<i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-sf-muted text-xs"></i>
+							<input type="text" id="browse-detail-search" placeholder="Search..." aria-label="Search findings" class="pl-8 pr-4 py-1.5 text-xs border border-sf-border rounded-md bg-sf-lightbg w-48 lg:w-64 text-sf-text focus:outline-none focus:border-sf-muted transition-all">
+						</div>
+						<button id="browse-detail-export" class="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider bg-sf-lightbg border border-sf-border text-sf-muted hover:text-sf-text rounded-md transition-all flex items-center gap-2" title="Export visible findings as CSV">
+							<i class="fas fa-file-csv"></i> CSV
+						</button>
 					</div>
+				</div>
+				<div id="browse-detail-chips" class="flex items-center gap-2 px-4 py-2 border-b border-sf-border bg-sf-card/50">
+					<button data-sev="all" class="chip sev-chip px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider rounded border transition-all text-sf-text border-sf-muted/40 bg-sf-lightbg">All <span id="chip-count-all" class="ml-1 text-sf-muted">0</span></button>
+					<button data-sev="High Risk" class="chip sev-chip px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider rounded border transition-all text-red-400 border-red-500/20 bg-red-500/5 hover:bg-red-500/10">High Risk <span id="chip-count-high" class="ml-1 opacity-70">0</span></button>
+					<button data-sev="Elevated Risk" class="chip sev-chip px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider rounded border transition-all text-amber-400 border-amber-500/20 bg-amber-500/5 hover:bg-amber-500/10">Elevated <span id="chip-count-elevated" class="ml-1 opacity-70">0</span></button>
+					<button data-sev="Standard Target" class="chip sev-chip px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider rounded border transition-all text-sky-400 border-sky-500/20 bg-sky-500/5 hover:bg-sky-500/10">Standard <span id="chip-count-standard" class="ml-1 opacity-70">0</span></button>
+					<button data-sev="Informational" class="chip sev-chip px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider rounded border transition-all text-sf-muted border-sf-border bg-sf-lightbg hover:text-sf-text">Info <span id="chip-count-info" class="ml-1 opacity-70">0</span></button>
 				</div>
 				<div class="flex-1 overflow-auto">
 					<table class="w-full text-left text-sm border-collapse">
@@ -562,6 +574,12 @@ import Layout from '../layouts/Layout.astro';
 
 		function renderGraph(target, findings) {
 			const container = document.getElementById('network-container');
+			if (typeof vis === 'undefined') {
+				const loading = document.getElementById('graph-loading');
+				if (loading) loading.classList.add('hidden');
+				if (container) container.innerHTML = `<div class="h-full flex flex-col items-center justify-center text-center gap-3 p-10"><i class="fas fa-project-diagram text-3xl text-sf-muted/30"></i><p class="text-xs font-semibold uppercase tracking-widest text-sf-muted">Graph unavailable</p><p class="text-[10px] text-sf-muted/60 max-w-xs">The network graph library failed to load. Findings remain available in the Browse tab.</p></div>`;
+				return;
+			}
 			const nodes = new vis.DataSet([
 				{ 
 					id: 0, 
@@ -843,12 +861,14 @@ import Layout from '../layouts/Layout.astro';
 
 			const navLogLink = document.getElementById('nav-log-link');
 			if (navLogLink) navLogLink.href = `/log?target=${encodeURIComponent(target)}`;
-			document.getElementById('view-full-log').onclick = (e) => {
+			const view_full_log = document.getElementById('view-full-log');
+			if (view_full_log) view_full_log.onclick = (e) => {
 				e.preventDefault();
 				window.location.href = `/log?target=${encodeURIComponent(target)}`;
 			};
 
-			document.getElementById('btn-export-hackit').onclick = () => {
+			const btn_export_hackit = document.getElementById('btn-export-hackit');
+			if (btn_export_hackit) btn_export_hackit.onclick = () => {
 				const rawData = document.getElementById('raw-json-display').innerText;
 				const blob = new Blob([rawData], { type: 'application/json' });
 				const url = URL.createObjectURL(blob);
@@ -902,19 +922,47 @@ import Layout from '../layouts/Layout.astro';
 			});
 		}
 
+		let detailSeverity = 'all';
+		let expandedKey = null;
+		const SEV_RANK = { 'High Risk': 0, 'Elevated Risk': 1, 'Standard Target': 2, 'Informational': 3 };
+
 		function renderDetailTable(findings) {
 			const tbody = document.getElementById('browse-detail-tbody');
 			tbody.innerHTML = '';
-			findings.forEach(f => {
+
+			// Chip counts always reflect the full set for this type
+			const counts = { all: findings.length, 'High Risk': 0, 'Elevated Risk': 0, 'Standard Target': 0, 'Informational': 0 };
+			for (const f of findings) counts[f.threat_level || 'Informational'] = (counts[f.threat_level || 'Informational'] || 0) + 1;
+			const setText = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+			setText('chip-count-all', counts.all);
+			setText('chip-count-high', counts['High Risk'] || 0);
+			setText('chip-count-elevated', counts['Elevated Risk'] || 0);
+			setText('chip-count-standard', counts['Standard Target'] || 0);
+			setText('chip-count-info', counts['Informational'] || 0);
+
+			let visible = findings;
+			if (detailSeverity !== 'all') visible = findings.filter(f => (f.threat_level || 'Informational') === detailSeverity);
+
+			if (visible.length === 0) {
+				const tr = document.createElement('tr');
+				tr.innerHTML = `<td colspan="4" class="px-6 py-14 text-center text-xs text-sf-muted">No findings match this severity filter.</td>`;
+				tbody.appendChild(tr);
+				return;
+			}
+
+			for (const f of visible) {
 				const tr = document.createElement('tr');
 				const isHigh = f.threat_level === 'High Risk';
-				tr.className = `hover:bg-sf-lightbg transition-colors ${isHigh ? 'bg-red-500/5' : ''}`;
+				tr.className = `hover:bg-sf-lightbg transition-colors cursor-pointer ${isHigh ? 'bg-red-500/5' : ''}`;
 				const tagsHtml = (f.tags || []).map(t => `<span class="inline-block px-1.5 py-0.5 bg-sf-lightbg border border-sf-border rounded text-[8px] uppercase tracking-wider text-sf-muted mr-1">${t}</span>`).join('');
+				const key = `${f.entity}::${f.source}::${f.type}`;
+				const raw = f.raw_data ? String(f.raw_data) : '';
 				tr.innerHTML = `
 					<td class="px-6 py-3 font-mono text-xs ${isHigh ? 'text-red-400' : 'text-sf-text'}">
 						<div class="flex items-center gap-2">
 							${isHigh ? '<i class="fas fa-biohazard"></i>' : ''}
-							${f.entity}
+							<span>${f.entity}</span>
+							${raw ? '<i class="fas fa-chevron-down text-[8px] text-sf-muted/60 ml-auto"></i>' : ''}
 						</div>
 						<div class="mt-1 flex flex-wrap gap-1">${tagsHtml}</div>
 					</td>
@@ -927,8 +975,42 @@ import Layout from '../layouts/Layout.astro';
 					</td>
 					<td class="px-6 py-3 font-mono text-[10px] text-sf-muted truncate max-w-sm" title="${f.resolution || ''}">${f.resolution || '-'}</td>
 				`;
-				tbody.appendChild(tr);
-			});
+				if (raw) {
+					const detailTr = document.createElement('tr');
+					detailTr.className = 'hidden bg-sf-lightbg/60 border-l-2 border-l-sf-tabActive/40';
+					detailTr.innerHTML = `<td colspan="4" class="px-6 py-3">
+						<p class="text-[9px] font-bold uppercase tracking-widest text-sf-muted mb-1">Evidence</p>
+						<pre class="text-[10px] text-sf-text/80 whitespace-pre-wrap break-all leading-relaxed max-h-48 overflow-auto">${raw.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</pre>
+					</td>`;
+					tr.onclick = () => {
+						expandedKey = expandedKey === key ? null : key;
+						detailTr.classList.toggle('hidden');
+					};
+					tbody.appendChild(tr);
+					tbody.appendChild(detailTr);
+				} else {
+					tbody.appendChild(tr);
+				}
+			}
+		}
+
+		function exportDetailCsv() {
+			const type = document.getElementById('browse-detail-type').innerText;
+			const findings = latestFindings.filter(f => f.type === type);
+			const visible = detailSeverity === 'all' ? findings : findings.filter(f => (f.threat_level || 'Informational') === detailSeverity);
+			if (visible.length === 0) { showToast('Nothing to export', 'info'); return; }
+			const esc = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+			const rows = ['entity,type,source,status,confidence,threat_level,resolution,tags,raw_data'];
+			for (const f of visible) {
+				rows.push([f.entity, f.type, f.source, f.status || '', f.confidence || '', f.threat_level || '', f.resolution || '', (f.tags || []).join('|'), (f.raw_data || '').replace(/\s+/g, ' ')].map(esc).join(','));
+			}
+			const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = `findings-${type.replace(/[^a-z0-9]+/gi, '_') || 'export'}-${Date.now()}.csv`;
+			a.click();
+			URL.revokeObjectURL(url);
 		}
 
 		function showBrowseDetail(type) {
@@ -939,7 +1021,8 @@ import Layout from '../layouts/Layout.astro';
 			renderDetailTable(filtered);
 		}
 
-		document.getElementById('browse-back-btn').onclick = () => {
+		const browse_back_btn = document.getElementById('browse-back-btn');
+		if (browse_back_btn) browse_back_btn.onclick = () => {
 			document.getElementById('browse-detail-container').classList.add('hidden');
 			document.getElementById('browse-summary-container').classList.remove('hidden');
 		};
@@ -953,7 +1036,26 @@ import Layout from '../layouts/Layout.astro';
 			renderDetailTable(filtered);
 		};
 
-		document.getElementById('copy-raw').onclick = () => {
+		const browse_detail_export = document.getElementById('browse-detail-export');
+		if (browse_detail_export) browse_detail_export.onclick = () => exportDetailCsv();
+
+		document.querySelectorAll('#browse-detail-chips .sev-chip').forEach(btn => {
+			btn.addEventListener('click', () => {
+				detailSeverity = btn.getAttribute('data-sev') || 'all';
+				document.querySelectorAll('#browse-detail-chips .sev-chip').forEach(b => {
+					const active = b.getAttribute('data-sev') === detailSeverity;
+					b.classList.toggle('ring-1', active);
+					b.classList.toggle('ring-sf-tabActive/50', active);
+				});
+				const type = document.getElementById('browse-detail-type').innerText;
+				const term = document.getElementById('browse-detail-search').value.toLowerCase();
+				const scoped = latestFindings.filter(f => f.type === type && (!term || f.entity.toLowerCase().includes(term) || f.source.toLowerCase().includes(term)));
+				renderDetailTable(scoped);
+			});
+		});
+
+		const copy_raw = document.getElementById('copy-raw');
+		if (copy_raw) copy_raw.onclick = () => {
 			const content = document.getElementById('raw-json-display').innerText;
 			navigator.clipboard.writeText(content).then(() => {
 				const btn = document.getElementById('copy-raw');
@@ -962,7 +1064,8 @@ import Layout from '../layouts/Layout.astro';
 			});
 		};
 
-		document.getElementById('btn-export-titan').onclick = () => {
+		const btn_export_titan = document.getElementById('btn-export-titan');
+		if (btn_export_titan) btn_export_titan.onclick = () => {
 			const rawData = document.getElementById('raw-json-display').innerText;
 			const blob = new Blob([rawData], { type: 'application/json' });
 			const url = URL.createObjectURL(blob);
@@ -1116,7 +1219,8 @@ import Layout from '../layouts/Layout.astro';
 
 			document.querySelectorAll('.module-toggle').forEach(cb => {
 				cb.addEventListener('change', () => {
-					document.getElementById('save-settings') && (document.getElementById('save-settings').innerHTML = '<i class="fas fa-check"></i> Save Settings');
+					const saveBtn = document.getElementById('save-settings');
+					if (saveBtn) saveBtn.innerHTML = '<i class="fas fa-check"></i> Save Settings';
 				});
 			});
 		});

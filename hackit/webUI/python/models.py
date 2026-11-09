@@ -120,6 +120,10 @@ class HTTPHeaderResponse(BaseModel):
     cdn: Optional[str] = None
     cookies: List[str] = []
     redirect_chain: List[str] = []
+    score: Optional[int] = None
+    grade: Optional[str] = None
+    findings: List[Dict[str, Any]] = []
+    cookie_audit: List[Dict[str, Any]] = []
     error: Optional[str] = None
 
 
@@ -165,6 +169,8 @@ class SubdomainResponse(BaseModel):
     total: int = 0
     sources: List[str] = []
     error: Optional[str] = None
+
+
 
 
 class EmailResponse(BaseModel):

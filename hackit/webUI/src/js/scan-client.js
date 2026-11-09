@@ -1,5 +1,5 @@
 import { api } from './api.js';
-import { ws } from './ws.js';
+import * as ws from './ws.js';
 
 export class ScanSession {
   constructor(target) {

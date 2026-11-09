@@ -1064,6 +1064,38 @@ def console(ctx):
     start_console(cli)
 
 
+
+def _probe_http_port(port):
+    """Classify what listens on `port` as 'hackit', 'unknown', or None."""
+    try:
+        import httpx
+        try:
+            r = httpx.get(f'http://127.0.0.1:{port}/api/ping', timeout=1.5)
+            if r.status_code == 200 and 'engine' in (r.text or '').lower():
+                return 'hackit'
+            return 'unknown'
+        except Exception:
+            pass
+    except Exception:
+        pass
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(1.0)
+    try:
+        s.connect(('127.0.0.1', port))
+        return 'unknown'
+    except OSError:
+        return None
+    finally:
+        try:
+            s.close()
+        except OSError:
+            pass
+
+def _port_is_free(port):
+    return _probe_http_port(port) is None
+
+
 @cli.command()
 @click.option('--dev', is_flag=True, help='Start Astro dev server (live-reload) instead of static build')
 @click.option('--port', default=8080, type=int, help='Port for the web UI (default: 8080)')
@@ -1090,6 +1122,20 @@ def run(dev, port, no_open):
     import webbrowser
     from hackit.ui import B_GREEN, B_CYAN, B_YELLOW, RED, DIM
     
+    # ── 0. Port pre-flight: never spawn a duplicate, never lie about "ready" ──
+    occupied = _probe_http_port(port)
+    if occupied == 'hackit':
+        click.echo(_colored(f"\n  [*] HackIT engine is already running on http://localhost:{port}", B_GREEN))
+        click.echo(_colored("  [*] Not starting a duplicate. Open the existing instance instead.", DIM))
+        if not no_open:
+            webbrowser.open(f'http://localhost:{port}')
+        click.echo(_colored(f"\n      http://localhost:{port}\n", B_CYAN))
+        return
+    if occupied == 'unknown':
+        click.echo(_colored(f"\n  [!] Port {port} is already in use by another program (not HackIT).", RED))
+        click.echo(_colored(f"  [!] Free the port or use: hackit run --port {port + 1 if port < 65535 else 3000}", B_YELLOW))
+        return
+
     root_dir = os.path.dirname(os.path.abspath(__file__))
     webui_dir = os.path.join(root_dir, 'webUI')
     webui_main = os.path.join(webui_dir, 'main.py')
@@ -1195,26 +1241,39 @@ def run(dev, port, no_open):
     # ── 3. Install Python dependencies (blocking: backend cannot start without them) ──
     req_file = os.path.join(python_dir, 'requirements.txt')
     if os.path.exists(req_file):
-        click.echo(_colored("  [*] Checking Python dependencies...", DIM))
+        deps_ok = False
         try:
-            result = subprocess.run(
-                [sys.executable, '-m', 'pip', 'install', '-q', '-r', req_file],
-                cwd=python_dir, capture_output=True, text=True, timeout=300,
+            check = subprocess.run(
+                [sys.executable, '-c', 'import fastapi, uvicorn, httpx, dns.resolver, pydantic'],
+                capture_output=True, text=True, timeout=30,
             )
-            if result.returncode != 0 and 'externally-managed' in (result.stderr or ''):
-                click.echo(_colored("  [*] System Python is externally managed, retrying with --break-system-packages...", B_YELLOW))
+            deps_ok = check.returncode == 0
+        except Exception:
+            deps_ok = False
+
+        if deps_ok:
+            click.echo(_colored("  [+] Python dependencies already satisfied.", B_GREEN))
+        else:
+            click.echo(_colored("  [*] Checking Python dependencies...", DIM))
+            try:
                 result = subprocess.run(
-                    [sys.executable, '-m', 'pip', 'install', '-q', '--break-system-packages', '-r', req_file],
+                    [sys.executable, '-m', 'pip', 'install', '-q', '-r', req_file],
                     cwd=python_dir, capture_output=True, text=True, timeout=300,
                 )
-            if result.returncode != 0:
-                tail = (result.stderr or result.stdout or '').strip()
-                last = tail.splitlines()[-1] if tail else 'unknown error'
-                click.echo(_colored(f"  [!] Python dependency install failed (exit {result.returncode}): {last[:200]}", RED))
-        except subprocess.TimeoutExpired:
-            click.echo(_colored("  [!] Python dependency install timed out after 300s.", RED))
-        except Exception as e:
-            click.echo(_colored(f"  [!] Python dependency install error: {e}", RED))
+                if result.returncode != 0 and 'externally-managed' in (result.stderr or ''):
+                    click.echo(_colored("  [*] System Python is externally managed, retrying with --break-system-packages...", B_YELLOW))
+                    result = subprocess.run(
+                        [sys.executable, '-m', 'pip', 'install', '-q', '--break-system-packages', '-r', req_file],
+                        cwd=python_dir, capture_output=True, text=True, timeout=300,
+                    )
+                if result.returncode != 0:
+                    tail = (result.stderr or result.stdout or '').strip()
+                    last = tail.splitlines()[-1] if tail else 'unknown error'
+                    click.echo(_colored(f"  [!] Python dependency install failed (exit {result.returncode}): {last[:200]}", RED))
+            except subprocess.TimeoutExpired:
+                click.echo(_colored("  [!] Python dependency install timed out after 300s.", RED))
+            except Exception as e:
+                click.echo(_colored(f"  [!] Python dependency install error: {e}", RED))
 
     # ── 3b. Pre-flight: verify backend imports before launching ──
     try:
@@ -1245,6 +1304,7 @@ def run(dev, port, no_open):
     else:
         backend_env.pop('DEBUG_MODE', None)
 
+    started_ok = False
     try:
         backend = subprocess.Popen(
             [sys.executable, 'main.py'],
@@ -1252,9 +1312,11 @@ def run(dev, port, no_open):
             env=backend_env,
         )
 
-        # Wait for backend to start
+        # Wait for OUR backend to become ready. Port pre-flight already
+        # cleared the port, so a 200 here is our process — not another one.
+        backend_ready = False
         backend_crashed = False
-        for i in range(10):
+        for i in range(20):
             time.sleep(0.5)
             if backend.poll() is not None:
                 backend_crashed = True
@@ -1262,29 +1324,47 @@ def run(dev, port, no_open):
             try:
                 import httpx
                 r = httpx.get(f'http://localhost:{port}/api/ping', timeout=2)
-                if r.status_code == 200:
-                    click.echo(_colored(f"  [+] Backend is ready! Open your browser to:", B_GREEN))
-                    click.echo(_colored(f"      http://localhost:{port}", B_CYAN))
-                    click.echo()
-                    if not no_open:
-                        webbrowser.open(f'http://localhost:{port}')
+                if r.status_code == 200 and r.json().get('engine'):
+                    backend_ready = True
                     break
             except Exception:
                 continue
 
         if backend_crashed:
-            click.echo(_colored(f"  [!] Backend exited before becoming ready (code {backend.returncode}). See output above.", RED))
-            click.echo(_colored(f"  [!] Run manually for full logs: cd {python_dir} && {sys.executable} main.py", B_YELLOW))
+            click.echo(_colored(f"  [!] Backend exited before becoming ready (exit code {backend.returncode}).", RED))
+            click.echo(_colored(f"  [!] Full logs: cd {python_dir} && {sys.executable} main.py", B_YELLOW))
+            click.echo(_colored("  [!] Root cause is usually visible in the output above this line.", B_YELLOW))
             return
+        if not backend_ready:
+            click.echo(_colored("  [!] Backend did not become ready within 10s — it is running but wedged.", RED))
+            click.echo(_colored("  [!] Check the output above; stop it with Ctrl+C, then retry.", B_YELLOW))
+            try:
+                backend.terminate()
+                backend.wait(timeout=5)
+            except Exception:
+                try:
+                    backend.kill()
+                except Exception:
+                    pass
+            return
+
+        click.echo(_colored(f"  [+] Backend is ready! Open your browser to:", B_GREEN))
+        click.echo(_colored(f"      http://localhost:{port}", B_CYAN))
+        click.echo()
+        if not no_open:
+            webbrowser.open(f'http://localhost:{port}')
 
         click.echo(_colored("  [*] Press Ctrl+C to stop all services.", DIM))
         click.echo(_colored(f"  {'─'*54}", DIM))
         click.echo()
-
+        started_ok = True
         backend.wait()
 
     except KeyboardInterrupt:
         click.echo(_colored("\n  [!] Shutting down services...", B_YELLOW))
+        clean_shutdown = True
+    else:
+        clean_shutdown = started_ok
     finally:
         if astro_process and astro_process.poll() is None:
             astro_process.terminate()
@@ -1292,13 +1372,14 @@ def run(dev, port, no_open):
                 astro_process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 astro_process.kill()
-        if backend and backend.poll() is None:
+        if 'backend' in dir() and backend and backend.poll() is None:
             backend.terminate()
             try:
                 backend.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 backend.kill()
-        click.echo(_colored("  [+] All services stopped. Goodbye!", B_GREEN))
+        if clean_shutdown:
+            click.echo(_colored("  [+] All services stopped. Goodbye!", B_GREEN))
 
 
 

@@ -983,6 +983,7 @@ def build_stats_snapshot(findings, logs, final=False) -> IntelligenceStats:
     so the web UI can render diagrams progressively instead of waiting for
     the whole crawl to finish.
     """
+    findings = normalize_threat_levels(findings)
     risk_dist = {"High Risk": 0, "Elevated Risk": 0, "Standard Target": 0, "Informational": 0}
     type_dist: dict = {}
     source_dist: dict = {}
@@ -1033,8 +1034,41 @@ def build_stats_snapshot(findings, logs, final=False) -> IntelligenceStats:
     )
 
 
+
+
+_THREAT_MAP = (
+    ("critical", "High Risk"),
+    ("crit", "High Risk"),
+    ("high", "High Risk"),
+    ("elevated", "Elevated Risk"),
+    ("medium", "Elevated Risk"),
+    ("moderate", "Elevated Risk"),
+    ("warn", "Elevated Risk"),
+    ("low", "Informational"),
+    ("info", "Informational"),
+    ("informational", "Informational"),
+    ("standard", "Standard Target"),
+    ("notice", "Informational"),
+)
+
+def normalize_threat_level(raw):
+    """Map arbitrary severity strings onto the 4 dashboard buckets."""
+    level = (raw or "").strip().lower()
+    for needle, bucket in _THREAT_MAP:
+        if level.startswith(needle) or needle in level:
+            return bucket
+    if level in ("high risk", "elevated risk", "standard target"):
+        return raw.strip()
+    return "Informational"
+
+def normalize_threat_levels(findings):
+    for f in findings:
+        f.threat_level = normalize_threat_level(getattr(f, "threat_level", ""))
+    return findings
+
 async def run_modular_scan(target, target_type="Domain", log_list=None, settings=None, on_batch=None):
     o = OSINTOrchestrator(target, target_type, log_list, settings)
     findings = await o.run_scan(on_batch=on_batch)
+    findings = normalize_threat_levels(findings)
     summary = o.generate_summary(findings)
     return findings, summary, o.logs
