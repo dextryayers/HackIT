@@ -78,7 +78,7 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "hackit=hackit.cli:cli",
+            "hackit=hackit.boot:cli_entry",
             "sqli=hackit.sqli:test_sqli",
         ],
     },
