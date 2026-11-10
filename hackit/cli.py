@@ -865,7 +865,7 @@ def help_tools():
     • web headers   - Security header audit
     • web tech      - Tech stack detection
     • web dirs      - Recursive directory bruteforce
-    • web fuzz      - Parameter reflection fuzzer
+    • web fuzz      - ParamSpider-grade parameter harvester
     • web js        - JavaScript endpoint analysis
     • vuln xss      - Reflected XSS scanner (Go + Python engines)
     • vuln sqli     - SQLi scanner and data extraction engine (multi-DBMS)
@@ -949,7 +949,7 @@ GUIDE_SECTIONS = [
     ("WEB (analyze websites and APIs)", [
         ("web headers", "Audit HTTP security headers and flag missing protections."),
         ("web tech", "Fingerprint the web technology stack of a URL."),
-        ("web fuzz", "Fuzz paths and files on a web server to find hidden content."),
+        ("web fuzz", "Harvest historical parameter URLs for a domain and its subdomains."),
         ("web js", "Mine JavaScript files for endpoints, API keys and secrets."),
         ("web params", "Discover hidden URL parameters and test them for reflection."),
         ("web 403bypass", "Try bypass techniques against 403 Forbidden pages and endpoints."),

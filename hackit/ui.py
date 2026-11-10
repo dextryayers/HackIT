@@ -767,12 +767,11 @@ _HELP_DESCRIPTIONS: Dict[Tuple[str, ...], str] = {
     # Web module
     ("web", "headers"): "Audit HTTP security headers and browser protection policies",
     ("web", "tech"): "Fingerprint servers, CMS platforms, frameworks and libraries",
-    ("web", "fuzz"): "High-performance fuzzing suite for paths, parameters and discovery",
+    ("web", "fuzz"): "ParamSpider-grade passive parameter harvester (domain + subdomains)",
     ("web", "403bypass"): "Bypass HTTP 403 restrictions with a large payload and technique set",
     ("web", "js"): "Extract endpoints, secrets and API keys from JavaScript assets",
     ("web", "params"): "Discover hidden parameters and test them for reflection",
-    ("web", "fuzz", "fast"): "Run high-speed path and parameter fuzzing",
-    ("web", "fuzz", "spider"): "Harvest endpoints and parameters with a hybrid crawler",
+    ("web", "fuzz"): "Harvest parameter-bearing URLs for a domain and all subdomains",
 
     # Vulnerability module
     ("vuln", "xss"): "Detect reflected and stored cross-site scripting vulnerabilities",
@@ -844,7 +843,6 @@ _HELP_GROUP_ORDER: Dict[Tuple[str, ...], List[str]] = {
         "chat", "autopilot", "swarm", "dashboard",
         "setting", "status", "guide", "help", "clear", "reset",
     ],
-    ("web", "fuzz"): ["fast", "spider"],
     ("vuln", "sqli"): [
         "scan", "dbs", "tables", "columns", "schema", "rows", "dump",
         "search", "sql", "extract", "crawl", "readfile", "exec",
