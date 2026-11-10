@@ -555,6 +555,7 @@ async fn run(args: Args) -> i32 {
         Some(ref path) => read_cursor(path).min(total),
         None => 0,
     }));
+    let next_index = Arc::new(AtomicU64::new(0));
     let attempted = Arc::new(AtomicU64::new(0));
     let found_count = Arc::new(AtomicU64::new(0));
     let transport_errors = Arc::new(AtomicU64::new(0));
@@ -619,6 +620,7 @@ async fn run(args: Args) -> i32 {
     let mut workers = Vec::with_capacity(args.threads);
     for _ in 0..args.threads {
         let attempted = attempted.clone();
+        let next_index = next_index.clone();
         let found_count = found_count.clone();
         let transport_errors = transport_errors.clone();
         let stop = stop.clone();
@@ -640,9 +642,10 @@ async fn run(args: Args) -> i32 {
                     let mut guard = combos.lock().await;
                     guard.recv().await
                 };
-                let Some((_index, user, pass)) = next else {
+                let Some((index, user, pass)) = next else {
                     break;
                 };
+                next_index.store(index + 1, Ordering::Relaxed);
                 let (user, pass) = (user.as_str(), pass.as_str());
 
                 if let Some(ref rl) = rate {
@@ -824,7 +827,7 @@ async fn run(args: Args) -> i32 {
             "found": found.len(),
             "transport_errors": transport_errors.load(Ordering::Relaxed),
             "stopped_early": stop_on_first && !found.is_empty(),
-            "stopped_at": cursor.load(Ordering::Relaxed),
+            "stopped_at": next_index.load(Ordering::Relaxed),
             "results": found,
         }));
     } else {

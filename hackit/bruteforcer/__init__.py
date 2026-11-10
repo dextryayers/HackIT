@@ -143,6 +143,33 @@ def _loading(text: str, duration: float = 1.5) -> None:
     sys.stdout.write(f"\r  {_colored('✔', B_GREEN)} {_colored(text, DIM)}" + " " * 10 + "\n")
 
 
+def _draw_attack_profile(label, target, port, users_n, pass_n, combo, threads, timeout, stop_on_first, hits_note=""):
+    """Compact pre-flight card: everything the wire is about to see."""
+    if not label:
+        label = ""
+    _draw_box(f" ATTACK — {label} ")
+    _box_line(f"Target: {target}:{port}", B_WHITE)
+    users_label = str(users_n) if users_n else "-"
+    _box_line(f"Users: {users_label}  |  Passwords: {pass_n}  |  Combos: {combo}")
+    tail = "stop-on-hit (ask)" if stop_on_first else "collect-all"
+    _box_line(f"Threads: {threads}  |  Timeout: {timeout}s  |  Mode: {tail}")
+    if hits_note:
+        _box_line(hits_note, B_YELLOW)
+    _draw_box_end()
+
+
+def _ask_continue_found(stopped_at, total) -> str:
+    try:
+        ans = input(_colored("  Lanjut cari kredensial lain? [y/N]: ", B_CYAN)).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return "n"
+    if ans not in ("y", "yes"):
+        return "n"
+    if stopped_at >= total:
+        click.echo(_colored("  [*] semua kombinasi sudah dicoba", DIM))
+        return "n"
+    return "y"
+
 # ─────────────────────────── live renderer ───────────────────────────
 class LiveReporter:
     """Renders engine events as they arrive.
@@ -218,7 +245,9 @@ class LiveReporter:
             }
             self.found.append(hit)
             who = f"{user}:{password}" if user else str(password)
-            click.echo(f"  {_colored('[+]', B_GREEN)} {_colored(who, B_GREEN)}")
+            stamp = time.strftime("%H:%M:%S")
+            badge = _colored("[ VALID ]", B_GREEN, bold=True)
+            click.echo(f"  {_colored(stamp, DIM)}  {badge}  {_colored(who, B_GREEN, bold=True)}")
 
         elif status == "error":
             self._clear_line()
@@ -346,7 +375,7 @@ def detect_cmd(target: str, port, timeout: float):
 @click.option("--passlist", "-W", help="Password list file or built-in name")
 @click.option("--combo-file", "-C", help="user:pass file (replaces -u/-U/-w/-W)")
 @click.option("--extra", "-e", default="", help="Extra candidates: n=null, s=same as login, r=reversed login")
-@click.option("--threads", "-T", type=int, default=16, show_default=True)
+@click.option("--threads", "-T", type=int, default=32, show_default=True)
 @click.option("--timeout", type=int, default=10, show_default=True)
 @click.option("--stop-on-first", "-f", is_flag=True, help="Stop after the first valid credential")
 @click.option("--retries", type=int, default=1, show_default=True, help="Retries on transport errors")
@@ -392,6 +421,44 @@ def scan(protocol, target, port, user, userlist, passwd, passlist, combo_file, e
                   user, userlist, passwd, passlist, combo_file, http)
         return
 
+    interactive = sys.stdout.isatty() and not quiet
+
+    # Interactive mode: always stop on the first valid credential, then ask
+    # right there whether to keep going — resume the cursor, keep searching.
+    resume_file = resume
+    if interactive:
+        import tempfile as _tempfile
+        combo_total = None
+        while True:
+            result = _scan_one(
+                protocol=protocol, target=target, port=port,
+                user=user, userlist=userlist, passwd=passwd, passlist=passlist,
+                extra=extra, threads=threads, timeout=timeout,
+                stop_on_first=True, retries=retries, rate=rate, wait=wait,
+                resume=resume_file, max_blocking=max_blocking,
+                expand_words=expand_words, check=check,
+                http=http, verbose=verbose, quiet=quiet,
+            )
+            found = (result or {}).get("found") or []
+            if combo_total is None:
+                combo_total = int((result or {}).get("total_combos") or 0)
+            if not found:
+                break
+            stopped_at = int((result or {}).get("stopped_at") or 0)
+            if _ask_continue_found(stopped_at, combo_total) != "y":
+                break
+            if resume_file is None:
+                fd, resume_file = _tempfile.mkstemp(suffix=".cur")
+                os.close(fd)
+            with open(resume_file, "w") as fh:
+                fh.write(str(stopped_at))
+        if resume_file and resume_file != resume and os.path.exists(resume_file):
+            try:
+                os.unlink(resume_file)
+            except OSError:
+                pass
+        return
+
     _scan_one(
         protocol=protocol,
         target=target,
@@ -420,7 +487,7 @@ def scan(protocol, target, port, user, userlist, passwd, passlist, combo_file, e
 
 def _scan_one(protocol: str, target: str, port: int, user=None, userlist=None, passwd=None,
               passlist=None, combo_file=None, users_list=None, passwords_list=None,
-              extra="", threads=16, timeout=10, stop_on_first=False, retries=1,
+              extra="", threads=32, timeout=10, stop_on_first=False, retries=1,
               rate=0.0, wait=0.0, resume=None, max_blocking=None, expand_words=False,
               check=False, http=None, verbose=False, quiet=False) -> Optional[Dict]:
     proto = protocol.lower()
@@ -449,34 +516,45 @@ def _scan_one(protocol: str, target: str, port: int, user=None, userlist=None, p
             passwords = load_wordlist(passlist)
             passlist_path = None
 
+    def _line_count(path):
+        try:
+            with open(path, "rb") as fh:
+                return sum(buf.count(b"\n") for buf in iter(lambda: fh.read(1 << 16), b""))
+        except OSError:
+            return 0
+
     if not quiet:
-        click.echo(_colored(f"\n  [*] {label} on {target}:{effective_port}", B_CYAN))
+        users_n = len(users) if users is not None else (1 if user else (_line_count(userlist_path) if userlist_path else 0))
+        pass_n = len(passwords) if passwords is not None else (1 if passwd is not None else (_line_count(passlist_path) if passlist_path else 0))
+        combo = (users_n or 1) * pass_n if proto not in USERLESS else pass_n
+        _draw_attack_profile(label, target, effective_port, users_n, pass_n, combo,
+                             threads, timeout, stop_on_first)
+        click.echo(_colored(f"  [*] {label} on {target}:{effective_port}", B_CYAN))
 
     def on_log(line: str) -> None:
+        if quiet:
+            return
         reporter.close()
         body = line.strip()
+        stamp = time.strftime("%H:%M:%S")
         status = "INFO"
         color = DIM
         if body.startswith("[+]"):
-            status = "VALID"
-            color = B_GREEN
-            body = body[3:].strip()
+            return  # LiveReporter prints the credential once; don't duplicate
         elif body.startswith("[-]"):
-            status = "FAILED"
-            color = RED
+            status, color = "FAIL", B_RED
             body = body[3:].strip()
         elif body.startswith("[!]"):
-            status = "ERROR"
-            color = YELLOW
+            status, color = "ERROR", B_YELLOW
             body = body[3:].strip()
 
         # strip trailing status word so it isn't duplicated
-        for word in ("VALID", "FAILED", "ERROR"):
+        for word in ("VALID", "FAILED", "ERROR", "FAIL"):
             if body.endswith(word):
                 body = body[: -len(word)].strip()
                 break
-        # also drop a trailing "(...)" error detail holder
-        click.echo(f"  {_colored(f'{status:>6s}', color)}  {_colored(body, color)}")
+        badge = _colored(f"[ {status:<5} ]", color, bold=True)
+        click.echo(f"  {_colored(stamp, DIM)}  {badge}  {_colored(body, color)}")
 
     reporter = LiveReporter(proto, target, effective_port, quiet=quiet)
 
@@ -533,7 +611,10 @@ def _render_summary(result: Dict, label: str, quiet: bool) -> None:
     _box_line(
         f"Attempts: {attempts}/{combos}  |  Time: {elapsed:.1f}s  |  Speed: {speed}  |  Errors: {errors}"
     )
-    _box_line(f"Found: {len(found)}", B_GREEN if found else RED)
+    _box_line(
+        f"Found: {len(found)}",
+        B_GREEN if found else B_RED,
+    )
     if result.get("stopped_early"):
         _box_line("stopped early on first hit", YELLOW)
     _draw_box_end()
@@ -543,7 +624,7 @@ def _render_summary(result: Dict, label: str, quiet: bool) -> None:
         _draw_box(f" CREDENTIALS — {len(found)} ")
         for cred in found:
             who = f"{cred.get('username', '')}:{cred.get('password', '')}"
-            _box_line(who, B_GREEN)
+            _box_line(f"[+] VALID  {who}", B_GREEN)
         _draw_box_end()
     elif not quiet:
         click.echo(f"  {_colored('[-] no valid credentials', DIM)}")
@@ -701,7 +782,7 @@ def _run_attack_loop(w: int) -> None:
                 click.echo(_colored("  [!] no passwords", RED))
                 continue
 
-            threads = _ask_int("  Threads [16]: ", 16)
+            threads = _ask_int("  Threads [32]: ", 32)
             timeout = _ask_int("  Per-attempt timeout [10]: ", 10)
 
             print()
