@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import json
 import sys
@@ -414,6 +415,31 @@ def _run_stage_tcp_scan(target, ports, profile, engine_name='go', callback=None,
         return []
 
 
+_TITLE_RE = re.compile(r"Title:\s*([^|]+)")
+_SERVER_RE = re.compile(r"Server:\s*([^|\s]+)")
+
+
+def _enrich_from_banner(record):
+    """Deterministic enrichment straight from banner text — app and server
+    are exactly what the wire said, nothing inferred beyond it."""
+    banner = str(record.get('banner') or '')
+    if not banner:
+        return record
+    if not record.get('app'):
+        m = _TITLE_RE.search(banner)
+        if m:
+            app = " ".join(m.group(1).split())[:64]
+            if app:
+                record['app'] = app
+    if not record.get('server'):
+        m = _SERVER_RE.search(banner)
+        if m:
+            server = m.group(1).strip()[:64]
+            if server:
+                record['server'] = server
+    return record
+
+
 def _run_stage_service_detect(target, ports, results):
     enriched = []
     for r in (results or []):
@@ -427,6 +453,7 @@ def _run_stage_service_detect(target, ports, results):
                         for k in ('service', 'banner', 'version'):
                             if s.get(k):
                                 r[k] = s.get(k)
+            r = _enrich_from_banner(r)
         enriched.append(r)
     return enriched
 

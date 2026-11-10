@@ -1,8 +1,8 @@
-"""
-╔═══════════════════════════════════════════════════════════════════╗
-║  HackIT PortStorm v3.0 — Polyglot Ultra-Power Scanner            ║
-║  Engines: Go · Rust · C · C++ · Lua                               ║
-╚═══════════════════════════════════════════════════════════════════╝
+"""HackIT PortStorm — polyglot port scanner: Go · Rust · C · C++ · Lua.
+
+One probe model, one truth: every engine runs the same per-port plan, so a
+banner, a protocol and a confidence score always belong to the port that
+produced them. See README.md for the full architecture.
 """
 import socket
 import threading
@@ -841,6 +841,8 @@ def _print_script_catalogue(filter_text=None, categories=False):
 @click.option('--passive', is_flag=True, help='Passive intel: Shodan/Censys/FOFA enrichment')
 @click.option('--smart-probe', is_flag=True, help='Smart probes: protocol-specific payloads')
 @click.option('--fingerprint', '--fp', type=int, default=5, help='Fingerprint intensity (0-9)')
+@click.option('--version-intensity', 'fingerprint_intensity', type=click.IntRange(0, 9),
+              default=None, help='nmap-compatible alias for --fingerprint: service probe depth 0-9')
 @click.option('--os-detect', '--os', is_flag=True, help='OS detection via TCP/IP fingerprinting')
 @click.option('--script', '--sc', help='NSE scripts: a name, a category (vuln, brute, auth, discovery, web, safe, malware, intrusive), a prefix (http-), or "all"')
 @click.option('--list-scripts', 'list_scripts', is_flag=False, flag_value='all', default=None,
@@ -896,6 +898,8 @@ def scan_ports(**kwargs):
       scan -t example.com -p top1000 --deep
 
       scan -t example.com --script vuln
+
+      scan -t example.com -p top1000 --version-intensity 9
 
       scan --list-scripts http-
 
@@ -1011,7 +1015,9 @@ def scan_ports(**kwargs):
                 cli_ui.warn("no NSE scripts match %r" % selection)
                 nse_engine = None
 
-    # ── header ──────────────────────────────────────────────────
+    # ── banner + header ────────────────────────────────────────
+    if not quiet:
+        cli_ui.banner()
     nse_label = ("%d scripts" % len(nse_scripts)) if nse_engine else "off"
     if engines:
         engine_label = "+".join(engines)

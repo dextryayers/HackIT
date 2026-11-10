@@ -20,12 +20,54 @@ from hackit.ui import (
 RULE = "─"
 GUTTER = "  "
 
+_BANNER_ART = (
+    "██████╗   ██████╗  ██████╗  ████████╗",
+    "██╔══██╗ ██╔═══██╗ ██╔══██╗ ╚══██╔══╝",
+    "██████╔╝ ██║   ██║ ██████╔╝    ██║",
+    "██╔═══╝  ██║   ██║ ██╔══██╗    ██║",
+    "██║      ╚██████╔╝ ██║  ██║    ██║",
+    "╚═╝       ╚═════╝  ╚═╝  ╚═╝    ╚═╝",
+    "███████╗ ████████╗ ██████╗  ██████╗ ███╗   ███╗",
+    "██╔════╝ ╚══██╔══╝ ██╔══██╗ ██╔═══██╗████╗ ████║",
+    "███████╗    ██║    ██║  ██║ ██║   ██║██╔████╔██║",
+    "╚════██║    ██║    ██║  ██║ ██║   ██║██║╚██╔╝██║",
+    "███████║    ██║    ██████╔╝ ╚██████╔╝██║ ╚═╝ ██║",
+    "╚══════╝    ╚═╝    ╚═════╝   ╚═════╝ ╚═╝     ╚═╝",
+)
+_TAGLINE = "H A C K I T   P O R T   S T O R M"
+_SUBLINE = "H A C K I T   P O R T   S C A N N E R"
+
+
+def banner() -> None:
+    """Identity block — printed once at tool start (skipped in quiet mode)."""
+    emit()
+    for line in _BANNER_ART:
+        emit(GUTTER + paint(line, B_CYAN, bold=True))
+    emit()
+    emit(GUTTER + paint(_TAGLINE, B_CYAN, bold=True))
+    emit(GUTTER + paint(_SUBLINE, DIM))
+    rule()
+
 SEVERITY_STYLE = {
     "critical": (B_RED, "CRIT"),
     "high": (B_RED, "HIGH"),
     "medium": (B_YELLOW, "MED "),
     "low": (CYAN, "LOW "),
     "info": (DIM, "INFO"),
+}
+
+# Deterministic service→protocol fallback for records the probe could not
+# label (e.g. service decoded from a signature but no protocol attached).
+_SERVICE_PROTOCOL = {
+    "openssh": "ssh", "libssh": "ssh", "ssh": "ssh",
+    "apache": "http", "nginx": "http", "http": "http", "lighttpd": "http",
+    "postgresql": "postgresql", "postgres": "postgresql",
+    "mysql": "mysql", "mariadb": "mysql",
+    "redis": "redis", "mongodb": "mongodb", "memcached": "memcached",
+    "ftp": "ftp", "vsftpd": "ftp", "proftpd": "ftp",
+    "smtp": "smtp", "postfix": "smtp", "exim": "smtp",
+    "imap": "imap", "pop3": "pop3", "telnet": "telnet", "vnc": "vnc",
+    "rdp": "rdp", "elasticsearch": "http", "kibana": "http",
 }
 
 STATE_STYLE = {
@@ -98,18 +140,20 @@ def field(label: str, value: str, label_width: int = 10) -> None:
 
 def header(target: str, address: str, ports_label: str, engine: str,
            profile: str, nse_label: str, workers: int, timeout_ms: int) -> None:
-    """Run header: what is being scanned and with what."""
+    """Run header: exactly what is being scanned, and with what."""
     emit()
-    emit(GUTTER + paint("HackIT", B_CYAN, bold=True)
-         + paint(" · port scanner", DIM))
+    emit(GUTTER + paint("SCAN PROFILE", B_WHITE, bold=True)
+         + paint("   // what's on the wire", DIM))
     rule()
-    field("target", paint(target, B_WHITE, bold=True)
-          + (paint("  (" + address + ")", DIM) if address and address != target else ""))
-    field("ports", ports_label)
-    field("engine", engine)
-    field("profile", profile)
-    field("nse", nse_label)
-    field("timing", "%d workers · %dms probe timeout" % (workers, timeout_ms))
+    addr = paint("  (%s)" % address, DIM) if address and address != target else ""
+    field("target", paint(target, B_WHITE, bold=True) + addr)
+    field("ports", paint(ports_label, B_CYAN, bold=True))
+    field("engine", paint(engine, B_CYAN, bold=True))
+    field("profile", paint(profile, YELLOW))
+    nse_value = paint(nse_label, B_GREEN, bold=True) if nse_label != "off" else paint("off", DIM)
+    field("nse", nse_value)
+    field("timing", paint("%d workers" % workers, B_WHITE)
+          + paint("  ·  %dms probe timeout" % timeout_ms, DIM))
     rule()
 
 
@@ -214,12 +258,17 @@ def results_table(records: Sequence[Dict], host: str = "", show_all: bool = Fals
         protocol = str(record.get("banner_protocol") or "").strip()
         if record.get("banner_mismatch"):
             protocol = "~" + protocol
-        protocol = protocol or "—"
 
         service = str(record.get("service") or "unknown")
         version = str(record.get("version") or "").strip()
         if version and version.lower() not in ("unknown", "-"):
             service = service + " " + version
+
+        if not protocol:
+            # Deterministic fallback: map the decoded service to its protocol.
+            base = service.split()[0].lower() if service else ""
+            protocol = _SERVICE_PROTOCOL.get(base, "")
+        protocol = protocol or "—"
 
         banner = record.get("banner") or ""
         banner = " ".join(str(banner).split())
@@ -302,7 +351,8 @@ def _extra_lines(entry) -> List[str]:
 def summary(stats: Dict) -> None:
     """Closing block. Every number here comes from the scan, none are inferred."""
     emit()
-    emit(GUTTER + paint("SUMMARY", B_WHITE, bold=True))
+    emit(GUTTER + paint("SUMMARY", B_WHITE, bold=True)
+         + paint("   // close the loop", DIM))
     rule()
 
     open_ports = stats.get("open", 0)
