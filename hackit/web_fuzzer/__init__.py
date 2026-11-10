@@ -126,8 +126,11 @@ def fuzzer(target: Optional[str], verbose: bool, quiet: bool):
         all_raw.extend(raw)
         for name in sorted(stats):
             cnt = stats.get(name, 0)
-            status = "ok" if cnt else "none/failed"
-            out(_colored(f"      {name:<26} {cnt:>6} URLs  [{status}]", DIM))
+            if isinstance(cnt, str):
+                out(_colored(f"      {name:<26} {cnt}", DIM))
+            else:
+                status = "ok" if cnt else "none returned"
+                out(_colored(f"      {name:<26} {cnt:>6} URLs  [{status}]", DIM))
 
     if "?" in raw_input:
         seed = raw_input if "://" in raw_input else "http://" + raw_input

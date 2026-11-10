@@ -33,7 +33,12 @@ def clean_url(raw: str) -> Optional[str]:
     if port and not ((p.scheme == "http" and port == 80) or (p.scheme == "https" and port == 443)):
         netloc = f"{host}:{port}"
     path = p.path or "/"
-    ext = os.path.splitext(path.lower().rstrip("/"))[1]
+    lp = path.lower()
+    # wayback occasionally archives concatenated garbage: scheme or
+    # double-encoded scheme inside the path is not a real route.
+    if "://" in lp or "http" in lp or "https" in lp or "%2f%2f" in lp or "%25http" in lp:
+        return None
+    ext = os.path.splitext(lp.rstrip("/"))[1]
     if ext in EXT_BLACKLIST:
         return None
     if not p.query:

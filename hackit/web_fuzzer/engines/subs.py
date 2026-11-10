@@ -21,18 +21,20 @@ SUBDOMAIN_WORKERS = 32
 
 
 def sub_crtsh(client: httpx.Client, domain: str) -> List[str]:
-    url = f"https://crt.sh/?q=%.{domain}&output=json"
-    data = fetch_json(client, url, 30.0)
+    # crt.sh is flaky: try wildcard-match query first, then plain; merge both.
     names: List[str] = []
-    if isinstance(data, list):
-        for item in data:
-            for field in ("common_name", "name_value"):
-                raw = (item or {}).get(field, "") or ""
-                for line in raw.splitlines():
-                    line = line.strip().lower()
-                    if line.endswith("." + domain) or line == domain:
-                        if "*" not in line:
-                            names.append(line)
+    for q in (f"%25.{domain}", domain):
+        url = f"https://crt.sh/?q={q}&output=json"
+        data = fetch_json(client, url, 45.0, retries=3)
+        if isinstance(data, list):
+            for item in data:
+                for field in ("common_name", "name_value"):
+                    raw = (item or {}).get(field, "") or ""
+                    for line in raw.splitlines():
+                        line = line.strip().lower()
+                        if line.endswith("." + domain) or line == domain:
+                            if "*" not in line:
+                                names.append(line)
     return names
 
 
