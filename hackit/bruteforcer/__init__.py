@@ -158,9 +158,18 @@ def _draw_attack_profile(label, target, port, users_n, pass_n, combo, threads, t
     _draw_box_end()
 
 
+def _ask_continue_next() -> bool:
+    """End-of-attack question: keep going or stop here."""
+    try:
+        ans = input(_colored("  Lanjut atau tidak? [y/N]: ", B_CYAN)).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return ans in ("y", "yes")
+
+
 def _ask_continue_found(stopped_at, total) -> str:
     try:
-        ans = input(_colored("  Lanjut cari kredensial lain? [y/N]: ", B_CYAN)).strip().lower()
+        ans = input(_colored("  Lanjut atau tidak? [y/N]: ", B_CYAN)).strip().lower()
     except (EOFError, KeyboardInterrupt):
         return "n"
     if ans not in ("y", "yes"):
@@ -457,6 +466,9 @@ def scan(protocol, target, port, user, userlist, passwd, passlist, combo_file, e
                 os.unlink(resume_file)
             except OSError:
                 pass
+        if sys.stdout.isatty() and not quiet:
+            if _ask_continue_next():
+                _run_attack_loop(_box_w())
         return
 
     _scan_one(
@@ -842,7 +854,7 @@ def _run_attack_loop(w: int) -> None:
                     break
 
                 # ask to continue
-                ans = _ask("  Found a valid credential. Continue searching for more? [y/N]: ", "n").lower()
+                ans = _ask("  Lanjut atau tidak? [y/N]: ", "n").lower()
                 if ans not in ("y", "yes"):
                     break
 
@@ -864,6 +876,12 @@ def _run_attack_loop(w: int) -> None:
                     os.unlink(resume_file)
                 except OSError:
                     pass
+
+            # Always finish with the explicit question — before looping back
+            # to protocol selection — so it appears no matter which mode ran.
+            if not _ask_continue_next():
+                click.echo(_colored("\n  [*] Keluar dari KeyStrike. Sampai jumpa.", DIM))
+                return
 
         except (EOFError, KeyboardInterrupt):
             print()
