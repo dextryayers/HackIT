@@ -199,6 +199,23 @@ class SwarmDashboard:
             border_style="blue",
         )
 
+    def find_latest_triage(self):
+        """Newest analys/swarm malware report on disk, if any."""
+        candidates = []
+        for base in (Path(__file__).resolve().parent.parent / "reports" / "analys",
+                     Path(__file__).resolve().parent.parent / "reports" / "swarm"):
+            if base.exists():
+                candidates.extend(base.glob("*.json"))
+        for candidate in sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True):
+            try:
+                with open(candidate) as f:
+                    data = json.load(f)
+            except Exception:
+                continue
+            if isinstance(data, dict) and (data.get("verdict") or data.get("mode") == "malware-triage"):
+                return candidate, data
+        return None, None
+
     def render_counts(self):
         services = len(self.state.get("discovered_services") or [])
         recon = self.state.get("recon_data") or {}
@@ -220,6 +237,12 @@ class SwarmDashboard:
         table.add_row("[bold]Vulns[/]", f"[red]{vulns}[/]")
         table.add_row("[bold]Critical[/]", f"[bold red]{sev_counts['critical']}[/]   [bold yellow]high {sev_counts['high']}[/]   [blue]med {sev_counts['medium']}[/]")
         table.add_row("[bold]Log Events[/]", f"[dim]{logs}[/]")
+        triage_path, triage = self.find_latest_triage()
+        if triage:
+            verdict = str(triage.get("verdict") or "unknown").upper()
+            conf = float(triage.get("confidence") or 0.0) * 100
+            vstyle = {"MALICIOUS": "bold red", "SUSPICIOUS": "yellow", "CLEAN": "green"}.get(verdict, "dim")
+            table.add_row("[bold]Malware[/]", f"[{vstyle}]{verdict}[/] [dim]{conf:.0f}%[/]")
         return Panel(table, title="[bold]Telemetry[/]", border_style="green")
 
     def render_vulns(self):

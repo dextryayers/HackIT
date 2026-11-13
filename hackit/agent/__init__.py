@@ -57,6 +57,11 @@ def _shell_run_autopilot(target: str, scope: str = "active_stealth", resume: boo
     if not target:
         click.echo(f"  {RED}✦{RESET}  {DIM}Usage:{RESET} {GREEN}autopilot <target>{RESET}  {DIM}or {RESET}{GREEN}set <target>{RESET}  {DIM}first.{RESET}")
         return None
+    if os.path.isfile(target):
+        from hackit.analys import analys as _analys_cmd
+        click.echo(_colored("\n  [ AUTONOMOUS ANALYSIS ] target is a file — switching to native malware triage", B_CYAN, bold=True))
+        click.get_current_context().invoke(_analys_cmd, args=[target])
+        return None
     click.echo(_colored(f"\n  [ AUTONOMOUS PENTEST ] target={target} scope={scope}", B_CYAN, bold=True))
     click.echo(_colored(f"  Engine: {_workflow_engine()}  ·  Model: {_active_model_label()}", DIM))
     if os.environ.get("HACKIT_AUTHORIZED", "").lower() not in ("1", "true", "yes", "y"):
