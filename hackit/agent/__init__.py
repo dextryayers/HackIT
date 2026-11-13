@@ -1118,6 +1118,11 @@ def _print_status(cfg):
             tag = f"{RED}OFFLINE (NOT RUNNING){RESET}"
             latency = ""
         elif status.state == "unreachable":
+            err_lower = (status.error or "").lower()
+            auth_like = any(needle in err_lower for needle in (
+                "api key", "apikey", "api-key", "invalid", "unauthorized",
+                "401", "400", "403", "permission", "credential", "expired",
+            ))
             tag = f"{YELLOW}UNREACHABLE{RESET}"
             latency = ""
         elif status.state == "configured":
@@ -1138,6 +1143,14 @@ def _print_status(cfg):
         click.echo(f"  {GREEN}▶{RESET} {B_CYAN}{provider:<12}{RESET}{tag}{latency}{detail}")
         if model:
             click.echo(f"    {DIM}model: {model}{RESET}")
+        if status.state == "unreachable" and status.error:
+            err_lower = status.error.lower()
+            auth_like = any(needle in err_lower for needle in (
+                "api key", "apikey", "api-key", "invalid", "unauthorized",
+                "401", "400", "403", "permission", "credential", "expired",
+            ))
+            if auth_like:
+                click.echo(f"    {DIM}→ key ditolak provider. Isi ulang: {GREEN}hackit agent setting --provider {provider}{DIM}{RESET}")
 
 
 @agent.command()

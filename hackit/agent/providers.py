@@ -63,7 +63,7 @@ ENV_KEYS: Dict[str, List[str]] = {
 
 # Preferred model used when the user has not selected one.
 DEFAULT_MODELS: Dict[str, str] = {
-    "gemini": "gemini-3.5-flash",
+    "gemini": "gemini-2.5-flash",
     "groq": "llama-3.3-70b-versatile",
     "openai": "gpt-4o-mini",
     "claude": "claude-sonnet-4-20250514",
@@ -78,13 +78,13 @@ DEFAULT_MODELS: Dict[str, str] = {
 # Keeping a chain makes the agent resilient to provider-side model retirements.
 MODEL_FALLBACKS: Dict[str, List[str]] = {
     "gemini": [
+        "gemini-2.5-flash",
         "gemini-3.5-flash",
+        "gemini-2.5-pro",
+        "gemini-2.5-flash-lite",
+        "gemini-2.0-flash",
         "gemini-3.1-flash-lite",
         "gemini-3-flash",
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
-        "gemini-1.5-flash",
     ],
     "groq": [
         "llama-3.3-70b-versatile",
@@ -248,18 +248,19 @@ def resolve_api_key(provider: str, cfg: Optional[Dict[str, Any]] = None) -> str:
     cfg = cfg or {}
     key = ((cfg.get("ai_keys") or {}).get(provider) or "").strip()
     if key and key != "AUTO_DETECT":
+        # Config stores keys obfuscated as __enc__<b64>; sending the blob
+        # itself makes every provider reject it as "invalid API key".
+        if key.startswith("__enc__"):
+            try:
+                from hackit.config import _deobfuscate
+
+                decrypted = _deobfuscate(key[7:])
+                if decrypted:
+                    return decrypted
+            except Exception:
+                pass
+            return ""  # unreadable ciphertext — treat as unconfigured, never send garbage
         return key
-
-    # Decrypt obfuscated values if the caller passed raw config data.
-    if key.startswith("__enc__"):
-        try:
-            from hackit.config import _deobfuscate
-
-            decrypted = _deobfuscate(key[7:])
-            if decrypted:
-                return decrypted
-        except Exception:
-            pass
 
     for env_name in ENV_KEYS.get(provider, []):
         value = (os.environ.get(env_name) or "").strip()
