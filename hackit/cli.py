@@ -715,6 +715,10 @@ cli.add_command(host_fetch, name='fetch')
 # BruteForce Tools
 from hackit.bruteforcer import bruter as bruter_cmd
 cli.add_command(bruter_cmd, name='bruter')
+from hackit.malware import malware as malware_cmd
+cli.add_command(malware_cmd, name='malware')
+from hackit.analys import analys as analys_cmd
+cli.add_command(analys_cmd, name='analys')
 
 # Utility Tools
 @cli.group()
@@ -982,6 +986,8 @@ GUIDE_SECTIONS = [
     ]),
     ("BRUTE FORCE (login attacks)", [
         ("bruter scan", "Brute force logins on FTP, SSH, HTTP forms and more. Needs target, user and password lists."),
+        ("malware analyze", "Native static triage for PE/ELF/Mach-O binaries — entropy, packer detection, suspicious APIs, IOC extraction, verdict."),
+        ("analys", "Autonomous deep analysis — file target: full malware triage. host target: recon + ports + probes + AI verdict. One command, zero flags."),
         ("bruter list-protocols", "List all supported brute force protocols with default ports."),
     ]),
     ("AI AGENT (let the AI drive)", [
@@ -1047,7 +1053,7 @@ def guide(topic):
             shown += len(items)
 
     if wanted and shown == 0:
-        groups = ["recon", "web", "vuln", "sqli", "ssl", "util", "bruter", "agent", "ports"]
+        groups = ["recon", "web", "vuln", "sqli", "ssl", "util", "bruter", "agent", "ports", "malware", "analys"]
         click.echo(_colored(f"\n  [!] No guide entries match '{topic}'.", RED))
         click.echo(_colored(f"  [*] Try one of: {', '.join(groups)}", DIM))
         return

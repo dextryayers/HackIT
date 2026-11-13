@@ -51,6 +51,7 @@ class SwarmEngine:
         self.deep = deep
         self.passive = passive
         self.nodes: List[SwarmNode] = [SwarmNode(i) for i in range(SWARM_NODE_COUNT)]
+        self._recon_cache: Dict[str, Dict[str, Any]] = {}
         self.brain = AIHyperBrain(engine="native", enable_memory=False, announce=False)
         self.lock = threading.Lock()
         self.discovery = {"subdomains": [], "ports": [], "endpoints": [], "tech": {} }
@@ -73,6 +74,16 @@ class SwarmEngine:
             pass  # Keep raw — recon modules handle scheme
         return target
 
+    def _cached_recon(self, host: str, base_url: str) -> Dict[str, Any]:
+        """aggregate_recon is expensive — run it once, share with all nodes."""
+        with self.lock:
+            if host in self._recon_cache:
+                return self._recon_cache[host]
+        result = aggregate_recon(host, base_url)
+        with self.lock:
+            self._recon_cache[host] = result
+        return result
+
     # ------------------------------------------------------------------
     # Deep reconnaissance — runs on nodes 1-6
     # ------------------------------------------------------------------
@@ -85,7 +96,7 @@ class SwarmEngine:
                 host_part = self.target
             base_url = self.target if self.target.startswith(("http://", "https://")) else f"https://{self.target}"
             # Deep aggregate recon
-            extra = aggregate_recon(str(host_part), base_url)
+            extra = self._cached_recon(str(host_part), base_url)
             with self.lock:
                 # Merge subdomains
                 current_subs = set(self.discovery.get("subdomains", []))
@@ -119,7 +130,7 @@ class SwarmEngine:
         try:
             host = urlparse(self.target).hostname if urlparse(self.target).hostname else self.target.split("/")[0]
             ports = COMMON_PORTS
-            result = aggregate_recon(str(host) if host else self.target, f"https://{host}" if host else self.target)
+            result = self._cached_recon(str(host) if host else self.target, f"https://{host}" if host else self.target)
             node.results["portscan"] = result.get("ports", [])
             node.findings.extend([{"type": "port_open", "evidence": f"Port {p.get('port')}/{p.get('protocol')} open — {p.get('service', '')}"} for p in result.get("ports", [])[:8]])
         except Exception as exc:
@@ -135,7 +146,7 @@ class SwarmEngine:
             if not host or "." not in host:
                 node.errors.append("subdomain: invalid domain target")
                 return
-            extra = aggregate_recon(host, f"https://{host}")
+            extra = self._cached_recon(host, f"https://{host}")
             subs = extra.get("subdomains", [])
             with self.lock:
                 current = set(self.discovery.get("subdomains", []))
@@ -172,6 +183,7 @@ class SwarmEngine:
                 node.findings.extend([
                     {"vuln_type": vuln_type, "target": target_url, "parameter": parameter,
                      "payload": r.get("payload"), "evidence": r.get("evidence"),
+                     "confirmed": bool(str(r.get("evidence") or "").strip()),
                      "severity": "critical" if vuln_type in ("sqli", "cmdi", "ssti", "xxe") else "high"}
                     for r in vulnerable_items
                 ])
@@ -204,6 +216,8 @@ class SwarmEngine:
 
     def run(self) -> Dict[str, Any]:
         start_time = time.time()
+        if os.path.isfile(self.target):
+            return self._run_file_mode(start_time)
         print(f"[ SWARM ] Launching {SWARM_NODE_COUNT}-node autonomous swarm against {self.target} (deep={self.deep}, passive={self.passive})...")
         print(f"[ SWARM ] Nodes: 1-6 recon | 7-10 portscan | 11-13 subdomain | 14-17 payload | 18-24 probe | 25-27 chain | 28 aggregation")
         
@@ -328,6 +342,57 @@ class SwarmEngine:
         with open(path, "w") as f:
             json.dump(result, f, indent=2, ensure_ascii=False)
         print(f"[ SWARM COMPLETE ] {len(self.vuln_findings)} verified findings · {len(self.attack_chains)} chain(s) · saved to {path}")
+        return result
+
+    def _run_file_mode(self, start_time: float) -> Dict[str, Any]:
+        """Target is a file on disk — run malware triage nodes straight through
+        the malwscan engine. Same report shape as the web swarm."""
+        from hackit.malware.engine import analyze as _malware_analyze
+        print(f"[ SWARM ] target is a file — switching to malware triage mode: {self.target}")
+        try:
+            results = _malware_analyze([self.target])
+        except Exception as exc:
+            results = [{"file": self.target, "error": str(exc)}]
+        findings: List[Dict[str, Any]] = []
+        for entry in results:
+            verdict = str(entry.get("verdict") or "unknown")
+            severity = {"malicious": "critical", "suspicious": "high", "clean": "info"}.get(verdict, "medium")
+            iocs = entry.get("iocs") or {}
+            ioc_count = sum(len(v) for v in iocs.values() if isinstance(v, list))
+            findings.append({
+                "vuln_type": "malware",
+                "target": entry.get("file") or self.target,
+                "parameter": "",
+                "payload": None,
+                "evidence": f"verdict={verdict} score={entry.get('score')} entropy={entry.get('entropy')} "
+                            f"packed={entry.get('packed')} apis={len(entry.get('suspicious_apis') or [])} iocs={ioc_count}",
+                "severity": severity,
+                "confirmed": True,
+            })
+        self.vuln_findings = findings
+        self.discovery = {"subdomains": [], "ports": [], "endpoints": [], "tech": {},
+                          "malware": results}
+        elapsed = time.time() - start_time
+        result = {
+            "target": self.target,
+            "mode": "malware-triage",
+            "swarm_nodes": SWARM_NODE_COUNT,
+            "completed_nodes": 1,
+            "findings_count": len(findings),
+            "attack_chains": 0,
+            "discovery": self.discovery,
+            "duration_seconds": round(elapsed, 2),
+            "errors": [r.get("error") for r in results if r.get("error")],
+            "full_findings": findings,
+            "malware_results": results,
+            "node_summaries": [{"node": 0, "findings": len(findings), "results_keys": ["malware"], "errors": 0}],
+        }
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        safe = os.path.basename(self.target)
+        path = os.path.join(self.reports_dir, f"swarm_malware_{safe}_{stamp}.json")
+        with open(path, "w") as f:
+            json.dump(result, f, indent=2, ensure_ascii=False, default=str)
+        print(f"[ SWARM COMPLETE ] malware triage saved to {path}")
         return result
 
     def _aggregate_node(self) -> None:

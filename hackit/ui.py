@@ -744,6 +744,8 @@ _HELP_DESCRIPTIONS: Dict[Tuple[str, ...], str] = {
     ("agent",): "AI-assisted security operations with autonomous hunting and swarm execution",
     ("banner",): "Render the HackIt startup banner",
     ("bruter",): "Authentication brute-force framework for multiple protocols",
+    ("malware",): "Native malware triage engine (PE/ELF/Mach-O)",
+    ("analys",): "Autonomous deep analysis — file triage or full host sweep, zero flags",
     ("config",): "Configure themes, identity, colors and terminal prompt",
     ("console",): "Launch the interactive HackIt framework console",
     ("ddos",): "Authorized network stress-testing and resilience console",
@@ -808,6 +810,9 @@ _HELP_DESCRIPTIONS: Dict[Tuple[str, ...], str] = {
 
     # Brute-force module
     ("bruter", "scan"): "Brute-force logins across FTP, SSH, HTTP and other protocols",
+    ("malware", "analyze"): "Analyze binaries — entropy, packer detection, sus APIs, IOCs, verdict",
+    ("malware", "iocs"): "Extract IOCs only — URLs, IPv4, domains, emails, registry keys",
+    ("analys", "analys"): "Autonomous analysis of a file or host — everything automatic",
     ("bruter", "list-protocols"): "List supported brute-force protocols and default ports",
 
     # AI agent
@@ -826,7 +831,7 @@ _HELP_DESCRIPTIONS: Dict[Tuple[str, ...], str] = {
 _HELP_ROOT_CATEGORIES: List[Tuple[str, List[str]]] = [
     ("RECON & DISCOVERY", ["recon", "ports", "dirfinder", "osint"]),
     ("WEB & APPLICATION SECURITY", ["web", "vuln", "ssl", "util"]),
-    ("OFFENSIVE OPERATIONS", ["bruter", "ddos", "wireless", "agent"]),
+    ("OFFENSIVE OPERATIONS", ["bruter", "ddos", "wireless", "agent", "malware", "analys"]),
     ("WORKSPACE", ["run", "console", "config", "fetch", "whoami"]),
     ("HELP & INFORMATION", ["guide", "examples", "help-tools", "banner", "help"]),
 ]
@@ -839,6 +844,8 @@ _HELP_GROUP_ORDER: Dict[Tuple[str, ...], List[str]] = {
     ("util",): ["cve"],
     ("ports",): ["scan"],
     ("bruter",): ["scan", "list-protocols"],
+    ("malware",): ["analyze", "iocs"],
+    ("analys",): ["analys"],
     ("agent",): [
         "chat", "autopilot", "swarm", "dashboard",
         "setting", "status", "guide", "help", "clear", "reset",

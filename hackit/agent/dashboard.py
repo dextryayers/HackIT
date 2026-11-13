@@ -170,15 +170,13 @@ class SwarmDashboard:
             target = target_data.get("primary_domain", self.target)
         else:
             target = target_data or self.target
-        return Panel(
-            Text.from_markup(
-                f"[bold cyan]HACKIT SWARM DASHBOARD[/]  "
-                f"[dim]Session:[/] [yellow]{session}[/]  "
-                f"[dim]Target:[/] [bold]{escape(str(target))}[/] [dim]({escape(str(self.scope))})[/]  "
-                f"[dim]Elapsed:[/] [green]{elapsed_str}[/]"
-            ),
-            style="bold white on black",
+        body = (
+            f"[bold cyan]H A C K I T   S W A R M[/]   [dim]·[/]   [dim]S W A R M   D A S H B O A R D[/]\n"
+            f"[dim]Session[/] [yellow]{session}[/]   [dim]·[/]   "
+            f"[dim]Target[/] [bold]{escape(str(target))}[/] [dim]({escape(str(self.scope))})[/]   [dim]·[/]   "
+            f"[dim]Uptime[/] [green]{elapsed_str}[/]"
         )
+        return Panel(Text.from_markup(body), box=box.DOUBLE, style="bold white on black", border_style="cyan", padding=(0, 2))
 
     def render_logs(self):
         logs = self.state.get("logs", [])
@@ -208,14 +206,21 @@ class SwarmDashboard:
         vulns = len(self.state.get("vulnerabilities") or [])
         logs = len(self.state.get("logs") or [])
 
+        sev_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+        for v in (self.state.get("vulnerabilities") or []):
+            if isinstance(v, dict):
+                sev = str(v.get("severity", "info")).lower()
+                if sev in sev_counts:
+                    sev_counts[sev] += 1
         table = Table.grid(padding=(0, 1))
         table.add_column()
         table.add_column()
         table.add_row("[bold]Subdomains[/]", f"[cyan]{subdomains}[/]")
         table.add_row("[bold]Services[/]", f"[green]{services}[/]")
-        table.add_row("[bold]Vulnerabilities[/]", f"[red]{vulns}[/]")
+        table.add_row("[bold]Vulns[/]", f"[red]{vulns}[/]")
+        table.add_row("[bold]Critical[/]", f"[bold red]{sev_counts['critical']}[/]   [bold yellow]high {sev_counts['high']}[/]   [blue]med {sev_counts['medium']}[/]")
         table.add_row("[bold]Log Events[/]", f"[dim]{logs}[/]")
-        return Panel(table, title="[bold]Counts[/]", border_style="green")
+        return Panel(table, title="[bold]Telemetry[/]", border_style="green")
 
     def render_vulns(self):
         vulns = self.state.get("vulnerabilities", [])
@@ -227,7 +232,7 @@ class SwarmDashboard:
         table.add_column("Name", width=35)
         table.add_column("CVSS", width=5)
 
-        for v in vulns[-6:]:
+        for v in vulns[-8:]:
             if not isinstance(v, dict):
                 continue
             sev = str(v.get("severity", "?"))
@@ -292,7 +297,9 @@ class SwarmDashboard:
             except OSError:
                 pass
         if self.engine_alive is False:
-            parts.append("[red]engine exited[/]")
+            parts.append("[bold red]engine exited[/]")
+        elif self.engine_alive:
+            parts.append("[green]engine live[/]")
         return Panel(
             Text.from_markup("   ".join(parts)),
             style="dim",
