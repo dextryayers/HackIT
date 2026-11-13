@@ -1,0 +1,119 @@
+{
+  "target": "http://127.0.0.1",
+  "mode": "host",
+  "started": "2026-11-13T20:47:50.781018",
+  "recon": {
+    "subdomains": [],
+    "endpoints": [
+      "/icons/openlogo-75.png",
+      "/manual",
+      "http://127.0.0.1",
+      "http://www.w3.org/1999/xhtml",
+      "http://www.w3.org/tr/xhtml1/dtd/xhtml1-transitional.dtd",
+      "https://bugs.debian.org/cgi-bin/pkgreport.cgi?ordering=normal;archive=0;src=apache2;repeatmerged=0",
+      "https://httpd.apache.org/docs/2.4/mod/mod_userdir.html"
+    ],
+    "tech": {}
+  },
+  "ports": [
+    {
+      "port": 80,
+      "status": "open",
+      "service": "Apache",
+      "banner": "HTTP/1.1 200 OK | Server: Apache/2.4.69 (Debian) | Content-Type: text/html | Title: Apache2 Debian Default Page: It works",
+      "version": "2.4.69",
+      "protocol": "tcp",
+      "banner_protocol": "http",
+      "banner_confidence": 0.97,
+      "engine": "go",
+      "engines": [
+        "go"
+      ],
+      "status_confidence": 1.0,
+      "app": "Apache2 Debian Default Page: It works",
+      "server": "Apache/2.4.69"
+    },
+    {
+      "port": 631,
+      "status": "open",
+      "service": "CUPS",
+      "banner": "HTTP/1.1 200 OK | Content-Type: text/html; charset=utf-8 | Server: CUPS/2.4 IPP/2.1 | X-Frame-Options: DENY | Title: Home - CUPS 2.4.10",
+      "version": "2.4",
+      "protocol": "tcp",
+      "banner_protocol": "http",
+      "banner_confidence": 0.97,
+      "engine": "go",
+      "engines": [
+        "go"
+      ],
+      "status_confidence": 1.0,
+      "app": "Home - CUPS 2.4.10",
+      "server": "CUPS/2.4"
+    },
+    {
+      "port": 3306,
+      "status": "open",
+      "service": "MySQL",
+      "banner": "MySQL 11.8.6-MariaDB-0+deb13u1 from Debian",
+      "version": "11.8.6-MariaDB-0+deb13u1",
+      "protocol": "tcp",
+      "banner_protocol": "mysql",
+      "banner_confidence": 0.98,
+      "banner_evidence": "greeting",
+      "engine": "go",
+      "engines": [
+        "go"
+      ],
+      "status_confidence": 1.0
+    }
+  ],
+  "headers": {
+    "grade": "D",
+    "passed": 0,
+    "missing": [
+      {
+        "header": "CSP",
+        "issue": "missing",
+        "severity": "medium"
+      },
+      {
+        "header": "HSTS",
+        "issue": "missing",
+        "severity": "medium"
+      },
+      {
+        "header": "X-Frame-Options",
+        "issue": "missing",
+        "severity": "medium"
+      },
+      {
+        "header": "X-Content-Type-Options",
+        "issue": "missing",
+        "severity": "medium"
+      },
+      {
+        "header": "Referrer-Policy",
+        "issue": "missing",
+        "severity": "medium"
+      },
+      {
+        "header": "Permissions-Policy",
+        "issue": "missing",
+        "severity": "medium"
+      },
+      {
+        "header": "X-XSS-Protection",
+        "issue": "missing",
+        "severity": "low"
+      }
+    ],
+    "server": "Apache/2.4.69 (Debian)",
+    "powered_by": ""
+  },
+  "js": {
+    "scripts": 0,
+    "endpoints": [],
+    "secrets": []
+  },
+  "findings": []
+}

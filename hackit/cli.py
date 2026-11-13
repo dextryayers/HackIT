@@ -987,7 +987,7 @@ GUIDE_SECTIONS = [
     ("BRUTE FORCE (login attacks)", [
         ("bruter scan", "Brute force logins on FTP, SSH, HTTP forms and more. Needs target, user and password lists."),
         ("malware analyze", "Native static triage for PE/ELF/Mach-O binaries — entropy, packer detection, suspicious APIs, IOC extraction, verdict."),
-        ("analys", "Autonomous deep analysis — file target: full malware triage. host target: recon + ports + probes + AI verdict. One command, zero flags."),
+        ("analys", "TOTAL DEEP SCAN — file: malware triage + AI verdict. host: recon → top1000 ports → headers audit → JS hunt → deep probes → backend malware hunt → AI assessment. One command, zero flags."),
         ("bruter list-protocols", "List all supported brute force protocols with default ports."),
     ]),
     ("AI AGENT (let the AI drive)", [

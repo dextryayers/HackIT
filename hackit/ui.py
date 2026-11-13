@@ -745,7 +745,7 @@ _HELP_DESCRIPTIONS: Dict[Tuple[str, ...], str] = {
     ("banner",): "Render the HackIt startup banner",
     ("bruter",): "Authentication brute-force framework for multiple protocols",
     ("malware",): "Native malware triage engine (PE/ELF/Mach-O)",
-    ("analys",): "Autonomous deep analysis — file triage or full host sweep, zero flags",
+    ("analys",): "TOTAL DEEP SCAN — recon, top1000 ports, headers audit, JS hunt, deep probes, backend malware hunt, AI assessment",
     ("config",): "Configure themes, identity, colors and terminal prompt",
     ("console",): "Launch the interactive HackIt framework console",
     ("ddos",): "Authorized network stress-testing and resilience console",
@@ -812,7 +812,7 @@ _HELP_DESCRIPTIONS: Dict[Tuple[str, ...], str] = {
     ("bruter", "scan"): "Brute-force logins across FTP, SSH, HTTP and other protocols",
     ("malware", "analyze"): "Analyze binaries — entropy, packer detection, sus APIs, IOCs, verdict",
     ("malware", "iocs"): "Extract IOCs only — URLs, IPv4, domains, emails, registry keys",
-    ("analys", "analys"): "Autonomous analysis of a file or host — everything automatic",
+    ("analys", "analys"): "TOTAL DEEP SCAN — file: full malware triage + AI verdict. host: 7-stage total assessment. zero flags",
     ("bruter", "list-protocols"): "List supported brute-force protocols and default ports",
 
     # AI agent

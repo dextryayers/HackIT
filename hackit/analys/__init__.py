@@ -83,12 +83,27 @@ def _file_mode(target: str, pure: bool) -> int:
 
 
 def _host_mode(target: str, pure: bool) -> int:
-    """Fast autonomous assessment — recon, ports, tech, vulns. One shot, no flags."""
+    """TOTAL deep scan — seven stages, everything automatic, one shot."""
     host = urlparse(target).hostname or target.split("/")[0]
-    base = target if target.startswith(("http://", "https://")) else f"https://{target}"
-    click.echo(_colored("\n  [ ANALYS ] autonomous deep assessment", B_CYAN, bold=True))
+    raw_base = target if target.startswith(("http://", "https://")) else f"https://{target}"
+    base = raw_base
+    if not target.startswith(("http://", "https://")):
+        import socket
+
+        def _port_open(port: int) -> bool:
+            try:
+                with socket.create_connection((host, port), timeout=2.0):
+                    return True
+            except OSError:
+                return False
+
+        if _port_open(443):
+            base = f"https://{target}"
+        elif _port_open(80):
+            base = f"http://{target}"
+    click.echo(_colored("\n  [ ANALYS ] TOTAL DEEP SCAN — full pipeline, target only", B_CYAN, bold=True))
     click.echo(_colored(f"  target   {base}", DIM))
-    click.echo(_colored("  engine   recon → ports → tech → vuln probes → AI assessment", DIM))
+    click.echo(_colored("  stages   recon → ports(top1000) → headers → JS hunt → probes → backend malware → AI assessment", DIM))
 
     from hackit.agent.external_tools import aggregate_recon
     from hackit.port_scanner.engine_orchestrator import PortOrchestrator
@@ -96,7 +111,8 @@ def _host_mode(target: str, pure: bool) -> int:
 
     report: dict = {"target": base, "mode": "host", "started": datetime.now().isoformat()}
 
-    click.echo(_colored("\n  [1/4] Reconnaissance…", B_CYAN))
+    # ── 1. Reconnaissance ───────────────────────────────────────
+    click.echo(_colored("\n  [1/7] Reconnaissance…", B_CYAN))
     recon = aggregate_recon(host, base)
     subs = recon.get("subdomains", [])
     eps = recon.get("endpoints", [])
@@ -107,58 +123,189 @@ def _host_mode(target: str, pure: bool) -> int:
         click.echo(f"  tech         {json.dumps(tech)[:140]}")
     report["recon"] = {"subdomains": subs[:50], "endpoints": eps[:50], "tech": tech}
 
-    click.echo(_colored("\n  [2/4] Port sweep (top100, quick profile)…", B_CYAN))
+    # ── 2. Port sweep — top1000, quick profile ──────────────────
+    click.echo(_colored("\n  [2/7] Port sweep — top1000, quick profile…", B_CYAN))
     try:
         orch = PortOrchestrator()
         profile = get_profile("quick")
-        result = orch.run_scan(host, "top100", profile, engines=["go"], stages=["tcp_scan", "service_detect"], options={})
+        result = orch.run_scan(host, "top1000", profile, engines=["go"], stages=["tcp_scan", "service_detect"], options={})
         open_ports = [p for p in (result or {}).get("results", []) if str(p.get("status")).lower() == "open"]
         for p in open_ports:
             click.echo(f"  open       {p.get('port')}/tcp  {p.get('service')}  {str(p.get('banner') or '')[:60]}")
-        click.echo(f"  open ports   {len(open_ports)}")
+        click.echo(f"  open ports   {len(open_ports)} (top1000 scanned)")
         report["ports"] = open_ports
     except Exception as exc:
         click.echo(_colored(f"  [!] port sweep failed: {exc}", YELLOW))
         report["ports_error"] = str(exc)
 
-    click.echo(_colored("\n  [3/4] Vulnerability probes…", B_CYAN))
+    # ── 3. Security headers audit ───────────────────────────────
+    click.echo(_colored("\n  [3/7] Security headers audit…", B_CYAN))
+    header_findings = []
+    try:
+        import httpx
+        client = httpx.Client(timeout=8.0, follow_redirects=True, verify=False)
+        resp = client.get(base)
+        headers = {k.lower(): v for k, v in resp.headers.items()}
+        checks = [
+            ("content-security-policy", "CSP", True),
+            ("strict-transport-security", "HSTS", True),
+            ("x-frame-options", "X-Frame-Options", True),
+            ("x-content-type-options", "X-Content-Type-Options", True),
+            ("referrer-policy", "Referrer-Policy", True),
+            ("permissions-policy", "Permissions-Policy", True),
+            ("x-xss-protection", "X-XSS-Protection", False),
+        ]
+        passed = 0
+        for name, label, required in checks:
+            if name in headers:
+                passed += 1
+                click.echo(f"  [pass] {label}")
+            else:
+                header_findings.append({"header": label, "issue": "missing", "severity": "medium" if required else "low"})
+                click.echo(_colored(f"  [FAIL] {label} missing", YELLOW))
+        server = headers.get("server", "")
+        powered = headers.get("x-powered-by", "")
+        if server:
+            click.echo(f"  [info] server: {server}")
+        if powered:
+            click.echo(f"  [info] x-powered-by: {powered}")
+        grade = "A" if passed == len(checks) else ("B" if passed >= 5 else ("C" if passed >= 3 else "D"))
+        click.echo(_colored(f"  headers grade  {grade}  ({passed}/{len(checks)} hardening headers present)", B_GREEN if grade in ("A", "B") else B_YELLOW))
+        report["headers"] = {"grade": grade, "passed": passed, "missing": header_findings, "server": server, "powered_by": powered}
+        client.close()
+    except Exception as exc:
+        click.echo(_colored(f"  [!] headers audit failed: {exc}", YELLOW))
+        report["headers_error"] = str(exc)
+
+    # ── 4. JavaScript & secrets hunt ────────────────────────────
+    click.echo(_colored("\n  [4/7] JavaScript & secrets hunt…", B_CYAN))
+    js_report: dict = {"scripts": 0, "endpoints": [], "secrets": []}
+    try:
+        import re
+        import httpx
+        client = httpx.Client(timeout=8.0, follow_redirects=True, verify=False)
+        base_resp = client.get(base)
+        html = base_resp.text[:50000]
+        script_srcs = re.findall(r'<script[^>]+src=["\']([^"\']+)["\']', html)[:8]
+        endpoint_re = re.compile(r"['\"](/(?:api|v1|v2|graphql|gql|rest|internal|admin|auth)[a-zA-Z0-9_\-/{}.:]{2,120})['\"]")
+        secret_re = re.compile(r"(?i)(api[-_]?key|secret|token|password|passwd|auth[-_]?token)['\"\s]*[:=]['\"\s]*([A-Za-z0-9_\-\.=]{8,80})")
+        found_endpoints: list = []
+        found_secrets: list = []
+        for src_attr in script_srcs:
+            url = src_attr if src_attr.startswith(("http://", "https://")) else base.rstrip("/") + "/" + src_attr.lstrip("/")
+            try:
+                js_resp = client.get(url)
+            except Exception:
+                continue
+            body = js_resp.text[:80000]
+            js_report["scripts"] += 1
+            for m in endpoint_re.findall(body):
+                if m not in found_endpoints:
+                    found_endpoints.append(m)
+            for m in secret_re.finditer(body):
+                found_secrets.append({"kind": m.group(1).lower(), "sample": m.group(2)[:24] + "…"})
+        # also scan the main page itself
+        for m in endpoint_re.findall(html):
+            if m not in found_endpoints:
+                found_endpoints.append(m)
+        js_report["endpoints"] = found_endpoints[:20]
+        js_report["secrets"] = found_secrets[:10]
+        click.echo(f"  scripts fetched   {js_report['scripts']}")
+        click.echo(f"  endpoints found   {len(found_endpoints)}")
+        for ep in found_endpoints[:6]:
+            click.echo(f"    endpoint    {ep}")
+        if found_secrets:
+            click.echo(_colored(f"  [WARN] {len(found_secrets)} secret-like token(s) in client-side code — review before exposure", B_YELLOW))
+        report["js"] = js_report
+        client.close()
+    except Exception as exc:
+        click.echo(_colored(f"  [!] JS hunt failed: {exc}", YELLOW))
+        report["js_error"] = str(exc)
+
+    # ── 5. Vulnerability probes — deep ───────────────────────────
+    click.echo(_colored("\n  [5/7] Vulnerability probes — deep matrix…", B_CYAN))
     try:
         from hackit.agent.payloads import CATALOG, probe_many
         catalog = CATALOG or {}
         probe_classes = ["sqli", "xss", "ssrf", "lfi", "ssti", "cmdi"]
         findings = []
-        params = ["q", "id", "url", "page", "search"]
-        for cls in probe_classes[:4]:
-            payloads = [str(p.get("payload", p)) if isinstance(p, dict) else str(p) for p in (catalog.get(cls) or [])[:3]]
+        params = ["q", "id", "url", "page", "search", "file", "path", "redirect"]
+        for cls in probe_classes:
+            payloads = [str(p.get("payload", p)) if isinstance(p, dict) else str(p) for p in (catalog.get(cls) or [])[:12]]
             if not payloads:
                 continue
-            for param in params[:2]:
-                rows = probe_many(base, cls, payloads, parameter=param, method="GET", timeout=6.0, delay=0.1)
+            for param in params[:4]:
+                rows = probe_many(base, cls, payloads, parameter=param, method="GET", timeout=6.0, delay=0.08)
                 hits = [r for r in rows if r.get("vulnerable")]
                 for hit in hits:
                     findings.append({"vuln_type": cls, "parameter": param, "payload": hit.get("payload"),
-                                     "evidence": str(hit.get("evidence"))[:200]})
+                                     "evidence": str(hit.get("evidence"))[:200],
+                                     "severity": "critical" if cls in ("sqli", "cmdi", "ssti", "lfi") else "high"})
         for f in findings:
             click.echo(_colored(f"  [HIGH] {f['vuln_type']} param={f['parameter']}", B_RED, bold=True))
         if not findings:
             click.echo(_colored("  no reflected/error-based findings confirmed (passive baseline clean)", DIM))
-        report["findings"] = findings
+        else:
+            report.setdefault("findings", []).extend(findings)
+        report.setdefault("findings", findings)
     except Exception as exc:
         click.echo(_colored(f"  [!] probe stage error: {exc}", YELLOW))
         report["findings_error"] = str(exc)
 
+    # ── 6. Backend malware sweep — webshell & dropper hunt ───────
+    click.echo(_colored("\n  [6/7] Backend malware sweep — webshell & dropper hunt…", B_CYAN))
+    webshell_paths = [
+        "/", "/info.php", "/shell.php", "/c99.php", "/r57.php", "/uploads/shell.php",
+        "/images/shell.php", "/wp-content/uploads/shell.php", "/admin/shell.php",
+        "/backup/shell.php", "/assets/shell.php", "/.hidden/shell.php", "/test.php",
+    ]
+    markers = (
+        "eval(base64_decode", "eval(gzinflate", "c99shell", "r57shell",
+        "filesman", "<?system", "@eval($", "gzuncompress(base64_decode",
+        "passthru($_", "assert($_POST", "shell_exec($_", "FilesMan v",
+    )
+    backend_hits = []
+    try:
+        import httpx
+        client = httpx.Client(timeout=6.0, follow_redirects=True, verify=False)
+        for wp in webshell_paths:
+            try:
+                resp = client.get(base.rstrip("/") + wp)
+            except Exception:
+                continue
+            body = resp.text[:20000] if resp.text else ""
+            found_markers = [m for m in markers if m.lower() in body.lower()]
+            if found_markers or (resp.status_code == 200 and ".php" in wp and len(body) > 0 and "php" in resp.headers.get("content-type", "").lower() and ("<?php" in body[:200])):
+                backend_hits.append({"path": wp, "markers": found_markers, "status": resp.status_code})
+        client.close()
+    except Exception as exc:
+        click.echo(_colored(f"  [!] backend sweep error: {exc}", YELLOW))
+    for hit in backend_hits:
+        click.echo(_colored(f"  [CRITICAL] webshell indicator at {base.rstrip('/')}{hit['path']}  markers={','.join(hit['markers']) or 'php script exposed'}", B_RED, bold=True))
+    if backend_hits:
+        report.setdefault("findings", []).extend([
+            {"vuln_type": "webshell", "target": base.rstrip("/") + h["path"], "parameter": "", "payload": None,
+             "evidence": f"webshell marker(s): {','.join(h['markers']) or 'php exposed'}", "severity": "critical"}
+            for h in backend_hits
+        ])
+    else:
+        click.echo(_colored("  backend clean — no webshell/dropper markers on checked paths", DIM))
+
+    # ── 7. AI assessment — the full picture ──────────────────────
     if not pure:
-        click.echo(_colored("\n  [4/4] AI assessment…", B_CYAN))
-        ai = _ai_verdict(json.dumps(report, default=str)[:3500])
+        click.echo(_colored("\n  [7/7] AI assessment — total picture…", B_CYAN))
+        ai = _ai_verdict(json.dumps(report, default=str)[:4000])
         for line in (ai or "").splitlines():
             click.echo(f"  {line}")
         report["ai_assessment"] = ai
 
     os.makedirs(REPORTS_DIR, exist_ok=True)
-    path = os.path.join(REPORTS_DIR, f"analys_host_{_slug(base)}_{time.strftime('%Y%m%d_%H%M%S')}.json")
+    path = os.path.join(REPORTS_DIR, f"analys_total_{_slug(base)}_{time.strftime('%Y%m%d_%H%M%S')}.json")
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(report, fh, indent=2, ensure_ascii=False, default=str)
+    findings = report.get("findings", [])
     click.echo(_colored(f"\n  [ report ] {path}", B_GREEN))
+    click.echo(_colored(f"  TOTAL: {len(findings)} finding(s) · headers {report.get('headers', {}).get('grade', 'n/a')} · ports {len(report.get('ports', []))} open · js endpoints {len(js_report['endpoints']) if js_report else 0}", B_CYAN))
     return 0
 
 

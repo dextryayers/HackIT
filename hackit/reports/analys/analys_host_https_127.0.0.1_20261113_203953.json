@@ -1,0 +1,63 @@
+{
+  "target": "https://127.0.0.1",
+  "mode": "host",
+  "started": "2026-11-13T20:39:34.044273",
+  "recon": {
+    "subdomains": [],
+    "endpoints": [],
+    "tech": {}
+  },
+  "ports": [
+    {
+      "port": 80,
+      "status": "open",
+      "service": "Apache",
+      "banner": "HTTP/1.1 200 OK | Server: Apache/2.4.69 (Debian) | Content-Type: text/html | Title: Apache2 Debian Default Page: It works",
+      "version": "2.4.69",
+      "protocol": "tcp",
+      "banner_protocol": "http",
+      "banner_confidence": 0.97,
+      "engine": "go",
+      "engines": [
+        "go"
+      ],
+      "status_confidence": 1.0,
+      "app": "Apache2 Debian Default Page: It works",
+      "server": "Apache/2.4.69"
+    },
+    {
+      "port": 631,
+      "status": "open",
+      "service": "CUPS",
+      "banner": "HTTP/1.1 200 OK | Content-Type: text/html; charset=utf-8 | Server: CUPS/2.4 IPP/2.1 | X-Frame-Options: DENY | Title: Home - CUPS 2.4.10",
+      "version": "2.4",
+      "protocol": "tcp",
+      "banner_protocol": "http",
+      "banner_confidence": 0.97,
+      "engine": "go",
+      "engines": [
+        "go"
+      ],
+      "status_confidence": 1.0,
+      "app": "Home - CUPS 2.4.10",
+      "server": "CUPS/2.4"
+    },
+    {
+      "port": 3306,
+      "status": "open",
+      "service": "MySQL",
+      "banner": "MySQL 11.8.6-MariaDB-0+deb13u1 from Debian",
+      "version": "11.8.6-MariaDB-0+deb13u1",
+      "protocol": "tcp",
+      "banner_protocol": "mysql",
+      "banner_confidence": 0.98,
+      "banner_evidence": "greeting",
+      "engine": "go",
+      "engines": [
+        "go"
+      ],
+      "status_confidence": 1.0
+    }
+  ],
+  "findings": []
+}
