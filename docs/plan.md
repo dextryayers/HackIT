@@ -418,8 +418,8 @@ Akurasi:
 SLO dan uji:
 - 1 kredensial di 100 kandidat ketemu, tanpa ban lab. Tidak ada password di log.
 
-### 6.2 `ddos` (lab measure only)
-Fokus: `c/`, `go/`, `masking.py`, `engine_ddos`.
+### 6.2 `ddos` (authorized resilience testing)
+DDoS suite diganti implementasi aman: Go HTTP(S) engine, C11 TCP/HTTP engine, Python bridge + scope gate.
 
 Pipeline real time:
 - Stat 500ms: rps aktual, p50/p95 latency target, timeout rate, error rate, CPU pengirim.

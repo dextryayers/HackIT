@@ -1,4 +1,4 @@
-"""Engine discovery, build and execution for stresslab.
+"""Engine discovery, build and execution for the ddos resilience console.
 
 Two engines, one report schema:
   go  — HTTP(S) load generator (Go stdlib, TLS verified)

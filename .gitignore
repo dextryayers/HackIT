@@ -102,3 +102,7 @@ hackit/agent/go/reports/osint/*.json
 # Agent pro engines — build outputs
 hackit/agent/go/pro_engine_bin
 hackit/agent/go/rustsrc/pro_scan/target/
+
+# ddos built engines
+hackit/ddos/go/stresslab
+hackit/ddos/c/stress_engine

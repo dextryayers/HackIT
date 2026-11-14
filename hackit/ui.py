@@ -748,7 +748,7 @@ _HELP_DESCRIPTIONS: Dict[Tuple[str, ...], str] = {
     ("analys",): "TOTAL DEEP SCAN — recon, top1000 ports, headers audit, JS hunt, deep probes, backend malware hunt, AI assessment",
     ("config",): "Configure themes, identity, colors and terminal prompt",
     ("console",): "Launch the interactive HackIt framework console",
-    ("stress",): "Authorized resilience testing — scoped, capped, audited load generation against systems you own",
+    ("ddos",): "Authorized resilience testing — scoped, capped, audited load generation against systems you own",
     ("dirfinder",): "Discover hidden directories and files with a high-speed engine",
     ("examples",): "Show copy-ready usage examples for every tool",
     ("fetch",): "Inspect host hardware, operating system and network details",
@@ -806,6 +806,10 @@ _HELP_DESCRIPTIONS: Dict[Tuple[str, ...], str] = {
     # SSL, utilities and port scanning
     ("ssl", "check"): "Audit TLS certificates, ciphers and protocol configuration",
     ("util", "cve"): "Look up CVEs and vulnerability intelligence by software version",
+    ("ddos", "run"): "Run an authorized load test (scope file + approval for remote targets)",
+    ("ddos", "lab"): "Loopback-only smoke test, no scope file",
+    ("ddos", "check"): "Validate scope, target and approval without generating load",
+    ("ddos", "build"): "Compile the Go and C load engines",
     ("ports", "scan"): "Execute high-speed TCP scans with multiple strategies and profiles",
 
     # Brute-force module
@@ -831,8 +835,7 @@ _HELP_DESCRIPTIONS: Dict[Tuple[str, ...], str] = {
 _HELP_ROOT_CATEGORIES: List[Tuple[str, List[str]]] = [
     ("RECON & DISCOVERY", ["recon", "ports", "dirfinder", "osint"]),
     ("WEB & APPLICATION SECURITY", ["web", "vuln", "ssl", "util"]),
-    ("OFFENSIVE OPERATIONS", ["bruter", "wireless", "agent", "malware", "analys"]),
-    ("RESILIENCE TESTING", ["stress"]),
+    ("OFFENSIVE OPERATIONS", ["bruter", "ddos", "wireless", "agent", "malware", "analys"]),
     ("WORKSPACE", ["run", "console", "config", "fetch", "whoami"]),
     ("HELP & INFORMATION", ["guide", "examples", "help-tools", "banner", "help"]),
 ]
@@ -845,6 +848,7 @@ _HELP_GROUP_ORDER: Dict[Tuple[str, ...], List[str]] = {
     ("util",): ["cve"],
     ("ports",): ["scan"],
     ("bruter",): ["scan", "list-protocols"],
+    ("ddos",): ["run", "lab", "check", "build"],
     ("malware",): ["analyze", "iocs"],
     ("analys",): ["analys"],
     ("agent",): [

@@ -1084,7 +1084,7 @@ Global flags: `--proxy URL`, `--no-verify`, `--no-banner`, `--verbose`, `--versi
 | `bruter` | Login brute force: `scan`, `list-protocols` (FTP, SSH, HTTP forms and more) |
 | `osint` | Username and profile discovery across hundreds of platforms |
 | `dirfinder` | Hidden directory and file discovery engine |
-| `ddos` | Stress testing terminal (lab and authorized targets only) |
+| `ddos` | Authorized resilience testing — scoped, capped, audited (HTTP via Go, TCP via C) |
 | `wireless` | Interactive wireless auditing console |
 | `config` | Terminal theme, user, host, colors, prompt (15 themes) |
 | `examples` | Copy paste usage examples for every tool |
