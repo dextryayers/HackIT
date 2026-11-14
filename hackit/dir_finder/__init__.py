@@ -28,9 +28,12 @@ def _interactive_examples():
     click.echo(_colored("    input : https://example.com/DIR full threads 50 verbose on", GREEN))
     click.echo(_colored("    input : https://example.com/file.DIR sc 200", GREEN))
     click.echo(_colored("    input : https://FUZZ.example.com/ threads 30 sc 403,200", GREEN))
+    click.echo(_colored("    input : https://example.com/DIR wordlists /home/user/WD.txt threads 25", GREEN))
+    click.echo(_colored("    input : https://example.com/DIR wordlists /home/user/lists/ threads 25  (folder: all .txt/.lst/... inside)", GREEN))
     click.echo(_colored("    input : https://example.com/DIR exclude 404 recursive on", GREEN))
     click.echo()
     click.echo(_colored("  Keys: threads/t N · sc 200,403 · exclude 404 · ext php,bak · full (dicc.txt)", DIM))
+    click.echo(_colored("        wordlists /path/file.txt[,/other/folder]  (external lists from any folder)", DIM))
     click.echo(_colored("        method GET|POST|HEAD · verbose on|off · recursive on|off · delay N · timeout N · rate N · quiet", DIM))
     click.echo(_colored("        empty input quits · 'help' reprints these examples", DIM))
     click.echo()
@@ -326,6 +329,39 @@ def _run_engine(kwargs):
 
 _TRUE = {"on", "yes", "true", "1", "y"}
 _FALSE = {"off", "no", "false", "0", "n"}
+_WL_EXTS = {".txt", ".lst", ".list", ".csv", ".dic", ".words", ""}
+
+
+def _validate_wordlists(raw: str):
+    """Resolve external wordlist paths (file or folder). Returns (list[str], error)."""
+    entries = [part.strip() for part in raw.split(",") if part.strip()]
+    if not entries:
+        return None, "wordlists needs at least one path"
+    resolved = []
+    for entry in entries:
+        path = os.path.expanduser(entry)
+        if not os.path.isabs(path):
+            path = os.path.abspath(path)
+        if os.path.isfile(path):
+            if not os.access(path, os.R_OK):
+                return None, f"wordlist not readable: {path}"
+            resolved.append(path)
+            continue
+        if os.path.isdir(path):
+            found = False
+            for root, _dirs, files in os.walk(path):
+                for name in files:
+                    ext = os.path.splitext(name)[1].lower()
+                    if ext in _WL_EXTS:
+                        candidate = os.path.join(root, name)
+                        if os.access(candidate, os.R_OK):
+                            found = True
+            if not found:
+                return None, f"folder has no wordlist files (.txt/.lst/.list/.csv/extension-less): {path}"
+            resolved.append(path)
+            continue
+        return None, f"wordlist not found: {path}"
+    return resolved, None
 
 
 def _parse_sc_list(raw: str) -> str:
@@ -420,6 +456,12 @@ def _interactive_parse(text: str):
                 kwargs["max_rate"] = float(val)
             except ValueError:
                 return None, f"bad rate value: {val!r}"
+            i += 2
+        elif key in ("wordlists", "wordlist", "wl") and val:
+            resolved, error = _validate_wordlists(val)
+            if error:
+                return None, error
+            kwargs["wordlists"] = ",".join(resolved)
             i += 2
         elif key == "full":
             repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

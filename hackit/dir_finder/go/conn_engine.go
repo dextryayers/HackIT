@@ -64,7 +64,14 @@ func SetupConnection(config *ScanConfig) *http.Client {
 					port = "80"
 				}
 			}
-			return dialer.DialContext(ctx, network, host+":"+port)
+			conn, err := dialer.DialContext(ctx, network, host+":"+port)
+			if err != nil {
+				return nil, err
+			}
+			if tcpConn, ok := conn.(*net.TCPConn); ok {
+				_ = tcpConn.SetNoDelay(true)
+			}
+			return conn, nil
 		},
 		MaxIdleConns:        connsPerHost * 2,
 		MaxConnsPerHost:     connsPerHost,

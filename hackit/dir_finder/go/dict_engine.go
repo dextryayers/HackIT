@@ -29,12 +29,28 @@ func LoadDictionary(config *ScanConfig) ([]string, DictionaryStats) {
 		stats.Source = "categories: " + strings.Join(config.WordlistCategories, ", ")
 	} else if len(config.Wordlists) > 0 {
 		for _, wl := range config.Wordlists {
+			wl = strings.TrimSpace(wl)
+			if wl == "" {
+				continue
+			}
+			if info, err := os.Stat(wl); err == nil && info.IsDir() {
+				p, e := LoadAllPayloads(wl)
+				if e == nil {
+					paths = append(paths, p...)
+					stats.FilesLoaded++
+				}
+				continue
+			}
 			p, e := LoadWordlist(wl)
 			if e == nil {
 				paths = append(paths, p...)
 				stats.FilesLoaded++
+			} else if !config.Quiet {
+				fmt.Fprintf(color.Output, "%s Wordlist %s: %v (skipped)\n",
+					color.YellowString("[!]"), wl, e)
 			}
 		}
+		paths = Deduplicate(paths)
 		stats.Source = "custom: " + strings.Join(config.Wordlists, ", ")
 	} else {
 		paths, err = LoadAllPayloads(foundDB)

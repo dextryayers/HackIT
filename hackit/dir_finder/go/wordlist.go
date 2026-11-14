@@ -32,7 +32,7 @@ func LoadAllPayloads(dbDir string) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		if !info.IsDir() && strings.HasSuffix(info.Name(), ".txt") && info.Name() != "user-agents.txt" && info.Name() != "generate_wpscan_wordlists.py" {
+		if !info.IsDir() && isWordlistFile(info.Name()) {
 			paths, err := LoadWordlist(path)
 			if err == nil {
 				allPaths = append(allPaths, paths...)
@@ -223,4 +223,20 @@ func LoadUserAgents(dbDir string) []string {
 		return agents
 	}
 	return nil
+}
+
+// isWordlistFile accepts common text list suffixes and extension-less files.
+func isWordlistFile(name string) bool {
+	if name == "user-agents.txt" || name == "generate_wpscan_wordlists.py" {
+		return false
+	}
+	ext := strings.ToLower(filepath.Ext(name))
+	switch ext {
+	case ".txt", ".lst", ".list", ".csv", ".dic", ".words":
+		return true
+	case "":
+		return true
+	default:
+		return false
+	}
 }

@@ -25,12 +25,20 @@ input : https://example.com/DIR threads 25 sc 200,404 verbose on
 | `https://example.com/file.DIR sc 200` | extension fuzz from `wordlists/extensions.txt` |
 | `https://FUZZ.example.com/ threads 30 sc 403,200` | virtual host fuzz from `wordlists/subdomains.txt` |
 | `https://example.com/DIR exclude 404 recursive on` | path fuzz, 404s hidden, recursion on |
+| `https://example.com/DIR wordlists /home/user/WD.txt` | external wordlist file (any path) |
+| `https://example.com/DIR wordlists /home/user/lists/` | external folder — every `.txt/.lst/.list/.csv/.dic/.words` (or extension-less) inside, recursively |
+| `https://example.com/DIR wordlists a.txt,/opt/lists` | mix of files and folders, comma-separated |
 
 Keys (case-insensitive, anywhere on the line):
 `threads/t N` (1-200, default 30) · `sc 200,403` · `exclude 404` · `ext php,bak` ·
 `full` (dicc.txt) · `subdomains` (subdomains.txt) · `method GET|POST|HEAD` ·
 `verbose on|off` (bare = on) · `quiet` · `recursive on|off` · `http2` ·
-`delay N` · `timeout N` · `rate N` · `help` · empty input quits.
+`delay N` · `timeout N` · `rate N` ·
+`wordlists /path/to/list.txt[,/other/folder]` · `help` · empty input quits.
+
+External lists are resolved at parse time: files must exist and be readable;
+missing paths or folders without list files abort before any request is sent.
+Custom lists are de-duplicated after merging.
 
 Everything is streamed live: `[HH:MM:SS] <status> <size> <path>` with the
 status colored (2xx green, 3xx yellow, 4xx orange, 5xx red), then a summary
@@ -66,6 +74,7 @@ override with `-w`), disables recursion, and displays the substituted path
 ## Performance notes
 
 Threads scale via `-t` (HTTP engine is keep-alive with per-host connection
-caps ~`5×threads`, 32 KB buffers, TLS 1.2+, HTTP/2 attempted automatically,
-redirects not followed by default). For sniper runs, `threads 30` is the
+caps ~`5×threads` capped at 100, 32 KB buffers, TCP_NODELAY on dial, TLS 1.2+,
+HTTP/2 attempted automatically, redirects not followed by default). Wordlist
+parsing skips `#` comments and blank lines; merged custom lists are de-duplicated. For sniper runs, `threads 30` is the
 interactive default; the Go engine does not fall back to sequential requests.
