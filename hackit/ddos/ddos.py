@@ -141,6 +141,9 @@ def _print_help() -> None:
     options.add_row("--body",     "request body for POST/PUT/PATCH (JSON auto-detected)")
     options.add_row("--ramp N",   "linearly ramp 1 → --rps over N seconds (find the knee)")
     options.add_row("--close",    "force Connection: close (handshake stress)")
+    options.add_row("--dns-name", "name to resolve + --dns-type A|AAAA|MX|TXT|NS (dns profile)")
+    options.add_row("--udp-payload / --udp-no-echo", "UDP probe bytes / fire-and-forget send")
+    options.add_row("--profile ws", "WebSocket connect + text-frame echo (ws:// URL)")
     options.add_row("-v",         "verbose — resolved target, effective caps, audit path")
     console.print(_panel("Run flags", options, border="yellow"))
 

@@ -26,9 +26,9 @@ import (
 )
 
 const (
-	hardMaxRPS      = 10000
-	hardMaxWorkers  = 256
-	hardMaxDuration = 600 * time.Second
+	hardMaxRPS      = 20000
+	hardMaxWorkers  = 512
+	hardMaxDuration = 1200 * time.Second
 	sampleCap       = 100000
 )
 
@@ -97,6 +97,7 @@ type report struct {
 	Mode        string  `json:"mode"`
 	Target      string  `json:"target"`
 	Method      string  `json:"method,omitempty"`
+	H2          int64   `json:"h2_responses,omitempty"`
 	DurationS   float64 `json:"duration_s"`
 	Requests    int64   `json:"requests"`
 	OK          int64   `json:"ok"`
@@ -388,18 +389,25 @@ func main() {
 		return
 	}
 
+	transport := &http.Transport{
+		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          *workers * 2,
+		MaxIdleConnsPerHost:   *workers * 2,
+		MaxConnsPerHost:       *workers, // never queue more conns than workers
+		IdleConnTimeout:       30 * time.Second,
+		TLSHandshakeTimeout:   5 * time.Second,
+		DisableCompression:    true, // measurement tool: avoid decompression CPU skew
+		ReadBufferSize:        32 * 1024,
+		WriteBufferSize:       32 * 1024,
+	}
 	client := &http.Client{
-		Timeout: time.Duration(*timeoutMS) * time.Millisecond,
-		Transport: &http.Transport{
-			TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
-			MaxIdleConns:        *workers * 2,
-			MaxIdleConnsPerHost: *workers * 2,
-			IdleConnTimeout:     30 * time.Second,
-		},
+		Timeout:   time.Duration(*timeoutMS) * time.Millisecond,
+		Transport: transport,
 	}
 	defer client.CloseIdleConnections()
 
-	var okCount, errCount, reqCount int64
+	var okCount, errCount, reqCount, h2Count int64
 	lat := newSampler(sampleCap)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*duration)*time.Second)
@@ -528,6 +536,9 @@ func main() {
 				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 				resp.Body.Close()
 
+				if resp.ProtoMajor == 2 {
+					atomic.AddInt64(&h2Count, 1)
+				}
 				elapsed := float64(time.Since(t0).Microseconds()) / 1000.0
 				lat.add(elapsed)
 				atomic.AddInt64(&reqCount, 1)
@@ -549,6 +560,7 @@ func main() {
 		Mode:        "http",
 		Target:      *url,
 		Method:      *method,
+		H2:          atomic.LoadInt64(&h2Count),
 		DurationS:   elapsed,
 		Requests:    total,
 		OK:          atomic.LoadInt64(&okCount),

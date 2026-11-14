@@ -106,3 +106,4 @@ hackit/agent/go/rustsrc/pro_scan/target/
 # ddos built engines
 hackit/ddos/go/stresslab
 hackit/ddos/c/stress_engine
+hackit.egg-info/

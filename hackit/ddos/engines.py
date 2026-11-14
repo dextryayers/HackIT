@@ -168,7 +168,7 @@ def run_c(mode: str, host: str, port: int, *, rps: int, workers: int, duration_s
     if mode not in ("tcp", "http"):
         raise EngineError(f"c engine mode must be tcp|http, got {mode!r}")
     binary = ensure_built("c")
-    threads = min(workers, 64)  # C engine cap, matches HARD_MAX_THREADS
+    threads = min(workers, 128)  # C engine cap, matches HARD_MAX_THREADS
     cmd = [
         str(binary), mode, host, str(port),
         "--duration", str(duration_s),

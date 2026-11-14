@@ -27,9 +27,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List
 
-HARD_MAX_RPS = 10000
-HARD_MAX_WORKERS = 256
-HARD_MAX_DURATION_S = 600
+HARD_MAX_RPS = 20000
+HARD_MAX_WORKERS = 512
+HARD_MAX_DURATION_S = 1200
 
 _ISO_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(:\d{2})?)(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$")
 
