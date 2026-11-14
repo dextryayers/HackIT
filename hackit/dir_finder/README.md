@@ -30,7 +30,7 @@ input : https://example.com/DIR threads 25 sc 200,404 verbose on
 
 Keys (case-insensitive, anywhere on the line):
 `threads/t N` (1-200, default 30) · `sc 200,403` · `exclude 404` · `ext php,bak` ·
-`full` (dicc.txt) · `subdomains` (subdomains.txt) · `method GET|POST|HEAD` ·
+`full` (db/dicc.txt, 9680 lines) · `subdomains` (subdomains.txt) · `method GET|POST|HEAD` ·
 `verbose on|off` (bare = on) · `quiet` · `recursive on|off` ·
 `delay N` · `timeout N` · `rate N` ·
 `wordlists /path/to/list.txt[,/other/folder]` · `help` · empty input quits.
@@ -49,6 +49,12 @@ All original functionality remains as flags — see `hackit dirfinder --help`:
 `-t` threads (default 5), `-e` extensions, `-w` wordlists, `-r` recursion,
 `--api-mode`, `--detect-waf/--detect-tech`, `--json-body`, `--graphql`,
 `--adaptive-rate`, sessions, wildcard calibration, smart-filter on by default.
+
+Internal lists live in `hackit/dir_finder/db/` — path sniper defaults to
+`db/categories/common.txt`, ext sniper to `db/extensions.txt`, `full` uses
+`db/dicc.txt`, host sniper falls back to `hackit/wordlists/subdomains.txt`
+(there is no subdomain list in db/). With no `-w`, the engine loads **every**
+list under db/ recursively (dict + categories + cms + LFI + blacklists).
 
 Sniper marker works in flag form too:
 

@@ -34,7 +34,7 @@ def _interactive_help():
     click.echo()
     click.echo(_colored("  EXAMPLES", YELLOW))
     click.echo(_colored("    input : https://example.com/DIR threads 25 sc 200,404 verbose on", GREEN))
-    click.echo(_colored("    input : https://example.com/DIR full threads 50 verbose on", GREEN))
+    click.echo(_colored("    input : https://example.com/DIR full threads 50 verbose on   (db/dicc.txt)", GREEN))
     click.echo(_colored("    input : https://example.com/file.DIR sc 200", GREEN))
     click.echo(_colored("    input : https://FUZZ.example.com/ threads 30 sc 403,200", GREEN))
     click.echo(_colored("    input : https://example.com/DIR wordlists /home/user/WD.txt threads 25", GREEN))
@@ -47,7 +47,7 @@ def _interactive_help():
         ("sc 200,403", "only show these status codes (ranges like 200-299 ok)"),
         ("exclude 404", "hide these status codes"),
         ("ext php,bak", "file extensions to try (also fuzz marker position)"),
-        ("full", "use wordlists/dicc.txt (deep) instead of internal default"),
+        ("full", "use db/dicc.txt (9680 lines) instead of db/categories/common.txt"),
         ("subdomains", "use wordlists/subdomains.txt (host fuzz)"),
         ("wordlists a,b/f", "external lists — file or folder, comma-separated, any folder"),
         ("method GET|POST|HEAD|PUT|DELETE", "HTTP method (default GET)"),
@@ -493,11 +493,11 @@ def _interactive_parse(text: str):
             i += 2
         elif key == "full":
             repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            kwargs["wordlists"] = os.path.join(repo, "wordlists", "dicc.txt")
+            kwargs["wordlists"] = os.path.join(repo, "hackit", "dir_finder", "db", "dicc.txt")
             i += 1
         elif key == "subdomains":
             repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            kwargs["wordlists"] = os.path.join(repo, "wordlists", "subdomains.txt")
+            kwargs["wordlists"] = os.path.join(repo, "wordlists", "subdomains.txt")  # host fuzz: no db copy
             i += 1
         elif key in ("verbose", "v"):
             flag, consumed = _bool_token(tokens, i)

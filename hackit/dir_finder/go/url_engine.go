@@ -137,30 +137,39 @@ func detectMarker(target string) (string, string) {
 }
 
 func sniperWordlist(mode string) (string, string) {
-	name := "common.txt"
+	type candidate struct{ rel, name string }
+	candidates := []candidate{}
 	switch mode {
 	case "ext":
-		name = "extensions.txt"
+		candidates = []candidate{{filepath.Join("hackit", "dir_finder", "db", "extensions.txt"), "db/extensions.txt"}}
 	case "host":
-		name = "subdomains.txt"
+		candidates = []candidate{{filepath.Join("hackit", "dir_finder", "db", "subdomains.txt"), "db/subdomains.txt"},
+			{filepath.Join("wordlists", "subdomains.txt"), "wordlists/subdomains.txt"}}
+	default: // path position
+		candidates = []candidate{{filepath.Join("hackit", "dir_finder", "db", "categories", "common.txt"), "db/categories/common.txt"}}
 	}
 
-	candidates := []string{}
+	abs := []string{}
 	if dir := os.Getenv("HACKIT_WORDLISTS"); dir != "" {
-		candidates = append(candidates, filepath.Join(dir, name))
+		name := filepath.Base(candidates[0].rel)
+		abs = append(abs, filepath.Join(dir, name))
 	}
-	// <repo>/wordlists/<name> relative to this binary: <repo>/hackit/dir_finder/go/dir_finder
+	// <repo>/<rel> relative to this binary: <repo>/hackit/dir_finder/go/dir_finder
 	if exe, err := os.Executable(); err == nil {
 		repo := filepath.Clean(filepath.Join(filepath.Dir(exe), "..", "..", ".."))
-		candidates = append(candidates, filepath.Join(repo, "wordlists", name))
-	}
-	candidates = append(candidates, filepath.Join("wordlists", name))
-
-	for _, c := range candidates {
-		if info, err := os.Stat(c); err == nil && !info.IsDir() && info.Size() > 0 {
-			return c, name
+		for _, c := range candidates {
+			abs = append(abs, filepath.Join(repo, c.rel))
 		}
 	}
-	return "", name
+	for _, c := range candidates {
+		abs = append(abs, c.rel)
+	}
+
+	for _, c := range abs {
+		if info, err := os.Stat(c); err == nil && !info.IsDir() && info.Size() > 0 {
+			return c, filepath.Base(c)
+		}
+	}
+	return "", candidates[0].name
 }
 
