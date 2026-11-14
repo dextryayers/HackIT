@@ -22,6 +22,24 @@ def generate_html_report(data: dict, output_path: str = "") -> str:
     miss_p = [p for p in profiles if p.get("status") == "miss"]
     unk_p = [p for p in profiles if p.get("status") == "unknown"]
 
+    blocked_notes = []
+    for p in profiles:
+        note = (p.get("note") or "").lower()
+        if p.get("status") == "unknown" and any(k in note for k in ("rate-limited", "429", "blocked", "waf", "captcha", "wall")):
+            blocked_notes.append((p.get("platform", "?"), p.get("note", ""), p.get("url", "")))
+    notes_html = ""
+    if blocked_notes:
+        items = "".join(
+            f'<li style="margin:4px 0"><strong>{plat}</strong> — {note} '
+            f'<a href="{url}" target="_blank" style="color:#888;font-size:12px">link</a></li>'
+            for plat, note, url in blocked_notes[:15])
+        notes_html = ('<div class="section fade-in"><h2>Verification Notes — '
+                      f'{len(blocked_notes)} probes throttled/blocked</h2>'
+                      '<p style="color:#aaa;margin-bottom:8px">These platforms answered with rate-limit or anti-bot walls. '
+                      'They returned no evidence either way — rerun with <code>--retry 3</code> or from another network '
+                      'before treating the result set as complete.</p>'
+                      f'<ul style="color:#ddd;font-size:13px;line-height:1.7">{items}</ul></div>')
+
     corr = data.get("correlation", {}) if isinstance(data.get("correlation"), dict) else {}
     persona_html = ""
     for cluster in (corr.get("shared_title_clusters", []) or [])[:6]:
@@ -39,10 +57,12 @@ def generate_html_report(data: dict, output_path: str = "") -> str:
         bg = {"hit": "rgba(0,200,83,.12)", "possible": "rgba(255,145,0,.1)", "miss": "rgba(255,23,68,.08)", "unknown": "rgba(158,158,158,.08)"}.get(st, "")
         cl = {"hit": "#00e676", "possible": "#ff9100", "miss": "#ff1744", "unknown": "#9e9e9e"}.get(st, "#666")
         link_display = url[:120] + (".." if len(url) > 120 else "")
+        conf_v = (p.get("confidence") or "?").upper()
+        conf_cl = {"HIGH": "#00e676", "MEDIUM": "#ffd740", "LOW": "#ff9100"}.get(conf_v, "#9e9e9e")
         rows += f"""<tr style="background:{bg}">
             <td style="padding:10px 12px;text-align:center">{icon}</td>
             <td style="padding:10px 12px;font-weight:600">{plat}</td>
-            <td style="padding:10px 12px"><span class="badge" style="background:{cl}">{st.upper()}</span></td>
+            <td style="padding:10px 12px"><span class="badge" style="background:{cl}">{st.upper()}</span> <span class="badge" style="background:{conf_cl};font-size:10px;opacity:.85">{conf_v}</span></td>
             <td style="padding:10px 12px;color:#888;font-size:13px">{cat}</td>
             <td style="padding:10px 12px"><a href="{url}" target="_blank" class="truncate" title="{url}">{link_display}</a></td>
             <td style="padding:10px 12px;color:#aaa;font-size:12px">{title}</td>
@@ -478,6 +498,7 @@ table.mini a:hover {{ color:#00e676;text-decoration:underline; }}
 {meta_html}
 
 {live_html}
+{notes_html}
 
 <div class="section fade-in"><h2>📊 Category Distribution</h2>{cat_bars or '<p style="color:#888">No categories to display</p>'}</div>
 

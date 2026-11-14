@@ -38,8 +38,11 @@ def analyze_scan(data: Dict[str, object]) -> Dict[str, object]:
         if item.get("category") in HIGH_VALUE_CATEGORIES
     ]
 
+    high_conf_hits = [item for item in hits if item.get("confidence") == "high"]
+
     score = 0
     score += min(len(hits) * 4, 60)
+    score += min(len(high_conf_hits), 12)  # signal quality, not just volume
     score += min(len(possible) * 2, 15)
     score += min(len(high_value_hits) * 3, 20)
     score += min(len(category_counter) * 2, 10)
@@ -113,6 +116,7 @@ def analyze_scan(data: Dict[str, object]) -> Dict[str, object]:
         "unknown_count": len(unknown),
         "high_value_hits": len(high_value_hits),
         "verified_hits": len(verified_profiles),
+        "high_conf_hits": len(high_conf_hits),
         "live_intel_sources": [p.get("source") for p in live_profiles],
         "media_hits": len([item for item in hits if item.get("category") in MEDIA_CATEGORIES]),
         "cross_platform_personae": corr.get("cross_platform_personae", 0) if isinstance(data.get("correlation"), dict) else 0,

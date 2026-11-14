@@ -12,7 +12,9 @@ from dataclasses import dataclass, asdict
 from typing import Callable, List, Dict, Optional
 from urllib.parse import quote_plus
 
+import random
 import requests
+from urllib.parse import urlparse
 
 from .analyzer import analyze_scan
 from .identity import build_identity_target
@@ -292,6 +294,26 @@ def _apply_site_rules(rule: dict, code: int, text_lower: str, title: str,
     return None
 
 
+def _retry_delay(attempt: int, response: "requests.Response | None" = None) -> float:
+    """Backoff with jitter; honours Retry-After when the platform sends one."""
+    base = min(0.5 * (2 ** attempt), 8.0) + random.uniform(0, 0.35)
+    ra = response.headers.get("Retry-After") if response is not None else None
+    if ra:
+        try:
+            return max(base, min(float(ra), 30.0))
+        except ValueError:
+            pass
+    return base
+
+
+def _same_site(host_a: str, host_b: str) -> bool:
+    """True when both hosts share the same registered domain (www-stripped)."""
+    def reg(h: str) -> str:
+        parts = (h or "").lower().split(".")
+        return ".".join(parts[-2:]) if len(parts) >= 2 else (h or "").lower()
+    return reg(host_a) == reg(host_b) and bool(reg(host_a))
+
+
 def _request_profile(session: requests.Session, source: Dict[str, str], handle: str,
                      timeout: int, retry: int = 0,
                      display_name: str = "") -> ProfileFinding:
@@ -311,6 +333,10 @@ def _request_profile(session: requests.Session, source: Dict[str, str], handle: 
             response = session.get(url, headers=headers, timeout=timeout, allow_redirects=True)
             elapsed = time.time() - start
             code = response.status_code
+            # Transient trouble: back off and try again instead of recording noise.
+            if (code == 429 or code >= 500) and attempt < retry:
+                time.sleep(_retry_delay(attempt, response))
+                continue
             text_lower = response.text[:8000].lower()
             metadata = _extract_metadata(response.text[:20000])
             title = metadata["title"]
@@ -327,6 +353,8 @@ def _request_profile(session: requests.Session, source: Dict[str, str], handle: 
                     verdict = ("miss", "high", "not-found marker")
                 elif any(marker in text_lower for marker in BLOCKED_WALL_MARKERS):
                     verdict = ("unknown", "low", "blocked/WAF wall")
+                elif code == 429:
+                    verdict = ("unknown", "low", "rate-limited (429)")
                 elif _title_is_shell(title):
                     verdict = ("miss", "medium", "platform shell page")
                 elif evidence:
@@ -345,19 +373,35 @@ def _request_profile(session: requests.Session, source: Dict[str, str], handle: 
                 else:
                     verdict = ("miss", "low", "status code")
 
+            # A "hit" resting on generic evidence (title/body handle match) that
+            # landed on a *different domain* than the source template is almost
+            # always a redirect to an auth/landing page — not the profile.
+            if verdict[0] == "hit":
+                note_l = verdict[2].lower()
+                generic_hit = (note_l.startswith("title matched")
+                               or note_l.startswith("handle in body")
+                               or note_l.startswith("200 ok")
+                               or note_l.startswith("content evidence"))
+                if generic_hit:
+                    src_host = urlparse(source["url"]).hostname or ""
+                    fin_host = urlparse(response.url).hostname or ""
+                    if src_host and fin_host and not _same_site(src_host, fin_host):
+                        verdict = ("possible", "low", f"cross-domain redirect ({fin_host})")
+
             status, confidence, note = verdict
             if attempt > 0:
                 note = f"{note} (retry {attempt})"
+            verified = status == "hit" and confidence == "high"
             finding = ProfileFinding(
                 source["name"], source["category"], handle,
                 response.url, status, confidence, code, note, title,
-                metadata["description"], round(elapsed, 3),
+                metadata["description"], round(elapsed, 3), verified=verified,
             )
             return _veto_finding(finding)
         except requests.RequestException as exc:
             last_error = type(exc).__name__
             if attempt < retry:
-                time.sleep(0.4 * (attempt + 1))
+                time.sleep(_retry_delay(attempt))
                 continue
     return ProfileFinding(source["name"], source["category"], handle, url,
                           "unknown", "low", None, last_error)
@@ -389,7 +433,11 @@ def _veto_finding(finding: "ProfileFinding") -> "ProfileFinding":
         finding.status = "miss"
         finding.confidence = "high"
         finding.note = "aggregator/search endpoint, not a profile"
+        finding.verified = False
         return finding
+
+    if finding.status != "hit":
+        finding.verified = False
 
     title = (finding.title or "").lower()
     if title:
@@ -397,11 +445,13 @@ def _veto_finding(finding: "ProfileFinding") -> "ProfileFinding":
             finding.status = "miss"
             finding.confidence = "high"
             finding.note = "not-found notice in title"
+            finding.verified = False
             return finding
         if _title_is_shell(finding.title):
             finding.status = "miss"
             finding.confidence = "medium"
             finding.note = "platform shell page"
+            finding.verified = False
             return finding
     return finding
 
