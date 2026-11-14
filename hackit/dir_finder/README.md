@@ -1,4 +1,4 @@
-# hackit dirfinder — HackIT expert directory & file finder
+# hackit dirfinder - HackIT expert directory & file finder
 
 Directory/file discovery engine with a **sniper marker** (`DIR` or `FUZZ`): everything in the URL stays fixed,
 the marker slot is substituted with each wordlist entry.
@@ -25,7 +25,7 @@ input : https://example.com/DIR threads 25 sc 200,404 verbose on
 | `https://FUZZ.example.com/ threads 30 sc 403,200` | virtual host fuzz from `wordlists/subdomains.txt` |
 | `https://example.com/DIR exclude 404 recursive on` | path fuzz, 404s hidden, recursion on |
 | `https://example.com/DIR wordlists /home/user/WD.txt` | external wordlist file (any path) |
-| `https://example.com/DIR wordlists /home/user/lists/` | external folder — every `.txt/.lst/.list/.csv/.dic/.words` (or extension-less) inside, recursively |
+| `https://example.com/DIR wordlists /home/user/lists/` | external folder - every `.txt/.lst/.list/.csv/.dic/.words` (or extension-less) inside, recursively |
 | `https://example.com/DIR wordlists a.txt,/opt/lists` | mix of files and folders, comma-separated |
 
 Keys (case-insensitive, anywhere on the line):
@@ -45,12 +45,12 @@ status colored (2xx green, 3xx yellow, 4xx orange, 5xx red), then a summary
 
 ## Flag form (hackit dirfinder ...)
 
-All original functionality remains as flags — see `hackit dirfinder --help`:
+All original functionality remains as flags - see `hackit dirfinder --help`:
 `-t` threads (default 5), `-e` extensions, `-w` wordlists, `-r` recursion,
 `--api-mode`, `--detect-waf/--detect-tech`, `--json-body`, `--graphql`,
 `--adaptive-rate`, sessions, wildcard calibration, smart-filter on by default.
 
-Internal lists live in `hackit/dir_finder/db/` — path sniper defaults to
+Internal lists live in `hackit/dir_finder/db/` - path sniper defaults to
 `db/categories/common.txt`, ext sniper to `db/extensions.txt`, `full` uses
 `db/dicc.txt`, host sniper falls back to `hackit/wordlists/subdomains.txt`
 (there is no subdomain list in db/). With no `-w`, the engine loads **every**

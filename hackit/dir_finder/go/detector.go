@@ -5,24 +5,43 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"path"
 	"strings"
 	"time"
 )
 
 func DetectWildcard(target string, client *http.Client) (int, int64) {
-	randomPath := fmt.Sprintf("hackit_wildcard_%d", time.Now().UnixNano())
-	testURL := fmt.Sprintf("%s/%s", strings.TrimSuffix(target, "/"), randomPath)
-	resp, err := client.Get(testURL)
+	base, err := url.Parse(target)
 	if err != nil {
 		return 404, -1
 	}
 
+	// Calibrate relative to the target's own directory. For a file base
+	// like /DVWA/index.php, the wildcard probe goes next to it
+	// (/DVWA/<random>), not at the web root.
+	dirPath := base.Path
+	if ext := path.Ext(dirPath); ext != "" {
+		dirPath = path.Dir(dirPath)
+	}
+	dirPath = strings.TrimSuffix(dirPath, "/")
+
+	mkProbe := func(tag string) string {
+		probe := fmt.Sprintf("hackit_wildcard_%s_%d", tag, time.Now().UnixNano())
+		if dirPath == "" {
+			return strings.TrimSuffix(base.Scheme+"://"+base.Host, "/") + "/" + probe
+		}
+		return strings.TrimSuffix(base.Scheme+"://"+base.Host+dirPath, "/") + "/" + probe
+	}
+
+	resp, err := client.Get(mkProbe("a"))
+	if err != nil {
+		return 404, -1
+	}
 	status, size := followAndRead(resp, client, target)
 
-	randomPath2 := fmt.Sprintf("hackit_wildcard_verify_%d", time.Now().UnixNano())
-	testURL2 := fmt.Sprintf("%s/%s", strings.TrimSuffix(target, "/"), randomPath2)
-	resp2, err2 := client.Get(testURL2)
+	resp2, err2 := client.Get(mkProbe("b"))
 	if err2 == nil {
 		status2, size2 := followAndRead(resp2, client, target)
 		if status2 == status && size2 == size {
@@ -35,7 +54,9 @@ func DetectWildcard(target string, client *http.Client) (int, int64) {
 
 func followAndRead(resp *http.Response, client *http.Client, baseTarget string) (int, int64) {
 	finalResp := resp
-	for finalResp.StatusCode >= 300 && finalResp.StatusCode < 400 {
+	// DVWA and other local apps can bounce a missing path back to
+	// itself; cap redirect hops so calibration can't loop forever.
+	for hops := 0; finalResp.StatusCode >= 300 && finalResp.StatusCode < 400 && hops < 8; hops++ {
 		loc := finalResp.Header.Get("Location")
 		if loc == "" {
 			break
@@ -63,16 +84,16 @@ func followAndRead(resp *http.Response, client *http.Client, baseTarget string) 
 
 func DetectWAF(target string, client *http.Client) string {
 	wafSignatures := map[string][]string{
-		"Cloudflare": {"cloudflare", "__cfduid", "cf-ray"},
-		"Akamai":     {"akamai", "akamaized"},
+		"Cloudflare":  {"cloudflare", "__cfduid", "cf-ray"},
+		"Akamai":      {"akamai", "akamaized"},
 		"ModSecurity": {"mod_security", "modsecurity", "No modifications are allowed"},
-		"AWS WAF":    {"awselb", "aws-waf", "x-amz-rid"},
-		"F5 BIG-IP":  {"big-ip", "f5"},
-		"Barracuda":  {"barracuda", "barra"},
-		"Sucuri":     {"sucuri", "cloudproxy"},
-		"Wordfence":  {"wordfence"},
-		"Stackpath":  {"stackpath"},
-		"Comodo":     {"comodo"},
+		"AWS WAF":     {"awselb", "aws-waf", "x-amz-rid"},
+		"F5 BIG-IP":   {"big-ip", "f5"},
+		"Barracuda":   {"barracuda", "barra"},
+		"Sucuri":      {"sucuri", "cloudproxy"},
+		"Wordfence":   {"wordfence"},
+		"Stackpath":   {"stackpath"},
+		"Comodo":      {"comodo"},
 	}
 
 	wafPayloads := []string{

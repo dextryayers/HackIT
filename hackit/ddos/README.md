@@ -1,16 +1,16 @@
-# hackit ddos — authorized resilience testing
+# hackit ddos - authorized resilience testing
 
 Measures how systems you own (or may assess under written permission) behave
 under load. It is a measurement instrument, not an attack kit:
 
-- **Confirmation-gated** — loopback targets run immediately; remote targets
+- **Confirmation-gated** - loopback targets run immediately; remote targets
   require typing `yes` to confirm ownership or written permission in
   interactive mode, or a signed scope file (`--scope` + `--approval`) for
   scripted runs.
-- **Capped** — interactive: 1000 rps / 64 workers / 300 s. Lab: 500 rps /
+- **Capped** - interactive: 1000 rps / 64 workers / 300 s. Lab: 500 rps /
   16 workers / 60 s. Scripted: hard ceilings 10000 rps / 256 workers /
   600 s, and the scope file can only lower them.
-- **Audited** — every run appends a JSON record to
+- **Audited** - every run appends a JSON record to
   `~/.hackit/ddos/audit.log`; the run aborts if the audit log is not
   writable.
 - **No spoofing, no amplification, no evasion, no persistence.** TLS is
@@ -68,7 +68,7 @@ UDP: target is `host:port`, `--udp-payload`, `--udp-no-echo` for fire-and-forget
 WS: target is a `ws://`/`wss://` URL; every iteration connects, sends one
 text frame and waits up to 2 s for an echo.
 
-Scripted — signed scope file required for remote targets:
+Scripted - signed scope file required for remote targets:
 
 ```bash
 # compile engines
@@ -108,12 +108,12 @@ See `scope.example.json`. Rules enforced at load time:
 
 - `authorized` must be the boolean `true`
 - `approval_ref` non-empty, `--approval` must equal it exactly
-- `targets`: hosts (exact), IPs/CIDRs, or `*.suffix` wildcards — nothing else passes
+- `targets`: hosts (exact), IPs/CIDRs, or `*.suffix` wildcards - nothing else passes
 - `expires` in the future, ISO 8601
 - caps are clamped to `min(requested, scope, hard ceiling)`
 
 ## Exit codes
 
-- `0` — test completed (check its error rate; 5xx counts as error)
-- `1` — engine failure
-- `2` — scope/approval refusal (fail-closed)
+- `0` - test completed (check its error rate; 5xx counts as error)
+- `1` - engine failure
+- `2` - scope/approval refusal (fail-closed)

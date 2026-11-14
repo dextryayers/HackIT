@@ -203,6 +203,12 @@
       "accessCount": 1,
       "lastAccessed": 1794656538632,
       "type": "file"
+    },
+    {
+      "path": "hackit/dir_finder/go/detector.go",
+      "accessCount": 1.9998971242799923,
+      "lastAccessed": 1794660063711,
+      "type": "file"
     }
   ],
   "userDirectives": []

@@ -1,4 +1,4 @@
-# hackit cve — vulnerability intelligence scanner
+# hackit cve - vulnerability intelligence scanner
 
 Fingerprints the technologies advertised by a target (headers + body + port
 probe), then matches them against NVD, CISA KEV, EPSS and OSV. Findings carry
@@ -21,21 +21,21 @@ Interactive mode (`hackit util cve` with no target) shows a small menu.
 
 ## How it works
 
-1. **Tech detection** — response headers, HTML body fingerprinting and a
+1. **Tech detection** - response headers, HTML body fingerprinting and a
    bounded port probe; feeds `DetectedTech` (software + version).
-2. **NVD matching** — per-tech keyword/CPE queries run with bounded parallelism
+2. **NVD matching** - per-tech keyword/CPE queries run with bounded parallelism
    (`--nvd-concurrency`, default 3) under the NVD rate limiter; results are
    deduplicated and capped by `--max-results`.
-3. **Enrichment** — CISA Known Exploited Vulnerabilities cross-match, EPSS
+3. **Enrichment** - CISA Known Exploited Vulnerabilities cross-match, EPSS
    probability (FIRST.org), CWE/OWASP mapping.
-4. **Report** — human briefing (default), `--json-out` for JSON, `--refs` to
+4. **Report** - human briefing (default), `--json-out` for JSON, `--refs` to
    include advisory URLs.
 
 ## Caching
 
 - NVD responses: `~/…/nvd_cache.json` next to the worker binary (created on first use).
 - EPSS scores: `$XDG_CACHE_HOME/hackit/cve/epss_cache.json` (or `~/.cache/...`),
-  24 h TTL — repeat scans over the same finding set skip the EPSS API entirely.
+  24 h TTL - repeat scans over the same finding set skip the EPSS API entirely.
 - CISA KEV: 1 h in-memory + on-disk cache.
 
 ## Rate limits

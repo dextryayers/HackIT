@@ -7,13 +7,13 @@ against an authorised target.
 
 The agent is designed around three principles:
 
-* **Provider independence** — use a cloud API or a local Ollama model. If the
+* **Provider independence** - use a cloud API or a local Ollama model. If the
   selected provider fails, the agent falls back to any other configured
   provider automatically.
-* **Evidence first** — scanners compare against a baseline and only promote
+* **Evidence first** - scanners compare against a baseline and only promote
   observations to findings when there is a real signal. Payload probing is
   disabled unless the operator explicitly authorises it.
-* **Graceful degradation** — every optional dependency (Rich, prompt_toolkit,
+* **Graceful degradation** - every optional dependency (Rich, prompt_toolkit,
   LangChain, LangGraph) has a built-in fallback. The agent still works on a
   minimal Python installation.
 
@@ -139,7 +139,7 @@ hackit agent reset                erase keys, provider, models or history
 | `/clear` | clear the screen and conversation |
 
 Any input that is not a registered command is sent to the AI as natural
-language. Unknown `/word` input is also treated as a question — the engine does
+language. Unknown `/word` input is also treated as a question - the engine does
 not mistake it for a mode.
 
 ---
@@ -154,29 +154,29 @@ recon → OSINT → JavaScript → parameters → payload forge → AI analysis
       → attack plan → active verification → correlation → report
 ```
 
-* **recon** — port scan, subdomain enumeration, technology/WAF fingerprinting,
+* **recon** - port scan, subdomain enumeration, technology/WAF fingerprinting,
   header audit (missing headers, weak HSTS/CSP, info disclosure) and directory
   fuzzing.  Pro scanners add CORS variant probing (reflected origins), session
   cookie audit, and differential-verified sensitive-file discovery (.env, .git,
   actuators, source maps) with soft-404 suppression.
-* **OSINT** — public profiles, breach references and domain registration data.
-* **payload** — the active provider forges payloads for the vulnerability
+* **OSINT** - public profiles, breach references and domain registration data.
+* **payload** - the active provider forges payloads for the vulnerability
   classes suggested by the collected context; curated payloads remain
   available if the model is offline or slow.
-* **analysis / plan** — the provider correlates observations and proposes an
+* **analysis / plan** - the provider correlates observations and proposes an
   ordered, evidence-based plan that names concrete endpoints and parameters.
-* **active verification** — native modules run against the base URL, every
+* **active verification** - native modules run against the base URL, every
   same-origin endpoint found by the fuzzer/JS analysis, and URLs that exercise
   each discovered parameter. Generated payloads are then probed across all
   classes, targets and parameters. `HACKIT_MODULE_TASKS` (default `72`) and
   `HACKIT_PROBE_BUDGET` (default `60`) bound the work.
-* **coverage / attack log** — every module task and payload probe is recorded
+* **coverage / attack log** - every module task and payload probe is recorded
   with its target, parameter, result and evidence. Confirmed signals become
   findings; the report includes an Active Coverage section and an Attack Log.
-* **deep AI analysis** — Ollama and cloud provider APIs receive the full
+* **deep AI analysis** - Ollama and cloud provider APIs receive the full
   evidence brief; the plan names modules, parameters, expected signals and PoC
   steps.  A built-in offline path degrades gracefully when no model answers.
-* **report** — A professional pentest report generator emits Markdown with an
+* **report** - A professional pentest report generator emits Markdown with an
   executive summary, threat model, recon summary, severity-indexed findings,
   per-finding PoC / evidence / remediation, attack chains, ROI-ranked roadmap
   and appendices (subdomains, ports, parameters). Reports are written to
@@ -189,7 +189,7 @@ otherwise a dependency-free sequential runner executes the identical nodes.
 ### Autopilot mode (auto-run after target is set, inside the UI)
 
 The shell's `autopilot` command enters the **UI CLI first**. Once you are
-inside the UI, locking a target starts the full pentest by itself — no
+inside the UI, locking a target starts the full pentest by itself - no
 per-phase prompting. The AI also chats, but it is routed as a cyber expert:
 a natural-language pentest request (for example "port scan example.com" or
 "carikan subdomain") executes the real tool deterministically instead of
@@ -245,7 +245,7 @@ The memory layer stores a rolling conversation window and durable facts
 (targets, domains, CVEs) in `~/.hackit/agent_memory/<session>.json`.
 
 * With LangChain installed, the layer uses `ConversationBufferWindowMemory`
-  (0.2–0.3) or a `langchain-core` message adapter (1.x, where the legacy class
+  (0.2-0.3) or a `langchain-core` message adapter (1.x, where the legacy class
   was removed).
 * Without LangChain, a built-in JSON window provides the same behaviour with no
   extra dependencies.

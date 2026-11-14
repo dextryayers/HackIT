@@ -1,4 +1,4 @@
-# HackIT PortStorm — port scanner
+# HackIT PortStorm - port scanner
 
 Four independent engines, one probe model. Every engine runs the same
 per-port plan, so a banner, a protocol and a confidence score always belong
@@ -49,7 +49,7 @@ For each open port the engine walks an ordered probe plan (protocol-specific
 payloads, TLS handshake, HTTP request, MySQL greeting, Redis `INFO`, …),
 reads until the socket goes quiet, and feeds the accumulated bytes through
 protocol decoders. The first decode that reaches confidence ≥ 0.80 stops the
-plan — the remaining probes would only add noise.
+plan - the remaining probes would only add noise.
 
 Each record carries:
 
@@ -57,8 +57,8 @@ Each record carries:
 |---|---|
 | `banner` | Decoded, whitespace-collapsed evidence, capped at 260 chars. |
 | `banner_protocol` | `ftp`, `ssh`, `smtp`, `mysql`, `redis`, `vnc`, `http`, `tls`, `unknown`. |
-| `product` / `version` | Split from the banner (`nginx` + `1.25.3`). Empty when nothing was decoded — raw text is never turned into a version. |
-| `banner_confidence` | 0.0–1.0. Decoders report their own certainty; `unknown` stays at 0.30. |
+| `product` / `version` | Split from the banner (`nginx` + `1.25.3`). Empty when nothing was decoded - raw text is never turned into a version. |
+| `banner_confidence` | 0.0-1.0. Decoders report their own certainty; `unknown` stays at 0.30. |
 | `banner_evidence` | Which decode produced the result (`greeting`, `http`, …). |
 | `banner_mismatch` | The service is real but sits on a port it does not normally use. |
 
@@ -67,11 +67,11 @@ Each record carries:
 `expectedPortsFor` / `expected_ports` / `EXPECTED_PORTS` list the ports each
 protocol normally binds to, including the usual alternates (`2222`, `8080`,
 `16379`, `5901`, …). A hit outside that list sets `banner_mismatch=true` and
-subtracts 0.05 from confidence — the banner is still the evidence, so the
+subtracts 0.05 from confidence - the banner is still the evidence, so the
 service is never downgraded or relabelled. `http`, `https` and `tls` are
 expected anywhere and never mismatch.
 
-The port penalty is applied exactly once, in `finalize` — text classifiers
+The port penalty is applied exactly once, in `finalize` - text classifiers
 report raw decoder confidence.
 
 ## Output
@@ -80,13 +80,13 @@ The CLI table is ANSI-safe and pads on visible width:
 
 ```
 ╭─────────────────────────────────────────────────────────────────────────────────────────╮
-│ PORT SCAN RESULTS — 127.0.0.1                                                           │
+│ PORT SCAN RESULTS - 127.0.0.1                                                           │
 ├─────────────────────────────────────────────────────────────────────────────────────────┤
 │ PORT         STATE      SERVICE          PROTOCOL      CONF   BANNER / VERSION         │
 ├─────────────────────────────────────────────────────────────────────────────────────────┤
 │ 3306/tcp     OPEN       MySQL            mysql          98%   MySQL 11.8.6-MariaDB-0+… │
 │ 18021/tcp    OPEN       FTP              ⚠ ftp          87%   ⚠ 220 (vsFTPd 3.0.5)     │
-│ 18080/tcp    OPEN       —                unknown        30%   hello from an unidentif… │
+│ 18080/tcp    OPEN       -                unknown        30%   hello from an unidentif… │
 ╰─────────────────────────────────────────────────────────────────────────────────────────╯
 ```
 

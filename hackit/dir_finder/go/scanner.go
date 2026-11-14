@@ -24,9 +24,11 @@ func RunScan(config *ScanConfig) ([]DirResult, *ScanStats) {
 
 	mu := &sync.Mutex{}
 	var wg sync.WaitGroup
-	semaphore := make(chan struct{}, config.Threads)
+	// Scheduler can grow concurrency up to Threads*2 when the error rate
+	// stays low; the channel is the hard ceiling, the scheduler the dial.
+	semaphore := make(chan struct{}, config.Threads*2)
 
-	client := CreateClient(config)
+	client := SetupConnection(config)
 
 	uaList := []string{}
 	if config.RandomAgent {
@@ -126,7 +128,11 @@ func RunScan(config *ScanConfig) ([]DirResult, *ScanStats) {
 		// Bound concurrency to the live scheduler value so throttling
 		// actually takes effect instead of only stalling the feeder.
 		if config.Scheduler != nil {
-			for len(semaphore) >= config.Scheduler.Concurrency() {
+			limit := config.Scheduler.Concurrency()
+			if limit <= 0 {
+				limit = 1
+			}
+			for len(semaphore) >= limit {
 				time.Sleep(10 * time.Millisecond)
 			}
 		}
@@ -435,8 +441,10 @@ func scanPath(config *ScanConfig, client *http.Client, path string, uaList []str
 			break
 		}
 		cancel()
+		// Backoff scales with retries; a dead server gets one more probe
+		// then the path is counted as an error, never a hang.
 		if retry < config.Retries {
-			time.Sleep(time.Duration(500*(retry+1)) * time.Millisecond)
+			time.Sleep(time.Duration(300*(retry+1)) * time.Millisecond)
 		}
 	}
 
@@ -456,7 +464,7 @@ func scanPath(config *ScanConfig, client *http.Client, path string, uaList []str
 				redirectURL = strings.TrimRight(baseURL, "/") + "/" + redirectURL
 			}
 		}
-		if redirectURL != "" {
+		if redirectURL != "" && config.FollowRedirect {
 			followReq, _ := http.NewRequest("GET", redirectURL, nil)
 			if followReq != nil {
 				if config.UserAgent != "" {
@@ -551,6 +559,17 @@ func buildURL(target, path string) string {
 	if err != nil {
 		return target + "/" + path
 	}
+
+	// If the base itself points at a file (e.g. /DVWA/index.php),
+	// brute-force against its directory, not the file name. ffuf behaves
+	// the same way: a file base is a folder base.
+	if ext := filepath.Ext(base.Path); ext != "" {
+		base.Path = filepath.Dir(base.Path)
+	}
+	if base.Path == "" || base.Path == "." {
+		base.Path = "/"
+	}
+
 	// Preserve the raw path if it's already percent-encoded
 	joined := base.JoinPath(path)
 	if joined != nil {
