@@ -110,7 +110,9 @@ def _stream(cmd: list, timeout_s: int, on_progress: ProgressCB) -> Dict[str, Any
     reader = threading.Thread(target=consume, daemon=True)
     reader.start()
     try:
-        _, stderr = proc.communicate(timeout=timeout_s + 30)
+        assert proc.stderr is not None
+        stderr = proc.stderr.read()
+        proc.wait(timeout=timeout_s + 30)
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait()
@@ -126,24 +128,38 @@ def _stream(cmd: list, timeout_s: int, on_progress: ProgressCB) -> Dict[str, Any
 
 def run_go(url: str, method: str, *, rps: int, workers: int, duration_s: int,
            timeout_ms: int, body: str = "", ramp_s: int = 0,
-           force_close: bool = False, on_progress: ProgressCB = None) -> Dict[str, Any]:
+           force_close: bool = False, mode: str = "http",
+           dns_name: str = "", dns_type: str = "A", dns_server: str = "",
+           udp_payload: str = "hackit-ddos-probe", udp_echo: bool = True,
+           on_progress: ProgressCB = None) -> Dict[str, Any]:
     binary = ensure_built("go")
     cmd = [
         str(binary),
-        "-url", url,
-        "-method", method,
+        "-mode", mode,
         "-rps", str(rps),
         "-workers", str(workers),
         "-duration", str(duration_s),
-        "-timeout-ms", str(timeout_ms),
+        "-ramp", str(ramp_s),
         "-progress-ms", "500",
     ]
-    if body:
-        cmd += ["-body", body]
-    if ramp_s > 0:
-        cmd += ["-ramp", str(ramp_s)]
-    if force_close:
-        cmd += ["-close"]
+    if mode == "http":
+        cmd += ["-url", url,
+                "-method", method,
+                "-timeout-ms", str(timeout_ms)]
+        if body:
+            cmd += ["-body", body]
+        if force_close:
+            cmd += ["-close"]
+    elif mode == "dns":
+        cmd += ["-dns-name", dns_name, "-dns-type", dns_type]
+        if dns_server:
+            cmd += ["-dns-server", dns_server]
+    elif mode == "udp":
+        cmd += ["-url", url, "-udp-payload", udp_payload]
+        if not udp_echo:
+            cmd += ["-udp-echo=false"]
+    else:
+        raise EngineError(f"go engine mode must be http|dns|udp, got {mode!r}")
     return _stream(cmd, duration_s, on_progress)
 
 
@@ -162,6 +178,22 @@ def run_c(mode: str, host: str, port: int, *, rps: int, workers: int, duration_s
     ]
     if mode == "http":
         cmd += ["--path", path]
+    report = _stream(cmd, duration_s, on_progress)
+    report["threads"] = threads
+    return report
+
+
+def run_icmp(host: str, *, rps: int, workers: int, duration_s: int,
+             on_progress: ProgressCB = None) -> Dict[str, Any]:
+    binary = ensure_built("c")
+    threads = min(workers, 64)
+    cmd = [
+        str(binary), "icmp", host,
+        "--duration", str(duration_s),
+        "--threads", str(threads),
+        "--rps", str(rps),
+        "--progress-ms", "500",
+    ]
     report = _stream(cmd, duration_s, on_progress)
     report["threads"] = threads
     return report

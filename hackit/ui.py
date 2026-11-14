@@ -748,7 +748,7 @@ _HELP_DESCRIPTIONS: Dict[Tuple[str, ...], str] = {
     ("analys",): "TOTAL DEEP SCAN — recon, top1000 ports, headers audit, JS hunt, deep probes, backend malware hunt, AI assessment",
     ("config",): "Configure themes, identity, colors and terminal prompt",
     ("console",): "Launch the interactive HackIt framework console",
-    ("ddos",): "Authorized resilience testing — scoped, capped, audited load with HTTP method profiles, live stats",
+    ("ddos",): "Authorized resilience testing — http/tcp/dns/udp/icmp/ws profiles, live stats, audited",
     ("dirfinder",): "Discover hidden directories and files with a high-speed engine",
     ("examples",): "Show copy-ready usage examples for every tool",
     ("fetch",): "Inspect host hardware, operating system and network details",
@@ -806,7 +806,7 @@ _HELP_DESCRIPTIONS: Dict[Tuple[str, ...], str] = {
     # SSL, utilities and port scanning
     ("ssl", "check"): "Audit TLS certificates, ciphers and protocol configuration",
     ("util", "cve"): "Look up CVEs and vulnerability intelligence by software version",
-    ("ddos", "run"): "Run an authorized load test (scope + approval for remote) — method profiles, ramp mode, live dashboard",
+    ("ddos", "run"): "Run an authorized load test (scope + approval for remote) — network profiles, ramp, live dashboard",
     ("ddos", "lab"): "Loopback-only smoke test, no scope file",
     ("ddos", "check"): "Validate scope, target and approval without generating load",
     ("ddos", "build"): "Compile the Go and C load engines",

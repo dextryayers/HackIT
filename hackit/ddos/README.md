@@ -20,8 +20,9 @@ under load. It is a measurement instrument, not an attack kit:
 
 | Engine | Language | Role |
 |--------|----------|------|
-| `go/stresslab` | Go (stdlib) | HTTP(S) load: latency p50/p90/p99/max, error rate, achieved rps |
-| `c/stress_engine` | C11 + pthreads | TCP connect rate and plain-HTTP GET latency, tight thread caps |
+| `go/stresslab` | Go (stdlib) | HTTP(S) load + DNS query rate/latency + UDP echo throughput |
+| `c/stress_engine` | C11 + pthreads | TCP connect rate, plain-HTTP GET, ICMP echo latency/loss (needs root) |
+| Python bridge | asyncio + `websockets` | WebSocket connect + text-frame echo load |
 
 The Python layer (`ddos.py`) is the bridge into the HackIt CLI and the
 gatekeeper: it validates scope, enforces caps, launches the engines and
@@ -51,11 +52,21 @@ hackit ddos console
 # target domain/IP: staging.example.internal   → asks for authorization first
 ```
 
-Method profiles: `get post put patch delete head options mixed`
+Network protocol profiles:
+`http` (Go), `http-raw` (C), `tcp` (C), `dns` (Go, dnsperf-style),
+`udp` (Go echo, iperf-style), `icmp` (C, ping-style, needs root/CAP_NET_RAW),
+`ws` (Python asyncio, text-frame echo).
+
+HTTP verbs: `get post put patch delete head options mixed`
 (`mixed` rotates verbs per request). Extras: `--body` (JSON auto-detected),
 `--ramp N` (linearly ramp 1 → --rps over N seconds), `--close`
-(Connection: close), `-v/--verbose` (resolved target, caps, audit path),
-`http-raw` profile (C engine plain-HTTP GET against a raw socket path).
+(Connection: close), `-v/--verbose` (resolved target, caps, audit path).
+
+DNS: `--target system` uses the system resolver; otherwise the target is the
+DNS server host[:port]. `--dns-name` is required, `--dns-type A|AAAA|MX|TXT|NS`.
+UDP: target is `host:port`, `--udp-payload`, `--udp-no-echo` for fire-and-forget.
+WS: target is a `ws://`/`wss://` URL; every iteration connects, sends one
+text frame and waits up to 2 s for an echo.
 
 Scripted — signed scope file required for remote targets:
 
@@ -82,6 +93,13 @@ hackit ddos lab --target http://127.0.0.1:8080 --duration 5 --rps 20
 hackit ddos run --target https://staging.example.internal/api \
     --scope scope.json --approval CHG-1234 --method post \
     --body '{"probe":true}' -v
+
+# DNS resolution capacity against a lab resolver
+hackit ddos lab --target 127.0.0.1 --profile dns --dns-name example.com --dns-type A \
+    --rps 20 --duration 10
+
+# WebSocket echo load
+hackit ddos lab --target ws://127.0.0.1:9000/echo --profile ws --rps 25
 ```
 
 ## Scope file

@@ -18,10 +18,12 @@ Safety model:
 """
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import json
 import sys
 import time
+from uuid import uuid4
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -126,6 +128,10 @@ def _print_help() -> None:
     profiles.add_row("http", "Go engine — GET · POST · PUT · PATCH · DELETE · HEAD · OPTIONS · mixed")
     profiles.add_row("tcp",  "C engine  — TCP connect handshake rate & latency")
     profiles.add_row("http-raw", "C engine  — plain-HTTP GET against the raw socket path")
+    profiles.add_row("dns",      "Go engine  — DNS query rate + resolution latency (dnsperf-style)")
+    profiles.add_row("udp",      "Go engine  — UDP echo throughput & RTT (iperf-style)")
+    profiles.add_row("icmp",     "C engine  — ICMP echo-request latency/loss (ping-style, needs root)")
+    profiles.add_row("ws",       "Python    — WebSocket connect + text-frame echo (k6-style)")
     console.print(_panel("Profiles", profiles, border="magenta"))
 
     options = Table.grid(padding=(0, 2))
@@ -144,6 +150,8 @@ def _print_help() -> None:
                     "      --scope scope.json --approval CHG-1234 --method post \\\n"
                     "      --body '{\"probe\":true}' --rps 100 --workers 16 --duration 30 -v\n", style="green")
     examples.append("  hackit ddos lab --target http://127.0.0.1:8080 --method put --ramp 5\n", style="green")
+    examples.append("  hackit ddos lab --target ws://127.0.0.1:9000/echo --profile ws\n", style="green")
+    examples.append("  hackit ddos run --target system --profile dns --dns-name example.com --dns-type A\n", style="green")
     console.print(_panel("Examples", examples, border="green"))
 
     console.print(f"  [dim]caps  interactive {INTERACTIVE_MAX_RPS} rps/{INTERACTIVE_MAX_WORKERS} workers/{INTERACTIVE_MAX_DURATION_S}s  ·  "
@@ -197,6 +205,117 @@ def _http_url(target: str) -> str:
 
 def _clamp(value: int, lo: int, hi: int) -> int:
     return max(lo, min(value, hi))
+
+
+
+def _percentile_local(sorted_vals, p):
+    if not sorted_vals:
+        return 0.0
+    idx = p / 100 * (len(sorted_vals) - 1)
+    lo = int(idx)
+    hi = min(lo + 1, len(sorted_vals) - 1)
+    frac = idx - lo
+    return sorted_vals[lo] * (1 - frac) + sorted_vals[hi] * frac
+
+
+class _WsStats:
+    def __init__(self):
+        self.total = 0
+        self.ok = 0
+        self.errors = 0
+        self.rtts: list[float] = []
+
+
+def _ws_run(url: str, rps: int, workers: int, duration_s: int, on_progress) -> dict:
+    """WebSocket load: connect -> send text frame -> await echo -> close, per iteration."""
+    try:
+        try:
+            from websockets.asyncio.client import connect as ws_connect
+        except ImportError:
+            from websockets import connect as ws_connect
+    except ImportError:
+        raise engines.EngineError("python package 'websockets' is not installed — pip install websockets")
+
+    stats = _WsStats()
+    start = time.monotonic()
+
+    async def main():
+        end = start + duration_s
+        queue: asyncio.Queue = asyncio.Queue(maxsize=max(1, rps // 10))
+
+        async def feeder():
+            interval = 1.0 / rps
+            while time.monotonic() < end:
+                try:
+                    queue.put_nowait(1)
+                except asyncio.QueueFull:
+                    pass
+                await asyncio.sleep(interval)
+
+        async def monitor():
+            while time.monotonic() < end:
+                el = time.monotonic() - start
+                on_progress({
+                    "elapsed_s": el,
+                    "requests": stats.total,
+                    "ok": stats.ok,
+                    "errors": stats.errors,
+                    "achieved_rps": stats.total / el if el > 0 else 0.0,
+                })
+                await asyncio.sleep(0.5)
+
+        async def worker():
+            while time.monotonic() < end:
+                try:
+                    await asyncio.wait_for(queue.get(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    continue
+                t0 = time.monotonic()
+                try:
+                    async with ws_connect(url, open_timeout=3, close_timeout=1) as ws:
+                        await ws.send(f"ping-{uuid4().hex[:8]}")
+                        try:
+                            await asyncio.wait_for(ws.recv(), timeout=2.0)
+                            stats.total += 1
+                            stats.ok += 1
+                            if len(stats.rtts) < 100000:
+                                stats.rtts.append((time.monotonic() - t0) * 1000.0)
+                        except asyncio.TimeoutError:
+                            stats.total += 1
+                            stats.errors += 1
+                except Exception:
+                    stats.total += 1
+                    stats.errors += 1
+
+        await asyncio.gather(feeder(), monitor(), *[worker() for _ in range(workers)])
+
+    asyncio.run(main())
+
+    elapsed = time.monotonic() - start
+    rtts = sorted(stats.rtts)
+    total = stats.total
+    return {
+        "type": "result",
+        "engine": "python",
+        "mode": "ws",
+        "target": url,
+        "method": "WS-TEXT",
+        "duration_s": elapsed,
+        "requests": total,
+        "ok": stats.ok,
+        "errors": stats.errors,
+        "achieved_rps": total / elapsed if elapsed > 0 else 0.0,
+        "error_rate": stats.errors / total if total else 0.0,
+        "latency_ms": {
+            "p50": _percentile_local(rtts, 50),
+            "p90": _percentile_local(rtts, 90),
+            "p99": _percentile_local(rtts, 99),
+            "max": rtts[-1] if rtts else 0.0,
+        },
+    }
+
+
+_WS_BASE_SCHEMES = ("ws://", "wss://")
 
 
 def _audit_meta(operator: str, approval_ref: str, profile: str, target: str,
@@ -328,12 +447,63 @@ def _run_engine(kind: str, *, on_progress, **kwargs) -> dict:
     return engines.run_c(on_progress=on_progress, **kwargs)
 
 
+
+def _launch_engine(profile, target, method, body, port, ramp, force_close,
+                   raw_path, rps, workers, duration, timeout_ms,
+                   dns_name, dns_type, dns_server, udp_payload, udp_echo,
+                   on_progress):
+    """Route a profile to its engine and return the raw report dict."""
+    host = _host_of(target)
+    if profile == "http":
+        return engines.run_go(_http_url(target), method.upper(), rps=rps, workers=workers,
+                              duration_s=duration, timeout_ms=timeout_ms, body=body,
+                              ramp_s=ramp, force_close=force_close, mode="http",
+                              on_progress=on_progress)
+    if profile == "http-raw":
+        return engines.run_c("http", host, port, rps=rps, workers=workers,
+                             duration_s=duration, path=raw_path, on_progress=on_progress)
+    if profile == "tcp":
+        return engines.run_c("tcp", host, port, rps=rps, workers=workers,
+                             duration_s=duration, on_progress=on_progress)
+    if profile == "icmp":
+        return engines.run_icmp(host, rps=rps, workers=workers,
+                                duration_s=duration, on_progress=on_progress)
+    if profile == "dns":
+        if not dns_name:
+            raise engines.EngineError("dns profile requires --dns-name")
+        if target.lower() == "system":
+            dns_server = ""
+        else:
+            dns_server = target
+        return engines.run_go("", "", rps=rps, workers=workers, duration_s=duration,
+                              timeout_ms=timeout_ms, ramp_s=ramp, mode="dns",
+                              dns_name=dns_name, dns_type=dns_type.upper(),
+                              dns_server=dns_server, on_progress=on_progress)
+    if profile == "udp":
+        udp_target = target if ":" in target else f"{target}:{port}"
+        return engines.run_go(udp_target, "", rps=rps, workers=workers, duration_s=duration,
+                              timeout_ms=timeout_ms, ramp_s=ramp, mode="udp",
+                              udp_payload=udp_payload, udp_echo=udp_echo,
+                              on_progress=on_progress)
+    if profile == "ws":
+        if not target.lower().startswith(_WS_BASE_SCHEMES):
+            raise engines.EngineError("ws profile needs a ws:// or wss:// URL")
+        return _ws_run(target, rps, workers, duration, on_progress)
+    raise engines.EngineError(f"unknown profile: {profile}")
+
+
 def _execute(*, label: str, profile: str, target: str, method: str, body: str,
              port: int, ramp: int, force_close: bool, rps: int, workers: int,
              duration: int, timeout_ms: int, meta: dict, verbose: bool,
-             output: str | None, raw_path: str = "/") -> None:
+             output: str | None, raw_path: str = "/",
+             dns_name: str = "", dns_type: str = "A", dns_server: str = "",
+             udp_payload: str = "hackit-ddos-probe", udp_echo: bool = True) -> None:
     started = time.monotonic()
-    dashboard = _Dashboard(label=label, target=target, method=method.upper() if profile == "http" else f"{profile.upper()}:{port}",
+    method_label = {
+        "http": method.upper(), "http-raw": f"HTTP-RAW:{port}", "tcp": f"TCP:{port}",
+        "dns": dns_type.upper(), "udp": "UDP", "icmp": "ICMP", "ws": "WS",
+    }.get(profile, profile.upper())
+    dashboard = _Dashboard(label=label, target=target, method=method_label,
                            rps=rps, workers=workers, duration_s=duration, started=started)
 
     meta = {**meta, "started_utc": datetime.now(timezone.utc).isoformat()}
@@ -361,35 +531,15 @@ def _execute(*, label: str, profile: str, target: str, method: str, body: str,
                 def live_progress(p: dict) -> None:
                     on_progress(p)
                     live.update(dashboard.render())
-                if profile == "http":
-                    report = _run_engine("go", on_progress=live_progress,
-                                         url=_http_url(target), method=method.upper(),
-                                         rps=rps, workers=workers, duration_s=duration,
-                                         timeout_ms=timeout_ms, body=body,
-                                         ramp_s=ramp, force_close=force_close)
-                elif profile == "http-raw":
-                    report = _run_engine("c", on_progress=live_progress,
-                                         mode="http", host=_host_of(target), port=port, path=raw_path,
-                                         rps=rps, workers=workers, duration_s=duration)
-                else:
-                    report = _run_engine("c", on_progress=live_progress,
-                                         mode="tcp", host=_host_of(target), port=port,
-                                         rps=rps, workers=workers, duration_s=duration)
+                report = _launch_engine(profile, target, method, body, port, ramp, force_close,
+                                        raw_path, rps, workers, duration, timeout_ms,
+                                        dns_name, dns_type, dns_server, udp_payload, udp_echo,
+                                        live_progress)
         else:
-            if profile == "http":
-                report = _run_engine("go", on_progress=on_progress,
-                                     url=_http_url(target), method=method.upper(),
-                                     rps=rps, workers=workers, duration_s=duration,
-                                     timeout_ms=timeout_ms, body=body,
-                                     ramp_s=ramp, force_close=force_close)
-            elif profile == "http-raw":
-                report = _run_engine("c", on_progress=on_progress,
-                                     mode="http", host=_host_of(target), port=port, path=raw_path,
-                                     rps=rps, workers=workers, duration_s=duration)
-            else:
-                report = _run_engine("c", on_progress=on_progress,
-                                     mode="tcp", host=_host_of(target), port=port,
-                                     rps=rps, workers=workers, duration_s=duration)
+            report = _launch_engine(profile, target, method, body, port, ramp, force_close,
+                                    raw_path, rps, workers, duration, timeout_ms,
+                                    dns_name, dns_type, dns_server, udp_payload, udp_echo,
+                                    on_progress)
     except engines.EngineError as exc:
         console.print(f"[bold red]engine failure[/bold red] — {exc}")
         sys.exit(1)
@@ -459,8 +609,12 @@ def check(scope, target, approval, profile, port):
 @click.option("--target", required=True, help="URL (http) or bare host (tcp).")
 @click.option("--scope", type=click.Path(exists=True, dir_okay=False), help="Signed scope file (JSON) — required for remote targets.")
 @click.option("--approval", help="Approval reference; must match scope approval_ref.")
-@click.option("--profile", type=click.Choice(["http", "http-raw", "tcp"]), default="http", show_default=True)
-@click.option("--port", default=80, show_default=True, type=int, help="Port for tcp/http-raw profiles.")
+@click.option("--profile", type=click.Choice(["http", "http-raw", "tcp", "dns", "udp", "icmp", "ws"]), default="http", show_default=True)
+@click.option("--port", default=80, show_default=True, type=int, help="Port for tcp/http-raw/udp profiles.")
+@click.option("--dns-name", default="", help="Name to resolve (dns profile), e.g. example.com.")
+@click.option("--dns-type", type=click.Choice(["A", "AAAA", "MX", "TXT", "NS"]), default="A", show_default=True)
+@click.option("--udp-payload", default="hackit-ddos-probe", show_default=True)
+@click.option("--udp-no-echo", is_flag=True, help="Fire-and-forget UDP sends (no echo wait).")
 @click.option("--method", type=click.Choice(HTTP_METHODS), default="get", show_default=True,
               help="HTTP verb, or 'mixed' to rotate verbs per request.")
 @click.option("--body", default="", help="Request body for POST/PUT/PATCH.")
@@ -474,10 +628,15 @@ def check(scope, target, approval, profile, port):
 @click.option("--output", type=click.Path(dir_okay=False), help="Write the full JSON report here.")
 @click.option("-v", "--verbose", is_flag=True, help="Show resolved target, effective caps and audit path.")
 def run(target, scope, approval, profile, port, method, body, ramp, force_close, path,
-        rps, workers, duration, timeout_ms, output, verbose):
+        rps, workers, duration, timeout_ms, output, verbose,
+        dns_name, dns_type, udp_payload, udp_no_echo):
     """Run a scripted load test. Remote targets require --scope and --approval."""
     host = _host_of(target)
-    loopback = _is_loopback(host)
+    loopback = (profile == "dns" and target.lower() == "system") or _is_loopback(host)
+
+    if profile == "dns" and not dns_name:
+        console.print("[bold red]refused[/bold red] — dns profile requires --dns-name")
+        sys.exit(2)
 
     if loopback:
         eff_rps, eff_workers, eff_duration = min(rps, LAB_MAX_RPS), min(workers, LAB_MAX_WORKERS), min(duration, LAB_MAX_DURATION_S)
@@ -500,13 +659,19 @@ def run(target, scope, approval, profile, port, method, body, ramp, force_close,
     _execute(label="scoped run" if not loopback else "loopback", profile=profile, target=target,
              method=method, body=body, port=port, ramp=ramp, force_close=force_close,
              rps=eff_rps, workers=eff_workers, duration=eff_duration, timeout_ms=timeout_ms,
-             meta=meta, verbose=verbose, output=output, raw_path=path)
+             meta=meta, verbose=verbose, output=output, raw_path=path,
+             dns_name=dns_name, dns_type=dns_type, dns_server=target,
+             udp_payload=udp_payload, udp_echo=not udp_no_echo)
 
 
 @ddos.command()
 @click.option("--target", required=True, help="Loopback URL (http) or bare loopback host (tcp).")
-@click.option("--profile", type=click.Choice(["http", "http-raw", "tcp"]), default="http", show_default=True)
+@click.option("--profile", type=click.Choice(["http", "http-raw", "tcp", "dns", "udp", "icmp", "ws"]), default="http", show_default=True)
 @click.option("--port", default=80, show_default=True, type=int)
+@click.option("--dns-name", default="")
+@click.option("--dns-type", type=click.Choice(["A", "AAAA", "MX", "TXT", "NS"]), default="A", show_default=True)
+@click.option("--udp-payload", default="hackit-ddos-probe", show_default=True)
+@click.option("--udp-no-echo", is_flag=True)
 @click.option("--method", type=click.Choice(HTTP_METHODS), default="get", show_default=True)
 @click.option("--body", default="", help="Request body for POST/PUT/PATCH.")
 @click.option("--ramp", default=0, show_default=True, type=int)
@@ -515,11 +680,16 @@ def run(target, scope, approval, profile, port, method, body, ramp, force_close,
 @click.option("--workers", default=4, show_default=True, type=int)
 @click.option("--duration", default=5, show_default=True, type=int)
 @click.option("-v", "--verbose", is_flag=True)
-def lab(target, profile, port, method, body, ramp, force_close, rps, workers, duration, verbose):
+def lab(target, profile, port, dns_name, dns_type, udp_payload, udp_no_echo,
+        method, body, ramp, force_close, rps, workers, duration, verbose):
     """Loopback-only smoke test. No scope file, tight caps."""
     host = _host_of(target)
-    if not _is_loopback(host):
+    dns_system = profile == "dns" and target.lower() == "system"
+    if not dns_system and not _is_loopback(host):
         console.print("[bold red]refused[/bold red] — lab mode is loopback-only (localhost / 127.0.0.1 / ::1)")
+        sys.exit(2)
+    if profile == "dns" and not dns_name:
+        console.print("[bold red]refused[/bold red] — dns profile requires --dns-name")
         sys.exit(2)
 
     eff_rps, eff_workers, eff_duration = min(rps, LAB_MAX_RPS), min(workers, LAB_MAX_WORKERS), min(duration, LAB_MAX_DURATION_S)
@@ -528,7 +698,9 @@ def lab(target, profile, port, method, body, ramp, force_close, rps, workers, du
     _execute(label="loopback lab", profile=profile, target=target,
              method=method, body=body, port=port, ramp=ramp, force_close=force_close,
              rps=eff_rps, workers=eff_workers, duration=eff_duration, timeout_ms=2000,
-             meta=meta, verbose=verbose, output=None)
+             meta=meta, verbose=verbose, output=None,
+             dns_name=dns_name, dns_type=dns_type, dns_server=target,
+             udp_payload=udp_payload, udp_echo=not udp_no_echo)
 
 
 @ddos.command(name="console")
@@ -562,18 +734,30 @@ def ddos_console():
                 console.print("[bold red]refused[/bold red] — authorization not confirmed, nothing was sent.\n")
                 continue
 
-        profile = Prompt.ask("profile", choices=["http", "http-raw", "tcp"], default="http")
+        profile = Prompt.ask("profile", choices=["http", "http-raw", "tcp", "dns", "udp", "icmp", "ws"], default="http")
         port = 80
         method = "get"
         body = ""
         ramp = 0
+        dns_name = ""
+        dns_type = "A"
         if profile in ("tcp", "http-raw"):
             port = _clamp(int(Prompt.ask("port", default="80") or "80"), 1, 65535)
-        if profile == "http":
+        elif profile == "http":
             method = Prompt.ask("method", choices=HTTP_METHODS, default="get")
             if method in ("post", "put", "patch"):
                 body = Prompt.ask("body (JSON or text, empty for none)", default="")
             ramp = _clamp(int(Prompt.ask("ramp seconds (0 = steady)", default="0") or "0"), 0, INTERACTIVE_MAX_DURATION_S)
+        elif profile == "dns":
+            dns_name = Prompt.ask("dns name to resolve", default="localhost")
+            dns_type = Prompt.ask("record type", choices=["A", "AAAA", "MX", "TXT", "NS"], default="A")
+        elif profile == "udp":
+            if ":" not in raw:
+                port = _clamp(int(Prompt.ask("udp port", default="7") or "7"), 1, 65535)
+        elif profile == "ws":
+            if not raw.lower().startswith(_WS_BASE_SCHEMES):
+                console.print("[bold red]refused[/bold red] — ws target must start with ws:// or wss://")
+                continue
 
         duration = _clamp(int(Prompt.ask("duration (s)", default=str(INTERACTIVE_DEFAULT_DURATION_S)) or INTERACTIVE_DEFAULT_DURATION_S), 1, INTERACTIVE_MAX_DURATION_S)
         rps = _clamp(int(Prompt.ask("rate cap (rps)", default=str(INTERACTIVE_DEFAULT_RPS)) or INTERACTIVE_DEFAULT_RPS), 1, INTERACTIVE_MAX_RPS)
@@ -584,7 +768,9 @@ def ddos_console():
         _execute(label="interactive", profile=profile, target=raw,
                  method=method, body=body, port=port, ramp=ramp, force_close=False,
                  rps=rps, workers=workers, duration=duration, timeout_ms=3000,
-                 meta=meta, verbose=False, output=None)
+                 meta=meta, verbose=False, output=None,
+                 dns_name=dns_name, dns_type=dns_type,
+                 dns_server=raw, udp_payload="hackit-ddos-probe", udp_echo=True)
         console.print()
         again = Prompt.ask("test another target?", choices=["y", "n"], default="n")
         if again != "y":

@@ -80,6 +80,7 @@ setup(
         "console_scripts": [
             "hackit=hackit.boot:cli_entry",
             "sqli=hackit.sqli:test_sqli",
+            "ddos=hackit.ddos:ddos",
         ],
     },
 )

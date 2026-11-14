@@ -269,6 +269,12 @@ else
     exit 1
 fi
 
+DDOS_BIN_PATH="$VENV/bin/ddos"
+if [ -x "$DDOS_BIN_PATH" ]; then
+    ln -sf "$DDOS_BIN_PATH" "$BIN_DIR/ddos"
+    ok "linked: $BIN_DIR/ddos -> $DDOS_BIN_PATH"
+fi
+
 PATH_LINE="export PATH=\"$BIN_DIR:\$PATH\""
 PROFILE=""
 case ":${SHELL:-}:" in

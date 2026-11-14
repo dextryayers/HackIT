@@ -40,7 +40,7 @@
 #define CONNECT_TIMEOUT_MS  3000
 #define IO_TIMEOUT_MS       3000
 
-typedef enum { MODE_TCP, MODE_HTTP } engine_mode_t;
+typedef enum { MODE_TCP, MODE_HTTP, MODE_ICMP } engine_mode_t;
 
 typedef struct {
     engine_mode_t mode;
@@ -55,9 +55,11 @@ typedef struct {
     double   lat_us[SAMPLES_PER_THREAD];
     uint64_t lat_count;    /* reservoir sampling counter */
     uint64_t lat_filled;   /* samples actually stored */
+    uint16_t icmp_seq;     /* ICMP echo sequence */
 } worker_arg_t;
 
 static atomic_int g_stop;
+static atomic_int g_perm;
 static atomic_uint_fast64_t g_ok, g_err;
 static double g_start_s;
 static pthread_mutex_t g_sample_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -99,6 +101,87 @@ static int fcntl_nonblock(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     fcntl(fd, F_SETFL, flags | O_NONBLOCK);
     return flags;
+}
+
+
+/* ---------- ICMP echo (raw socket, ala ping) ---------- */
+#define ICMP_ECHO_TYPE     8
+#define ICMP_ECHOREPLY_TYPE 0
+
+struct icmp_echo_hdr {
+    uint8_t  type, code;
+    uint16_t checksum;
+    uint16_t id, seq;
+} __attribute__((packed));
+
+static uint16_t icmp_checksum(const void *data, size_t len) {
+    const uint16_t *words = data;
+    uint32_t sum = 0;
+    while (len > 1) { sum += *words++; len -= 2; }
+    if (len == 1) sum += *(const uint8_t *)words;
+    while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
+    return (uint16_t)~sum;
+}
+
+/* One ICMP echo request -> reply. Needs root or CAP_NET_RAW. */
+static int icmp_ping(const char *host, uint16_t id, uint16_t seq, uint64_t *rtt_us, int *perm_error) {
+    *perm_error = 0;
+    struct addrinfo hints = {0}, *res = NULL;
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_RAW;
+    hints.ai_protocol = IPPROTO_ICMP;
+    if (getaddrinfo(host, NULL, &hints, &res) != 0) return -1;
+
+    int fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
+    if (fd < 0) {
+        if (errno == EPERM || errno == EACCES) *perm_error = 1;
+        freeaddrinfo(res);
+        return -1;
+    }
+
+    unsigned char payload[16];
+    for (int i = 0; i < 16; i++) payload[i] = (unsigned char)(i * 7 + 3);
+    unsigned char buf[sizeof(struct icmp_echo_hdr) + sizeof(payload)];
+    struct icmp_echo_hdr hdr = { .type = ICMP_ECHO_TYPE, .code = 0,
+                                 .checksum = 0, .id = htons(id), .seq = htons(seq) };
+    memcpy(buf, &hdr, sizeof(hdr));
+    memcpy(buf + sizeof(hdr), payload, sizeof(payload));
+    struct icmp_echo_hdr *p = (struct icmp_echo_hdr *)buf;
+    p->checksum = icmp_checksum(buf, sizeof(buf));
+
+    uint64_t t0 = now_mono_ns();
+    ssize_t sent = sendto(fd, buf, sizeof(buf), 0, res->ai_addr, res->ai_addrlen);
+    if (sent < 0) { close(fd); freeaddrinfo(res); return -1; }
+
+    int ok = -1;
+    uint8_t rbuf[2048];
+    for (;;) {
+        fd_set rfds;
+        FD_ZERO(&rfds); FD_SET(fd, &rfds);
+        struct timeval tv = { 1, 0 };
+        int rc = select(fd + 1, &rfds, NULL, NULL, &tv);
+        if (rc <= 0) break;
+        ssize_t n = recv(fd, rbuf, sizeof(rbuf), 0);
+        if (n <= 0) break;
+        size_t off = 0;
+        if ((rbuf[0] >> 4) == 4 && n >= 20) off = (size_t)(rbuf[0] & 0x0F) * 4;
+        if ((size_t)n - off < sizeof(struct icmp_echo_hdr)) continue;
+        struct icmp_echo_hdr rep;
+        memcpy(&rep, rbuf + off, sizeof(rep));
+        if (rep.type != ICMP_ECHOREPLY_TYPE) continue;
+        if (ntohs(rep.id) != id) continue;
+        if (ntohs(rep.seq) != seq) continue;
+        *rtt_us = (now_mono_ns() - t0) / 1000;
+        ok = 0;
+        break;
+    }
+    close(fd);
+    freeaddrinfo(res);
+    return ok;
+}
+
+static const char *mode_name(engine_mode_t m) {
+    switch (m) { case MODE_TCP: return "tcp"; case MODE_HTTP: return "http"; default: return "icmp"; }
 }
 
 /* Non-blocking connect with explicit timeout. Returns fd or -1. */
@@ -176,22 +259,44 @@ static void *worker(void *argp) {
     while (!atomic_load(&g_stop) && now_mono_s() < deadline) {
         uint64_t t0 = now_mono_ns();
 
-        int fd = connect_timeout(w->host, w->port, CONNECT_TIMEOUT_MS);
-        if (fd < 0) {
-            atomic_fetch_add(&g_err, 1);
-        } else {
-            if (w->mode == MODE_TCP) {
+        if (w->mode == MODE_ICMP) {
+            uint16_t id = (uint16_t)((getpid() & 0xFF) << 8 | (w->thread_id & 0xFF));
+            uint16_t seq = (uint16_t)++w->icmp_seq;
+            uint64_t rtt = 0;
+            int perm_error = 0;
+            if (icmp_ping(w->host, id, seq, &rtt, &perm_error) == 0) {
                 atomic_fetch_add(&g_ok, 1);
-            } else {
-                int status = http_get_status(fd, w->host, w->path);
-                if (status > 0 && status < 500) atomic_fetch_add(&g_ok, 1);
-                else atomic_fetch_add(&g_err, 1);
+                sample_add(w, (double)rtt);
+                uint64_t spent = now_mono_ns() - t0;
+                if (spent < interval_ns) {
+                    struct timespec ts = { (time_t)((interval_ns - spent) / 1000000000ull),
+                                           (long)((interval_ns - spent) % 1000000000ull) };
+                    nanosleep(&ts, NULL);
+                }
+                continue;
             }
-            close(fd);
+            atomic_fetch_add(&g_err, 1);
+            if (perm_error) { atomic_store(&g_perm, 1); atomic_store(&g_stop, 1); }
+        } else {
+            int fd = connect_timeout(w->host, w->port, CONNECT_TIMEOUT_MS);
+            if (fd < 0) {
+                atomic_fetch_add(&g_err, 1);
+            } else {
+                if (w->mode == MODE_TCP) {
+                    atomic_fetch_add(&g_ok, 1);
+                } else {
+                    int status = http_get_status(fd, w->host, w->path);
+                    if (status > 0 && status < 500) atomic_fetch_add(&g_ok, 1);
+                    else atomic_fetch_add(&g_err, 1);
+                }
+                close(fd);
+            }
         }
 
         double us = (double)(now_mono_ns() - t0) / 1000.0;
-        sample_add(w, us);
+        if (w->mode != MODE_ICMP) {
+            sample_add(w, us);
+        }
 
         uint64_t spent = now_mono_ns() - t0;
         if (spent < interval_ns) {
@@ -251,33 +356,37 @@ static void *monitor(void *arg) {
 static void usage(const char *prog) {
     fprintf(stderr,
         "usage: %s <tcp|http> <host> <port> [options]\n"
+        "       %s icmp <host> [options]\n"
         "  --duration SEC   test duration (1-%d, default 10)\n"
         "  --threads N      worker threads (1-%d, default 4)\n"
         "  --rps N          global rate cap (1-%d, default 50)\n"
         "  --path PATH      HTTP path (default /)\n"
         "  --progress-ms N  progress line interval, 0 = silent (default 500)\n",
-        prog, HARD_MAX_DURATION_S, HARD_MAX_THREADS, HARD_MAX_RPS);
+        prog, prog, HARD_MAX_DURATION_S, HARD_MAX_THREADS, HARD_MAX_RPS);
 }
 
 int main(int argc, char **argv) {
-    if (argc < 4) { usage(argv[0]); return 2; }
+    if (argc < 3) { usage(argv[0]); return 2; }
 
     engine_mode_t mode;
     if (strcmp(argv[1], "tcp") == 0) mode = MODE_TCP;
     else if (strcmp(argv[1], "http") == 0) mode = MODE_HTTP;
+    else if (strcmp(argv[1], "icmp") == 0) mode = MODE_ICMP;
     else { usage(argv[0]); return 2; }
+
+    if (mode != MODE_ICMP && argc < 4) { usage(argv[0]); return 2; }
 
     worker_arg_t proto = {0};
     proto.mode = mode;
     snprintf(proto.host, sizeof(proto.host), "%s", argv[2]);
-    snprintf(proto.port, sizeof(proto.port), "%s", argv[3]);
+    snprintf(proto.port, sizeof(proto.port), "%s", mode == MODE_ICMP ? "0" : argv[3]);
     snprintf(proto.path, sizeof(proto.path), "/");
     proto.duration_s = 10;
     proto.threads = 4;
     proto.rps = 50;
     int progress_ms = 500;
 
-    for (int i = 4; i < argc; i++) {
+    for (int i = (mode == MODE_ICMP ? 3 : 4); i < argc; i++) {
         if (!strcmp(argv[i], "--duration") && i + 1 < argc) proto.duration_s = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--threads") && i + 1 < argc) proto.threads = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--rps") && i + 1 < argc) proto.rps = atoi(argv[++i]);
@@ -318,6 +427,10 @@ int main(int argc, char **argv) {
     for (int i = 0; i < proto.threads; i++) pthread_join(tids[i], NULL);
     atomic_store(&g_stop, 1);
     if (mon_started) pthread_join(mon, NULL);
+    if (atomic_load(&g_perm)) {
+        fprintf(stderr, "stress_engine: ICMP mode needs root or CAP_NET_RAW (raw socket) — run with sudo or use tcp/udp/dns instead\n");
+        return 3;
+    }
 
     double elapsed = now_mono_s() - start;
     if (elapsed <= 0.0) elapsed = 1e-6;
@@ -326,18 +439,20 @@ int main(int argc, char **argv) {
 
     qsort(g_samples, g_sample_n, sizeof(double), cmp_double);
 
-    char esc_host[512], esc_path[1024];
+    char esc_host[512];
     json_escape(proto.host, esc_host, sizeof(esc_host));
-    json_escape(proto.path, esc_path, sizeof(esc_path));
+    char esc_target[560];
+    if (mode == MODE_ICMP) snprintf(esc_target, sizeof(esc_target), "%s", esc_host);
+    else snprintf(esc_target, sizeof(esc_target), "%s:%s", esc_host, proto.port);
 
     double err_rate = total ? (double)err / (double)total : 0.0;
-    printf("{\"type\":\"result\",\"engine\":\"c\",\"mode\":\"%s\",\"target\":\"%s:%s\",\"method\":%s,"
+    printf("{\"type\":\"result\",\"engine\":\"c\",\"mode\":\"%s\",\"target\":\"%s\",\"method\":%s,"
            "\"duration_s\":%.3f,\"requests\":%llu,\"ok\":%llu,\"errors\":%llu,"
            "\"achieved_rps\":%.2f,\"error_rate\":%.4f,"
            "\"latency_ms\":{\"p50\":%.3f,\"p90\":%.3f,\"p99\":%.3f,\"max\":%.3f}}\n",
-           mode == MODE_TCP ? "tcp" : "http",
-           esc_host, proto.port,
-           mode == MODE_HTTP ? "\"GET\"" : "null",
+           mode_name(mode),
+           esc_target,
+           mode == MODE_HTTP ? "\"GET\"" : (mode == MODE_ICMP ? "\"ICMP ECHO\"" : "null"),
            elapsed,
            (unsigned long long)total, (unsigned long long)ok, (unsigned long long)err,
            (double)total / elapsed, err_rate,
@@ -346,6 +461,5 @@ int main(int argc, char **argv) {
            percentile(g_samples, g_sample_n, 99) / 1000.0,
            g_sample_n ? g_samples[g_sample_n - 1] / 1000.0 : 0.0);
 
-    (void)esc_path;
     return 0;
 }

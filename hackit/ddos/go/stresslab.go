@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"sort"
@@ -110,6 +111,208 @@ type report struct {
 	} `json:"latency_ms"`
 }
 
+type netModeConfig struct {
+	url, dnsServer, dnsName, dnsType string
+	udpPayload                       string
+	udpEcho                          bool
+	duration, workers, rps, ramp     int
+	progressMS                       int
+	start                            time.Time
+	hardMaxDuration                  time.Duration
+}
+
+func newTokenSource(rps, ramp int, start time.Time, ctx context.Context) <-chan struct{} {
+	tokens := make(chan struct{}, max64(1, int64(rps)/10))
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			rate := float64(rps)
+			if ramp > 0 {
+				el := time.Since(start).Seconds()
+				if el < float64(ramp) {
+					rate = rate * el / float64(ramp)
+					if rate < 1 {
+						rate = 1
+					}
+				}
+			}
+			interval := time.Duration(float64(time.Second) / rate)
+			if interval < time.Microsecond {
+				interval = time.Microsecond
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(interval):
+				select {
+				case tokens <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}()
+	return tokens
+}
+
+func startProgress(progressMS int, ctx context.Context, start time.Time,
+	okCount, errCount, reqCount *int64) {
+	if progressMS <= 0 {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(time.Duration(progressMS) * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				elapsed := time.Since(start).Seconds()
+				if elapsed <= 0 {
+					continue
+				}
+				req := atomic.LoadInt64(reqCount)
+				p := progress{Type: "progress", ElapsedS: elapsed, Requests: req,
+					OK: atomic.LoadInt64(okCount), Errors: atomic.LoadInt64(errCount),
+					AchievedRPS: float64(req) / elapsed}
+				_ = json.NewEncoder(os.Stdout).Encode(p)
+			}
+		}
+	}()
+}
+
+func finishReport(engine, mode, target, method string, start time.Time,
+	lat *sampler, okCount, errCount *int64) {
+	elapsed := time.Since(start).Seconds()
+	total := atomic.LoadInt64(okCount) + atomic.LoadInt64(errCount)
+	out := report{
+		Type: "result", Engine: engine, Mode: mode, Target: target, Method: method,
+		DurationS: elapsed, Requests: total,
+		OK: atomic.LoadInt64(okCount), Errors: atomic.LoadInt64(errCount),
+		AchievedRPS: float64(total) / elapsed,
+	}
+	if total > 0 {
+		out.ErrorRate = float64(atomic.LoadInt64(errCount)) / float64(total)
+	}
+	samples := lat.snapshot()
+	sort.Float64s(samples)
+	out.LatencyMS.P50 = lat.percentile(samples, 50)
+	out.LatencyMS.P90 = lat.percentile(samples, 90)
+	out.LatencyMS.P99 = lat.percentile(samples, 99)
+	if len(samples) > 0 {
+		out.LatencyMS.Max = samples[len(samples)-1]
+	}
+	_ = json.NewEncoder(os.Stdout).Encode(out)
+}
+
+func runNetMode(mode string, cfg netModeConfig) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.duration)*time.Second)
+	defer cancel()
+	start := time.Now()
+	var okCount, errCount, reqCount int64
+	lat := newSampler(sampleCap)
+
+	tokens := newTokenSource(cfg.rps, cfg.ramp, start, ctx)
+	startProgress(cfg.progressMS, ctx, start, &okCount, &errCount, &reqCount)
+
+	var dial func() (time.Duration, error)
+	switch mode {
+	case "dns":
+		dial = func() (time.Duration, error) {
+			resolver := &net.Resolver{PreferGo: true}
+			if cfg.dnsServer != "" {
+				server := cfg.dnsServer
+				if !strings.Contains(server, ":") {
+					server += ":53"
+				}
+				resolver.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
+					d := net.Dialer{Timeout: 2 * time.Second}
+					return d.DialContext(ctx, network, server)
+				}
+			}
+			lookupCtx, cancel2 := context.WithTimeout(ctx, 2*time.Second)
+			defer cancel2()
+			t0 := time.Now()
+			var err error
+			switch cfg.dnsType {
+			case "AAAA":
+				_, err = resolver.LookupIP(lookupCtx, "ip6", cfg.dnsName)
+			case "MX":
+				_, err = resolver.LookupMX(lookupCtx, cfg.dnsName)
+			case "TXT":
+				_, err = resolver.LookupTXT(lookupCtx, cfg.dnsName)
+			case "NS":
+				_, err = resolver.LookupNS(lookupCtx, cfg.dnsName)
+			default:
+				_, err = resolver.LookupIP(lookupCtx, "ip4", cfg.dnsName)
+			}
+			return time.Since(t0), err
+		}
+	case "udp":
+		raddr, err := net.ResolveUDPAddr("udp", cfg.url)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "stresslab-go: bad udp target %q: %v\n", cfg.url, err)
+			os.Exit(2)
+		}
+		payload := []byte(cfg.udpPayload)
+		dial = func() (time.Duration, error) {
+			conn, err := net.DialUDP("udp", nil, raddr)
+			if err != nil {
+				return 0, err
+			}
+			defer conn.Close()
+			conn.SetReadDeadline(time.Now().Add(1500 * time.Millisecond))
+			t0 := time.Now()
+			if _, werr := conn.Write(payload); werr != nil {
+				return time.Since(t0), werr
+			}
+			if cfg.udpEcho {
+				buf := make([]byte, len(payload))
+				if _, rerr := conn.Read(buf); rerr != nil {
+					return time.Since(t0), rerr
+				}
+			}
+			return time.Since(t0), nil
+		}
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < cfg.workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-tokens:
+				}
+				rtt, err := dial()
+				atomic.AddInt64(&reqCount, 1)
+				if err != nil {
+					atomic.AddInt64(&errCount, 1)
+					continue
+				}
+				lat.add(float64(rtt.Microseconds()) / 1000.0)
+				atomic.AddInt64(&okCount, 1)
+			}
+		}()
+	}
+	wg.Wait()
+	methodLabel := cfg.dnsType
+	if mode == "udp" {
+		methodLabel = "ECHO"
+		if !cfg.udpEcho {
+			methodLabel = "SEND"
+		}
+	}
+	finishReport("go", mode, cfg.url, methodLabel, start, lat, &okCount, &errCount)
+}
+
 func max64(a, b int64) int64 {
 	if a > b {
 		return a
@@ -128,9 +331,26 @@ func main() {
 	ramp := flag.Int("ramp", 0, "seconds to linearly ramp 0 -> rps (0 = steady rate)")
 	forceClose := flag.Bool("close", false, "send Connection: close instead of keep-alive")
 	progressMS := flag.Int("progress-ms", 500, "progress line interval in milliseconds (0 = silent)")
+	mode := flag.String("mode", "http", "engine mode: http | dns | udp")
+	dnsServer := flag.String("dns-server", "", "DNS server host[:port] (default: system resolver)")
+	dnsName := flag.String("dns-name", "", "name to resolve (dns mode)")
+	dnsType := flag.String("dns-type", "A", "record type: A | AAAA | MX | TXT | NS")
+	udpPayload := flag.String("udp-payload", "hackit-ddos-probe", "UDP payload bytes")
+	udpEcho := flag.Bool("udp-echo", true, "wait for an echo reply (udp mode); false = fire-and-forget send rate")
 	flag.Parse()
 
-	if *url == "" {
+	if *mode == "dns" {
+		if *dnsName == "" {
+			fmt.Fprintln(os.Stderr, "stresslab-go: -dns-name is required in dns mode")
+			os.Exit(2)
+		}
+		*url = "dns://" + *dnsName
+	} else if *mode == "udp" {
+		if *url == "" {
+			fmt.Fprintln(os.Stderr, "stresslab-go: -url host:port is required in udp mode")
+			os.Exit(2)
+		}
+	} else if *url == "" {
 		fmt.Fprintln(os.Stderr, "stresslab-go: -url is required")
 		os.Exit(2)
 	}
@@ -155,6 +375,17 @@ func main() {
 	*method = strings.ToUpper(strings.TrimSpace(*method))
 	if *method != "MIXED" && *method == "" {
 		*method = "GET"
+	}
+
+	if *mode == "dns" || *mode == "udp" {
+		runNetMode(*mode, netModeConfig{
+			url: *url, dnsServer: *dnsServer, dnsName: *dnsName, dnsType: strings.ToUpper(*dnsType),
+			udpPayload: *udpPayload, udpEcho: *udpEcho,
+			duration: *duration, workers: *workers, rps: *rps,
+			ramp: *ramp, progressMS: *progressMS,
+			start: time.Now(), hardMaxDuration: hardMaxDuration,
+		})
+		return
 	}
 
 	client := &http.Client{
