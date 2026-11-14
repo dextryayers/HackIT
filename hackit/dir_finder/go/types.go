@@ -44,6 +44,11 @@ type ScanConfig struct {
 	RawFile   string
 	Stdin     bool
 
+	// DIR/FUZZ sniper marker: when non-empty, each wordlist entry is
+	// substituted into the target instead of path-joining.
+	ReplaceMarker string
+	ReplaceMode   string // "host" | "ext" | "path"
+
 	Wordlists          []string
 	WordlistCategories []string
 	Extensions         []string

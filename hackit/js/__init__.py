@@ -8,6 +8,51 @@ import json
 from hackit.ui import display_tool_banner, _colored, GREEN, RED, BLUE, B_CYAN, B_GREEN, YELLOW, CYAN, MAGENTA, BOLD, DIM, TablePrinter
 from .go_bridge import GoEngine
 
+_JS_LIKE = (".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".mts", ".cts")
+_STYLE_LIKE = (".css", ".scss", ".less", ".pcss")
+_MAP_LIKE = (".map",)
+_WASM_LIKE = (".wasm",)
+_DATA_LIKE = (".json", ".yaml", ".yml", ".xml", ".toml", ".csv", ".conf", ".ini", ".env", ".txt")
+_FRAMEWORK_LIKE = (".vue", ".svelte", ".astro", ".liquid", ".ejs", ".hbs")
+
+
+def _write_artifact_dump(out_path, final_url, filemap_200):
+    from collections import defaultdict
+    from urllib.parse import urlparse
+    groups = defaultdict(list)
+    for f in filemap_200:
+        ext = (f.get("ext") or "").lower()
+        if not ext:
+            ext = "(no ext)"
+        groups[ext].append(f)
+
+    def bucket(ext):
+        if ext in _JS_LIKE: return "JavaScript / TypeScript"
+        if ext in _STYLE_LIKE: return "Stylesheets"
+        if ext in _MAP_LIKE: return "Source maps"
+        if ext in _WASM_LIKE: return "WebAssembly"
+        if ext in _DATA_LIKE: return "Data / config"
+        if ext in _FRAMEWORK_LIKE: return "Framework templates"
+        return None
+
+    lines = [
+        f"# JS Hunter artifact dump — {final_url}",
+        f"# verified-200 files: {len(filemap_200)} · groups: {len(groups)}",
+        "",
+    ]
+    for ext, items in sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        label = bucket("." + ext if not ext.startswith(".") else ext) or "Other"
+        lines.append(f"## {label} — {ext} ({len(items)})")
+        for f in sorted(items, key=lambda f: f.get("url", "")):
+            src = f.get("source") or ""
+            length = f.get("length", 0)
+            rel = f" via {src}" if src and src != f.get("url") else ""
+            lines.append(f"{f.get('url', '')}  ({length}b){rel}")
+        lines.append("")
+    with open(out_path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines))
+    return groups
+
 
 @click.command()
 @click.argument('target_url', default=None, required=False)
@@ -175,7 +220,10 @@ def analyze_js(ctx, target_url):
                 click.echo(f"  {_colored('[DEP]', BLUE)} {result.get('resolved', url_val)}")
             elif rtype == 'network_entry':
                 rtype2 = result.get('resource_type', 'resource')
-                click.echo(f"  {_colored(f'[{rtype2.upper()}]', B_CYAN)} {url_val}")
+                if rtype2.endswith('_skip'):
+                    click.echo(f"  {_colored('[OUT-OF-SCOPE]', DIM)} {url_val} {_colored(f'({rtype2[:-5]})', DIM)}")
+                else:
+                    click.echo(f"  {_colored(f'[{rtype2.upper()}]', B_CYAN)} {url_val}")
             elif rtype == 'network_result':
                 status = result.get('status', 0)
                 ct = result.get('content_type', '')
@@ -287,17 +335,41 @@ def analyze_js(ctx, target_url):
         click.echo(f"  {_colored('Fetched (any status):', CYAN)} {len(discovered)}")
         click.echo(f"  {_colored('Verified 200 OK files:', GREEN)} {len(filemap_200)}")
         if discovered:
-            js_count = sum(1 for d in discovered if d.get('url', '').endswith('.js'))
+            def _ext_of(u):
+                p = (u or "").split("?")[0].split("#")[0]
+                dot = p.rfind(".")
+                return p[dot:].lower() if dot != -1 else ""
+            js_count = sum(1 for d in discovered if _ext_of(d.get('url', '')) in _JS_LIKE)
             if js_count:
-                click.echo(f"  {_colored('JavaScript Files:', CYAN)} {js_count}")
-            css_count = sum(1 for d in discovered if d.get('url', '').split('?')[0].endswith('.css'))
+                click.echo(f"  {_colored('JavaScript/TS Files:', CYAN)} {js_count}")
+            css_count = sum(1 for d in discovered if _ext_of(d.get('url', '')) in _STYLE_LIKE)
             if css_count:
                 click.echo(f"  {_colored('Stylesheets:', CYAN)} {css_count}")
+            wasm_count = sum(1 for d in discovered if _ext_of(d.get('url', '')) in _WASM_LIKE)
+            if wasm_count:
+                click.echo(f"  {_colored('WebAssembly:', CYAN)} {wasm_count}")
             bad = [(d.get('status'), d.get('url', '')) for d in discovered if d.get('status') not in (200, None)]
             if bad:
                 click.echo(f"  {_colored('Non-200 responses:', YELLOW)} {len(bad)}")
                 for st, u in bad[:10]:
                     click.echo(f"    {_colored(f'[{st}]', YELLOW)} {u[:80]}")
+        if filemap_200:
+            from collections import Counter as _ExtCounter
+            ext_counts = _ExtCounter("." + (f.get('ext') or 'none').lower() for f in filemap_200)
+            codeish = [(e, n) for e, n in ext_counts.most_common() if e in (_JS_LIKE + _STYLE_LIKE + _MAP_LIKE + _WASM_LIKE + _DATA_LIKE + _FRAMEWORK_LIKE)]
+            if codeish:
+                click.echo(f"  {_colored('Code Files By Ext:', CYAN)}")
+                for e, n in codeish[:15]:
+                    click.echo(f"    {_colored('•', GREEN)} {e:8s} {_colored(f'×{n}', DIM)}")
+            by_host_js = _ExtCounter()
+            from urllib.parse import urlparse as _up3
+            for f in filemap_200:
+                if ("." + (f.get('ext') or '').lower().lstrip('.')) in _JS_LIKE:
+                    by_host_js[_up3(f.get('url', '')).hostname or '?'] += 1
+            if by_host_js:
+                click.echo(f"  {_colored('JS By Host:', CYAN)}")
+                for h, n in by_host_js.most_common(10):
+                    click.echo(f"    {_colored('•', GREEN)} {h} {_colored(f'×{n}', DIM)}")
         if sourcemaps:
             click.echo(f"  {_colored('Source Maps:', CYAN)} {len(sourcemaps)}")
         if sensitives:
@@ -339,7 +411,10 @@ def analyze_js(ctx, target_url):
         from collections import Counter as _Counter2
         host = _up(final_url).hostname or "target"
         by_host = dict(_Counter2((_up(f.get('url', '')).hostname or '?') for f in filemap_200))
-        output = f"js_{host}_{_dt.now().strftime('%Y%m%d_%H%M%S')}.json"
+        ts = _dt.now().strftime('%Y%m%d_%H%M%S')
+        output = f"js_{host}_{ts}.json"
+        artifacts = f"js_artifacts_{host}_{ts}.txt"
+        _write_artifact_dump(artifacts, final_url, filemap_200)
         with open(output, 'w') as f:
             json.dump({
                 "target": final_url,
@@ -356,3 +431,4 @@ def analyze_js(ctx, target_url):
                 }
             }, f, indent=2)
         click.echo(f"  {_colored('[+]', GREEN)} Results saved to {output}")
+        click.echo(f"  {_colored('[+]', GREEN)} Artifact dump (all files, grouped) saved to {artifacts}")

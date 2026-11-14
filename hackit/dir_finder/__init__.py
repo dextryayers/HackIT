@@ -6,7 +6,34 @@ import json
 import os
 import subprocess
 import sys
-from hackit.ui import display_tool_banner, _colored, GREEN, YELLOW, RED, CYAN, BLUE
+from hackit.ui import display_tool_banner, _colored, GREEN, YELLOW, RED, CYAN, BLUE, BOLD, DIM, B_CYAN, B_GREEN, MAGENTA
+
+_DIRFINDER_BANNER = r"""
+ ██████╗ ██╗██████╗ ███████╗██╗███╗   ██╗██████╗ ███████╗██████╗
+ ██╔══██╗██║██╔══██╗██╔════╝██║████╗  ██║██╔══██╗██╔════╝██╔══██╗
+ ██║  ██║██║██████╔╝█████╗  ██║██╔██╗ ██║██║  ██║█████╗  ██████╔╝
+ ██║  ██║██║██╔══██╗██╔══╝  ██║██║╚██╗██║██║  ██║██╔══╝  ██╔══██╗
+ ██████╔╝██║██║  ██║██║     ██║██║ ╚████║██████╔╝███████╗██║  ██║
+ ╚═════╝ ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝  ╚═══╝╚═════╝ ╚══════╝╚═╝  ╚═╝
+"""
+
+def _interactive_examples():
+    click.echo()
+    click.echo(_colored(_DIRFINDER_BANNER, B_CYAN))
+    click.echo(_colored("  DIRFINDER — ffuf-style sniper directory & file discovery", BOLD))
+    click.echo(_colored("  DIR or FUZZ marks the substitution slot; everything else stays fixed.", DIM))
+    click.echo()
+    click.echo(_colored("  Examples:", YELLOW))
+    click.echo(_colored("    input : https://example.com/DIR threads 25 sc 200,404 verbose on", GREEN))
+    click.echo(_colored("    input : https://example.com/DIR full threads 50 verbose on", GREEN))
+    click.echo(_colored("    input : https://example.com/file.DIR sc 200", GREEN))
+    click.echo(_colored("    input : https://FUZZ.example.com/ threads 30 sc 403,200", GREEN))
+    click.echo(_colored("    input : https://example.com/DIR exclude 404 recursive on", GREEN))
+    click.echo()
+    click.echo(_colored("  Keys: threads/t N · sc 200,403 · exclude 404 · ext php,bak · full (dicc.txt)", DIM))
+    click.echo(_colored("        method GET|POST|HEAD · verbose on|off · recursive on|off · delay N · timeout N · rate N · quiet", DIM))
+    click.echo(_colored("        empty input quits · 'help' reprints these examples", DIM))
+    click.echo()
 
 @click.command()
 @click.argument('mode', required=False)
@@ -147,11 +174,14 @@ def dirfinder(ctx, mode, **kwargs):
         return
 
     if not kwargs.get('url') and not kwargs.get('urls_file') and not kwargs.get('stdin'):
-        click.echo(ctx.get_help())
+        _interactive()
         return
 
     display_tool_banner('Dir Finder (Expert Go Engine v3.0)')
+    _run_engine(kwargs)
 
+
+def _run_engine(kwargs):
     base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     go_bin = os.path.join(base_dir, 'hackit', 'dir_finder', 'go', 'dir_finder')
     if not os.path.exists(go_bin):
@@ -292,3 +322,158 @@ def dirfinder(ctx, mode, **kwargs):
         click.echo(f"[!] Go binary not found: {go_bin}")
     except Exception as e:
         click.echo(f"[!] Failed to execute Go binary: {e}")
+
+
+_TRUE = {"on", "yes", "true", "1", "y"}
+_FALSE = {"off", "no", "false", "0", "n"}
+
+
+def _parse_sc_list(raw: str) -> str:
+    parts = raw.replace("/", ",").replace(";", ",").split(",")
+    out = []
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part[1:]:
+            bits = part.split("-", 1)
+            if bits[0].strip().isdigit() and bits[1].strip().isdigit():
+                out.append(f"{bits[0].strip()}-{bits[1].strip()}")
+            continue
+        if part.isdigit():
+            out.append(part)
+    return ",".join(out)
+
+
+def _bool_token(tokens, i, default_when_bare=True):
+    """Return (bool, consumed) for 'verbose', 'verbose on', 'verbose off'."""
+    if i + 1 < len(tokens) and tokens[i + 1].lower() in _TRUE | _FALSE:
+        return tokens[i + 1].lower() in _TRUE, 2
+    return default_when_bare, 1
+
+
+def _interactive_parse(text: str):
+    """Parse the free-form input line. Returns kwargs dict or an error string."""
+    import shlex
+    try:
+        tokens = shlex.split(text)
+    except ValueError as exc:
+        return None, f"could not parse input: {exc}"
+    if not tokens:
+        return None, "empty"
+
+    kwargs = {"url": None, "threads": 30, "verbose": False}
+    i = 0
+    target = None
+    for tok in tokens:
+        if tok.startswith(("http://", "https://", "www.", "ftp://")) or (
+            "://" not in tok and "." in tok and not tok.startswith("-")):
+            target = tok
+            break
+    if target is None:
+        # allow bare "example.com/DIR" without scheme
+        if "." in tokens[0] and not tokens[0].startswith(("-", "help")):
+            target = tokens[0]
+        else:
+            return None, f"no URL found in input: {tokens[0]!r}"
+
+    if target.startswith("www."):
+        target = "https://" + target
+
+    i = tokens.index(target) + 1
+    while i < len(tokens):
+        key = tokens[i].lower()
+        val = tokens[i + 1] if i + 1 < len(tokens) else None
+
+        if key in ("threads", "t", "th") and val:
+            try:
+                kwargs["threads"] = max(1, min(int(val), 200))
+            except ValueError:
+                return None, f"bad threads value: {val!r}"
+            i += 2
+        elif key in ("sc", "status", "statuses", "match", "-i") and val:
+            parsed = _parse_sc_list(val)
+            if not parsed:
+                return None, f"bad sc value: {val!r}"
+            kwargs["include_status"] = parsed
+            i += 2
+        elif key in ("exclude", "x", "-x") and val:
+            parsed = _parse_sc_list(val)
+            if not parsed:
+                return None, f"bad exclude value: {val!r}"
+            kwargs["exclude_status"] = parsed
+            i += 2
+        elif key == "ext" and val:
+            kwargs["extensions"] = val.replace(" ", "")
+            i += 2
+        elif key == "method" and val:
+            kwargs["http_method"] = val.upper()
+            i += 2
+        elif key == "delay" and val:
+            kwargs["delay"] = int(val)
+            i += 2
+        elif key == "timeout" and val:
+            kwargs["timeout"] = int(val)
+            i += 2
+        elif key == "rate" and val:
+            try:
+                kwargs["max_rate"] = float(val)
+            except ValueError:
+                return None, f"bad rate value: {val!r}"
+            i += 2
+        elif key == "full":
+            repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            kwargs["wordlists"] = os.path.join(repo, "wordlists", "dicc.txt")
+            i += 1
+        elif key == "subdomains":
+            repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            kwargs["wordlists"] = os.path.join(repo, "wordlists", "subdomains.txt")
+            i += 1
+        elif key in ("verbose", "v"):
+            flag, consumed = _bool_token(tokens, i)
+            kwargs["verbose"] = flag
+            i += consumed
+        elif key in ("quiet", "q"):
+            flag, consumed = _bool_token(tokens, i)
+            kwargs["quiet"] = flag
+            i += consumed
+        elif key == "recursive":
+            flag, consumed = _bool_token(tokens, i)
+            kwargs["recursive"] = flag
+            i += consumed
+        elif key == "http2":
+            flag, consumed = _bool_token(tokens, i)
+            kwargs["http2"] = flag
+            i += consumed
+        elif key == "help":
+            return None, "help"
+        else:
+            return None, f"unknown key: {key!r}"
+
+    kwargs["url"] = target
+    return kwargs, None
+
+
+def _interactive():
+    _interactive_examples()
+    while True:
+        try:
+            raw = input(_colored("  input : ", B_CYAN)).strip()
+        except (EOFError, KeyboardInterrupt):
+            click.echo(_colored("\n  bye.", DIM))
+            return
+        if not raw:
+            click.echo(_colored("  rail cold — bye.", DIM))
+            return
+        kwargs, error = _interactive_parse(raw)
+        if error == "help":
+            _interactive_examples()
+            continue
+        if error:
+            click.echo(_colored(f"  [!] {error} — 'help' for examples", YELLOW))
+            continue
+        display_tool_banner('Dir Finder (Expert Go Engine v3.0)')
+        if kwargs.get("url"):
+            click.echo(_colored(f"  [+] target {kwargs['url']}", B_GREEN))
+        _run_engine(kwargs)
+        click.echo()

@@ -81,6 +81,7 @@ setup(
             "hackit=hackit.boot:cli_entry",
             "sqli=hackit.sqli:test_sqli",
             "ddos=hackit.ddos:ddos",
+            "dirfinder=hackit.dir_finder:dirfinder",
         ],
     },
 )

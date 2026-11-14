@@ -80,7 +80,7 @@ func PrintResultsSummary(config *ScanConfig, results []DirResult, stats *ScanSta
 	if len(results) > 0 {
 		fmt.Fprintf(color.Output, "\n%s Results (%d found):\n", color.GreenString("[+]"), len(results))
 		for _, res := range results {
-			displayPath := "/" + strings.TrimPrefix(res.Path, "/")
+			displayPath := humanPath(res.Path)
 			if config.FullURL {
 				displayPath = buildFullURL(config.Target, displayPath)
 			}

@@ -275,6 +275,12 @@ if [ -x "$DDOS_BIN_PATH" ]; then
     ok "linked: $BIN_DIR/ddos -> $DDOS_BIN_PATH"
 fi
 
+DIRFINDER_BIN_PATH="$VENV/bin/dirfinder"
+if [ -x "$DIRFINDER_BIN_PATH" ]; then
+    ln -sf "$DIRFINDER_BIN_PATH" "$BIN_DIR/dirfinder"
+    ok "linked: $BIN_DIR/dirfinder -> $DIRFINDER_BIN_PATH"
+fi
+
 PATH_LINE="export PATH=\"$BIN_DIR:\$PATH\""
 PROFILE=""
 case ":${SHELL:-}:" in

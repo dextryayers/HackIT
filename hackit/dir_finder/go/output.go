@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 )
 
@@ -157,7 +156,7 @@ func (oe *OutputEngine) FinalResults(results []DirResult, stats *ScanStats, elap
 				if r.Title != "" {
 					ti = " /* " + r.Title + " */"
 				}
-				fmt.Printf("  %d  %7s  /%s%s%s\n", r.Status, sz, strings.TrimPrefix(r.Path, "/"), rd, ti)
+				fmt.Printf("  %d  %7s  %s%s%s\n", r.Status, sz, humanPath(r.Path), rd, ti)
 			}
 		}
 		fmt.Printf("\n[*] Requests: %d | Found: %d | Filtered: %d | Errors: %d\n",
@@ -189,7 +188,7 @@ func (oe *OutputEngine) FinalResults(results []DirResult, stats *ScanStats, elap
 				if r.Title != "" {
 					ti = fmt.Sprintf(" %s/* %s */%s", ANSI_GRAY, r.Title, ANSI_RESET)
 				}
-				fmt.Printf("  %s  %7s  %s%s%s\n", sc, sz, strings.TrimPrefix(r.Path, "/"), rd, ti)
+				fmt.Printf("  %s  %7s  %s%s%s\n", sc, sz, humanPath(r.Path), rd, ti)
 			}
 		}
 		fmt.Printf("\n%s[*]%s Requests: %d | Found: %d | Filtered: %d | Errors: %d\n",

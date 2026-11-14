@@ -861,7 +861,7 @@ def help_tools():
     • help          - Show a clean help screen for any command
     • run           - Launch web UI dashboard (Astro + Python)
     • ports scan    - Async TCP port scanner
-    • dirfinder     - Expert directory finder
+    • dirfinder     - DIR/FUZZ sniper directory & file finder (live)
     • web headers   - Security header audit
     • web tech      - Tech stack detection
     • web dirs      - Recursive directory bruteforce

@@ -53,7 +53,7 @@ func compileExcludes() []*regexp.Regexp {
 	patterns := []string{
 		`(?i)\.(png|jpg|jpeg|gif|ico|svg|bmp|webp|woff|woff2|ttf|eot|pdf|zip|tar|gz|mp4|mp3|avi|mov)$`,
 		`(?i)(logout|signout|sign-?out|log-?out)`,
-		`(?i)(node_modules|bower_components|vendor|\.git|\.svn|__pycache__)`,
+		`(?i)(node_modules|bower_components|\.git|\.svn|__pycache__)`,
 		`(?i)(calendar|/ics/|\.ics$)`,
 	}
 	var compiled []*regexp.Regexp

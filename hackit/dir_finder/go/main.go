@@ -195,6 +195,37 @@ func orchestrate(config *ScanConfig) {
 		}
 	}
 
+	// === DIR/FUZZ SNIPER MARKER ===
+	marker, replaceMode := detectMarker(config.Target)
+	if marker != "" {
+		setReplaceMarker(marker)
+		config.ReplaceMarker = marker
+		config.ReplaceMode = replaceMode
+		if !config.Quiet {
+			fmt.Fprintf(color.Output, "%s Sniper marker %s detected (position: %s) - payloads are substituted in place\n",
+				cCyan.Sprint("[*]"), cBlue.Sprint(marker), replaceMode)
+		}
+		if len(config.Wordlists) == 0 && len(config.WordlistCategories) == 0 && config.URLsFile == "" && config.Stdin == false {
+			if wl, _ := sniperWordlist(replaceMode); wl != "" {
+				config.Wordlists = []string{wl}
+				if !config.Quiet {
+					fmt.Fprintf(color.Output, "%s Auto wordlist: %s\n", cGreen.Sprint("[+]"), wl)
+				}
+			} else {
+				fmt.Fprintf(color.Output, "%s Sniper wordlist for mode %q not found; falling back to built-in db\n",
+					cYellow.Sprint("[!]"), replaceMode)
+			}
+		}
+		if config.Recursive || config.DeepRecursive || config.ForceRecursive {
+			config.Recursive = false
+			config.DeepRecursive = false
+			config.ForceRecursive = false
+			if !config.Quiet {
+				fmt.Fprintf(color.Output, "%s Recursion disabled in sniper marker mode\n", cYellow.Sprint("[*]"))
+			}
+		}
+	}
+
 	// === API SPEC ENGINE ===
 	if config.APIMode {
 		SetupAPIMode(config)

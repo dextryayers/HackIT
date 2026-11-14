@@ -749,7 +749,7 @@ _HELP_DESCRIPTIONS: Dict[Tuple[str, ...], str] = {
     ("config",): "Configure themes, identity, colors and terminal prompt",
     ("console",): "Launch the interactive HackIt framework console",
     ("ddos",): "Authorized resilience testing — http/tcp/dns/udp/icmp/ws profiles, live stats, audited",
-    ("dirfinder",): "Discover hidden directories and files with a high-speed engine",
+    ("dirfinder",): "Discover hidden directories and files — DIR/FUZZ sniper mode, live results",
     ("examples",): "Show copy-ready usage examples for every tool",
     ("fetch",): "Inspect host hardware, operating system and network details",
     ("guide",): "Open the complete beginner command guide",

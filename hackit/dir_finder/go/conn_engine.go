@@ -72,14 +72,11 @@ func SetupConnection(config *ScanConfig) *http.Client {
 		IdleConnTimeout:     90 * time.Second,
 		DisableCompression:  true,
 		DisableKeepAlives:   false,
-		WriteBufferSize:     4096,
-		ReadBufferSize:      8192,
-	}
-
-	if config.HTTP2 {
-		transport.ForceAttemptHTTP2 = true
-	} else {
-		transport.TLSNextProto = make(map[string]func(authority string, c *tls.Conn) http.RoundTripper)
+		WriteBufferSize:     32 * 1024,
+		ReadBufferSize:      32 * 1024,
+		ForceAttemptHTTP2:   true,
+		TLSHandshakeTimeout: 5 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
 	}
 
 	ApplyProxy(transport, config)

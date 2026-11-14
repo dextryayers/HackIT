@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"bufio"
 	"fmt"
 	"net/url"
@@ -104,3 +105,62 @@ func PrintTargetInfo(targets []TargetInfo, config *ScanConfig) {
 		fmt.Println()
 	}
 }
+
+
+// === DIR/FUZZ sniper marker helpers ===
+// A "DIR" or "FUZZ" token in the target URL is substituted with each wordlist
+// entry (ffuf-style), instead of joining entries as paths to the base URL.
+
+var validMarkers = []string{"FUZZ", "DIR"}
+
+func detectMarker(target string) (string, string) {
+	for _, m := range validMarkers {
+		if strings.Contains(target, m) {
+			mode := "path"
+			rest := target
+			if i := strings.Index(rest, "://"); i != -1 {
+				rest = rest[i+3:]
+			}
+			host := rest
+			if j := strings.Index(rest, "/"); j != -1 {
+				host = rest[:j]
+			}
+			if strings.Contains(host, m) {
+				mode = "host"
+			} else if i := strings.Index(target, m); i > 0 && target[i-1] == '.' {
+				mode = "ext"
+			}
+			return m, mode
+		}
+	}
+	return "", ""
+}
+
+func sniperWordlist(mode string) (string, string) {
+	name := "common.txt"
+	switch mode {
+	case "ext":
+		name = "extensions.txt"
+	case "host":
+		name = "subdomains.txt"
+	}
+
+	candidates := []string{}
+	if dir := os.Getenv("HACKIT_WORDLISTS"); dir != "" {
+		candidates = append(candidates, filepath.Join(dir, name))
+	}
+	// <repo>/wordlists/<name> relative to this binary: <repo>/hackit/dir_finder/go/dir_finder
+	if exe, err := os.Executable(); err == nil {
+		repo := filepath.Clean(filepath.Join(filepath.Dir(exe), "..", "..", ".."))
+		candidates = append(candidates, filepath.Join(repo, "wordlists", name))
+	}
+	candidates = append(candidates, filepath.Join("wordlists", name))
+
+	for _, c := range candidates {
+		if info, err := os.Stat(c); err == nil && !info.IsDir() && info.Size() > 0 {
+			return c, name
+		}
+	}
+	return "", name
+}
+

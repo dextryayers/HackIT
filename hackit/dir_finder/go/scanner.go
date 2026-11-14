@@ -231,41 +231,6 @@ func RunScan(config *ScanConfig) ([]DirResult, *ScanStats) {
 	return results, stats
 }
 
-func printSingleResult(res *DirResult, config *ScanConfig) {
-	statusStr := fmt.Sprintf("%d", res.Status)
-	var statusColored string
-	switch {
-	case res.Status >= 200 && res.Status < 300:
-		statusColored = cGreen.Sprint(statusStr)
-	case res.Status >= 300 && res.Status < 400:
-		statusColored = cYellow.Sprint(statusStr)
-	case res.Status >= 400 && res.Status < 500:
-		statusColored = cOrange.Sprint(statusStr)
-	case res.Status >= 500:
-		statusColored = color.New(color.FgRed).Add(color.Bold).Sprint(statusStr)
-	default:
-		statusColored = color.New(color.FgWhite).Sprint(statusStr)
-	}
-	sizeStr := fmt.Sprintf("%7s", FormatSize(res.Size))
-	redirectStr := ""
-	if res.Redirect != "" {
-		redirectStr = cHiBlack.Sprint(" -> " + res.Redirect)
-	}
-	titleStr := ""
-	if res.Title != "" {
-		titleStr = cHiBlack.Sprint(" /* " + res.Title + " */")
-	}
-	displayPath := "/" + strings.TrimPrefix(res.Path, "/")
-	if config.FullURL {
-		displayPath = buildURL(config.Target, displayPath)
-	}
-	fmt.Fprintf(color.Output, "%s[%s] %s %7s %s%s%s\n",
-		ANSI_CLEAR_LINE,
-		cYellow.Sprint(time.Now().Format("15:04:05")),
-		statusColored, sizeStr,
-		cBlue.Sprint(displayPath), redirectStr, titleStr)
-}
-
 func printAttempt(res *DirResult, config *ScanConfig, filtered bool) {
 	statusStr := fmt.Sprintf("%d", res.Status)
 	var statusColored string
@@ -286,7 +251,7 @@ func printAttempt(res *DirResult, config *ScanConfig, filtered bool) {
 		mark = color.HiBlackString("-")
 	}
 	sizeStr := FormatSize(res.Size)
-	displayPath := "/" + strings.TrimPrefix(res.Path, "/")
+	displayPath := humanPath(res.Path)
 	if config.FullURL {
 		displayPath = buildURL(config.Target, displayPath)
 	}
@@ -341,6 +306,7 @@ type scanResult struct {
 	body     string
 	header   string
 	filtered bool
+	fullURL  string
 }
 
 func scanPath(config *ScanConfig, client *http.Client, path string, uaList []string) *scanResult {
@@ -350,6 +316,15 @@ func scanPath(config *ScanConfig, client *http.Client, path string, uaList []str
 	fullURL := buildURL(config.Target, path)
 	if len(fullURL) > 4096 {
 		return nil
+	}
+	if config.ReplaceMarker != "" {
+		if config.ReplaceMode == "host" {
+			path = fullURL
+		} else if u2, err := url.Parse(fullURL); err == nil {
+			if r := u2.RequestURI(); r != "" {
+				path = strings.TrimPrefix(r, "/")
+			}
+		}
 	}
 
 	// Pre-compute body string (doesn't change per retry)
@@ -499,6 +474,7 @@ func scanPath(config *ScanConfig, client *http.Client, path string, uaList []str
 			body:     bodyStr,
 			header:   hdrStr,
 			filtered: true,
+			fullURL:  fullURL,
 		}
 	}
 
@@ -516,10 +492,14 @@ func scanPath(config *ScanConfig, client *http.Client, path string, uaList []str
 		},
 		body:   bodyStr,
 		header: hdrStr,
+		fullURL: fullURL,
 	}
 }
 
 func buildURL(target, path string) string {
+	if marker := replaceMarker(); marker != "" {
+		return strings.ReplaceAll(target, marker, strings.TrimPrefix(path, "/"))
+	}
 	target = strings.TrimSuffix(target, "/")
 	path = strings.TrimPrefix(path, "/")
 	base, err := url.Parse(target)
@@ -533,6 +513,21 @@ func buildURL(target, path string) string {
 	}
 	return target + "/" + path
 }
+
+// replaceMarker is set once at startup (marker mode); string read-only after init.
+var replaceMarkerVal string
+
+func replaceMarker() string { return replaceMarkerVal }
+
+func setReplaceMarker(m string) { replaceMarkerVal = m }
+
+func humanPath(p string) string {
+	if strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://") {
+		return p
+	}
+	return "/" + strings.TrimPrefix(p, "/")
+}
+
 
 func extractTitle(body string) string {
 	clean := body
