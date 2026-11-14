@@ -18,12 +18,21 @@ _DIRFINDER_BANNER = r"""
 """
 
 def _interactive_examples():
+    """Launch screen: banner + quick examples."""
     click.echo()
     click.echo(_colored(_DIRFINDER_BANNER, B_CYAN))
     click.echo(_colored("  DIRFINDER — HackIT sniper directory & file discovery", BOLD))
     click.echo(_colored("  DIR or FUZZ marks the substitution slot; everything else stays fixed.", DIM))
     click.echo()
-    click.echo(_colored("  Examples:", YELLOW))
+    _interactive_help()
+
+
+def _interactive_help():
+    """Command list with explanations — no banner."""
+    click.echo(_colored("  COMMANDS", YELLOW))
+    click.echo(_colored("  input : <url> [keys...]      run a sniper scan — everything on the line is one shot", BOLD))
+    click.echo()
+    click.echo(_colored("  EXAMPLES", YELLOW))
     click.echo(_colored("    input : https://example.com/DIR threads 25 sc 200,404 verbose on", GREEN))
     click.echo(_colored("    input : https://example.com/DIR full threads 50 verbose on", GREEN))
     click.echo(_colored("    input : https://example.com/file.DIR sc 200", GREEN))
@@ -32,10 +41,26 @@ def _interactive_examples():
     click.echo(_colored("    input : https://example.com/DIR wordlists /home/user/lists/ threads 25  (folder: all .txt/.lst/... inside)", GREEN))
     click.echo(_colored("    input : https://example.com/DIR exclude 404 recursive on", GREEN))
     click.echo()
-    click.echo(_colored("  Keys: threads/t N · sc 200,403 · exclude 404 · ext php,bak · full (dicc.txt)", DIM))
-    click.echo(_colored("        wordlists /path/file.txt[,/other/folder]  (external lists from any folder)", DIM))
-    click.echo(_colored("        method GET|POST|HEAD · verbose on|off · recursive on|off · delay N · timeout N · rate N · quiet", DIM))
-    click.echo(_colored("        empty input quits · 'help' reprints these examples", DIM))
+    click.echo(_colored("  KEYS (case-insensitive, anywhere on the line)", YELLOW))
+    for key, desc in [
+        ("threads/t N", "concurrency, 1-200 (default 30)"),
+        ("sc 200,403", "only show these status codes (ranges like 200-299 ok)"),
+        ("exclude 404", "hide these status codes"),
+        ("ext php,bak", "file extensions to try (also fuzz marker position)"),
+        ("full", "use wordlists/dicc.txt (deep) instead of internal default"),
+        ("subdomains", "use wordlists/subdomains.txt (host fuzz)"),
+        ("wordlists a,b/f", "external lists — file or folder, comma-separated, any folder"),
+        ("method GET|POST|HEAD|PUT|DELETE", "HTTP method (default GET)"),
+        ("verbose on|off", "live per-attempt output (bare 'verbose' = on)"),
+        ("quiet on|off", "only findings, no progress line"),
+        ("recursive on|off", "recurse into found directories"),
+        ("http2", "HTTP/2 auto-negotiated via ALPN (no-op key, kept for muscle memory)"),
+        ("delay N", "delay between requests in ms"),
+        ("timeout N", "per-request timeout in seconds"),
+        ("rate N", "cap requests per second"),
+    ]:
+        click.echo(f"    {_colored(key, GREEN):40s} {_colored(desc, DIM)}")
+    click.echo(_colored("    empty input quits · 'help' reprints this", DIM))
     click.echo()
 
 @click.command()
@@ -512,7 +537,7 @@ def _interactive():
             return
         kwargs, error = _interactive_parse(raw)
         if error == "help":
-            _interactive_examples()
+            _interactive_help()
             continue
         if error:
             click.echo(_colored(f"  [!] {error} — 'help' for examples", YELLOW))

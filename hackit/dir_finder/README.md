@@ -31,7 +31,7 @@ input : https://example.com/DIR threads 25 sc 200,404 verbose on
 Keys (case-insensitive, anywhere on the line):
 `threads/t N` (1-200, default 30) · `sc 200,403` · `exclude 404` · `ext php,bak` ·
 `full` (dicc.txt) · `subdomains` (subdomains.txt) · `method GET|POST|HEAD` ·
-`verbose on|off` (bare = on) · `quiet` · `recursive on|off` · `http2` ·
+`verbose on|off` (bare = on) · `quiet` · `recursive on|off` ·
 `delay N` · `timeout N` · `rate N` ·
 `wordlists /path/to/list.txt[,/other/folder]` · `help` · empty input quits.
 
