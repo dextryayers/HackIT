@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha1"
 	"fmt"
 	"io"
@@ -16,8 +17,6 @@ import (
 
 	"github.com/fatih/color"
 )
-
-
 
 func RunScan(config *ScanConfig) ([]DirResult, *ScanStats) {
 	stats := &ScanStats{StartTime: time.Now()}
@@ -44,9 +43,9 @@ func RunScan(config *ScanConfig) ([]DirResult, *ScanStats) {
 	if config.SmartFilter {
 		for i := 0; i < 5; i++ {
 			_ = compareEngine.AddResponse(&DirResult{
-				Path: fmt.Sprintf("__wildcard_probe_%d__", i),
-				Status: config.WildcardStatus,
-				Size: config.WildcardSize,
+				Path:     fmt.Sprintf("__wildcard_probe_%d__", i),
+				Status:   config.WildcardStatus,
+				Size:     config.WildcardSize,
 				BodyHash: "wildcard",
 			})
 		}
@@ -84,7 +83,10 @@ func RunScan(config *ScanConfig) ([]DirResult, *ScanStats) {
 					rate := float64(c) / elapsed
 					remaining := int(float64(pathCount-int(c)) / rate)
 					rm, rs := remaining/60, remaining%60
-					if rm > 99 { rm = 99; rs = 59 }
+					if rm > 99 {
+						rm = 99
+						rs = 59
+					}
 					if atomic.LoadInt32(&timedOut) == 1 {
 						outputEngine.PrintProgress(int(c), pathCount, stats.Found, stats.Errors, rate, rm, rs, true)
 					} else {
@@ -118,6 +120,14 @@ func RunScan(config *ScanConfig) ([]DirResult, *ScanStats) {
 			config.Scheduler.AdjustIfNeeded()
 			if config.Scheduler.ErrorRate() > 0.1 {
 				time.Sleep(time.Duration(150+time.Now().UnixNano()%150) * time.Millisecond)
+			}
+		}
+
+		// Bound concurrency to the live scheduler value so throttling
+		// actually takes effect instead of only stalling the feeder.
+		if config.Scheduler != nil {
+			for len(semaphore) >= config.Scheduler.Concurrency() {
+				time.Sleep(10 * time.Millisecond)
 			}
 		}
 
@@ -393,12 +403,17 @@ func scanPath(config *ScanConfig, client *http.Client, path string, uaList []str
 
 	for retry := 0; retry <= config.Retries; retry++ {
 		start := time.Now()
+		// Cap each request to Timeout; DialContext, TLS handshake and
+		// ResponseHeaderTimeout also enforce it. Reading a streaming body
+		// is bounded below by LimitReader.
+		reqCtx, cancel := context.WithTimeout(context.Background(), time.Duration(config.Timeout)*time.Second)
 		var bodyReader io.Reader
 		if bodyStrInit != "" {
 			bodyReader = strings.NewReader(bodyStrInit)
 		}
-		req, err := http.NewRequest(config.Method, fullURL, bodyReader)
+		req, err := http.NewRequestWithContext(reqCtx, config.Method, fullURL, bodyReader)
 		if err != nil {
+			cancel()
 			return nil
 		}
 		headerSetup(req)
@@ -406,8 +421,20 @@ func scanPath(config *ScanConfig, client *http.Client, path string, uaList []str
 		resp, err = client.Do(req)
 		timeMs = time.Since(start).Milliseconds()
 		if err == nil {
+			// Body reads below honor the same deadline; a server that
+			// sends headers but stalls mid-body gets cut, not re-read.
+			if ctxErr := reqCtx.Err(); ctxErr != nil {
+				cancel()
+				resp.Body.Close()
+				resp = nil
+				err = ctxErr
+			}
+		}
+		if err == nil {
+			cancel()
 			break
 		}
+		cancel()
 		if retry < config.Retries {
 			time.Sleep(time.Duration(500*(retry+1)) * time.Millisecond)
 		}
@@ -463,6 +490,24 @@ func scanPath(config *ScanConfig, client *http.Client, path string, uaList []str
 	hdrStr := headerMapToString(resp.Header)
 	bodyHash := fmt.Sprintf("%x", sha1.Sum(body))[:16]
 
+	// 404 + wildcard size is the soft-404 signature; keep it as a
+	// filtered result so stats count it, never as an error/timeout.
+	if config.SmartFilter && finalStatus == config.WildcardStatus &&
+		config.WildcardSize > 0 && finalSize == config.WildcardSize {
+		return &scanResult{
+			res: &DirResult{
+				Path: path, Status: 404, Size: finalSize,
+				ContentType: contentType, Title: title,
+				Redirect: redirectURL, Words: words, Lines: lines,
+				BodyHash: bodyHash, TimeMs: timeMs,
+			},
+			body:     bodyStr,
+			header:   hdrStr,
+			filtered: true,
+			fullURL:  fullURL,
+		}
+	}
+
 	if config.SmartFilter && CheckSoft404(bodyStr, title) {
 		return &scanResult{
 			res: &DirResult{
@@ -490,8 +535,8 @@ func scanPath(config *ScanConfig, client *http.Client, path string, uaList []str
 			ContentType: contentType, Redirect: redirectURL, Title: title,
 			BodyHash: bodyHash, Words: words, Lines: lines, TimeMs: timeMs,
 		},
-		body:   bodyStr,
-		header: hdrStr,
+		body:    bodyStr,
+		header:  hdrStr,
 		fullURL: fullURL,
 	}
 }
@@ -527,7 +572,6 @@ func humanPath(p string) string {
 	}
 	return "/" + strings.TrimPrefix(p, "/")
 }
-
 
 func extractTitle(body string) string {
 	clean := body

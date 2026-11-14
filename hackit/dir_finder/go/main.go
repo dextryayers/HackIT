@@ -24,16 +24,16 @@ var (
 )
 
 const (
-	ANSI_RESET       = "\033[0m"
-	ANSI_GREEN       = "\033[1;32m"
-	ANSI_YELLOW      = "\033[33m"
-	ANSI_ORANGE      = "\033[38;5;208m"
-	ANSI_RED         = "\033[1;31m"
-	ANSI_CYAN        = "\033[36m"
-	ANSI_BLUE        = "\033[34m"
-	ANSI_MAGENTA     = "\033[1;35m"
-	ANSI_GRAY        = "\033[90m"
-	ANSI_CLEAR_LINE  = "\033[2K\r"
+	ANSI_RESET      = "\033[0m"
+	ANSI_GREEN      = "\033[1;32m"
+	ANSI_YELLOW     = "\033[33m"
+	ANSI_ORANGE     = "\033[38;5;208m"
+	ANSI_RED        = "\033[1;31m"
+	ANSI_CYAN       = "\033[36m"
+	ANSI_BLUE       = "\033[34m"
+	ANSI_MAGENTA    = "\033[1;35m"
+	ANSI_GRAY       = "\033[90m"
+	ANSI_CLEAR_LINE = "\033[2K\r"
 )
 
 func main() {
@@ -298,15 +298,12 @@ func orchestrate(config *ScanConfig) {
 			fmt.Fprintf(color.Output, "%s The domain does not resolve. Check your DNS or internet connection.\n", cYellow.Sprint("[!]"))
 		} else if strings.Contains(connInfo, "timeout") {
 			fmt.Fprintf(color.Output, "%s Connection timed out. The server may be down or blocking your IP.\n", cYellow.Sprint("[!]"))
-			fmt.Fprintf(color.Output, "%s Try: --proxy http://your-proxy:port\n", cYellow.Sprint("[*]"))
+			fmt.Fprintf(color.Output, "%s Try: --proxy http://your-proxy:port or -timeout 10 -t 5\n", cYellow.Sprint("[*]"))
 		} else if strings.Contains(connInfo, "refused") {
 			fmt.Fprintf(color.Output, "%s Connection refused. The server is rejecting connections.\n", cYellow.Sprint("[!]"))
 		} else if strings.Contains(connInfo, "reset") {
 			fmt.Fprintf(color.Output, "%s Connection reset. The server closed the connection.\n", cYellow.Sprint("[!]"))
 			fmt.Fprintf(color.Output, "%s Reduce threads: -t 5 or use a proxy.\n", cYellow.Sprint("[*]"))
-		}
-		if !config.Quiet {
-			fmt.Fprintf(color.Output, "%s Starting scan anyway (might get errors)...\n", cYellow.Sprint("[!]"))
 		}
 		if config.ExitOnError {
 			os.Exit(1)
@@ -698,12 +695,12 @@ func saveReport(config *ScanConfig, results, recursiveResults []DirResult, stats
 		case "json":
 			ext = "json"
 			report := map[string]interface{}{
-				"target":        config.Target,
-				"timestamp":     time.Now(),
+				"target":         config.Target,
+				"timestamp":      time.Now(),
 				"total_requests": stats.TotalRequests,
-				"found":         len(allResults),
-				"results":       allResults,
-				"waf":           config.DetectedWAF,
+				"found":          len(allResults),
+				"results":        allResults,
+				"waf":            config.DetectedWAF,
 			}
 			data, err = json.MarshalIndent(report, "", "  ")
 		case "simple":

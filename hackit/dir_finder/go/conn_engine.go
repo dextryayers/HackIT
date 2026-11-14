@@ -17,16 +17,16 @@ import (
 )
 
 type ConnectionConfig struct {
-	Timeout    int
-	Delay      int
-	Retries    int
-	MaxRate    float64
-	Proxy      string
-	Proxies    []string
-	ProxyAuth  string
-	Tor        bool
-	Interface  string
-	HTTP2      bool
+	Timeout   int
+	Delay     int
+	Retries   int
+	MaxRate   float64
+	Proxy     string
+	Proxies   []string
+	ProxyAuth string
+	Tor       bool
+	Interface string
+	HTTP2     bool
 }
 
 func SetupConnection(config *ScanConfig) *http.Client {
@@ -37,8 +37,8 @@ func SetupConnection(config *ScanConfig) *http.Client {
 	}
 
 	if config.Interface != "" {
-		dialer.LocalAddr = &net.TCPAddr{
-			IP: net.ParseIP(config.Interface),
+		if ip := net.ParseIP(config.Interface); ip != nil {
+			dialer.LocalAddr = &net.TCPAddr{IP: ip}
 		}
 	}
 
@@ -64,32 +64,38 @@ func SetupConnection(config *ScanConfig) *http.Client {
 					port = "80"
 				}
 			}
-			conn, err := dialer.DialContext(ctx, network, host+":"+port)
+
+			// Host comes from addr (DNS already resolved by the
+			// transport). Connect directly to it so the Host header
+			// stays correct for SNI/vhosts.
+			conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(host, port))
 			if err != nil {
 				return nil, err
 			}
 			if tcpConn, ok := conn.(*net.TCPConn); ok {
 				_ = tcpConn.SetNoDelay(true)
+				_ = tcpConn.SetKeepAlive(true)
+				_ = tcpConn.SetKeepAlivePeriod(15 * time.Second)
 			}
 			return conn, nil
 		},
-		MaxIdleConns:        connsPerHost * 2,
-		MaxConnsPerHost:     connsPerHost,
-		MaxIdleConnsPerHost: connsPerHost,
-		IdleConnTimeout:     90 * time.Second,
-		DisableCompression:  true,
-		DisableKeepAlives:   false,
-		WriteBufferSize:     32 * 1024,
-		ReadBufferSize:      32 * 1024,
-		ForceAttemptHTTP2:   true,
-		TLSHandshakeTimeout: 5 * time.Second,
+		MaxIdleConns:          connsPerHost * 2,
+		MaxConnsPerHost:       connsPerHost,
+		MaxIdleConnsPerHost:   connsPerHost,
+		IdleConnTimeout:       90 * time.Second,
+		DisableCompression:    true,
+		DisableKeepAlives:     false,
+		WriteBufferSize:       32 * 1024,
+		ReadBufferSize:        32 * 1024,
+		ForceAttemptHTTP2:     true,
+		TLSHandshakeTimeout:   time.Duration(config.Timeout) * time.Second,
+		ResponseHeaderTimeout: time.Duration(config.Timeout) * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
 
 	ApplyProxy(transport, config)
 
 	client := &http.Client{
-		Timeout:   time.Duration(config.Timeout) * time.Second,
 		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if config.FollowRedirect && len(via) < 5 {

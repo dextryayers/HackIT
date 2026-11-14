@@ -28,6 +28,7 @@ func LoadWordlist(path string) ([]string, error) {
 
 func LoadAllPayloads(dbDir string) ([]string, error) {
 	var allPaths []string
+	seen := make(map[string]bool)
 	err := filepath.Walk(dbDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -35,12 +36,42 @@ func LoadAllPayloads(dbDir string) ([]string, error) {
 		if !info.IsDir() && isWordlistFile(info.Name()) {
 			paths, err := LoadWordlist(path)
 			if err == nil {
-				allPaths = append(allPaths, paths...)
+				for _, p := range paths {
+					if !seen[p] {
+						seen[p] = true
+						allPaths = append(allPaths, p)
+					}
+				}
 			}
 		}
 		return nil
 	})
 	return allPaths, err
+}
+
+// LoadExternalWordlistDir scans any directory on disk for wordlist files.
+// A 0-length DB path (w=".") resolves to this directory. Duplicates are
+// dropped at the end so huge external dumps merge with db/ without skewing.
+func LoadExternalWordlistDir(dir string) ([]string, error) {
+	var all []string
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		if !isWordlistFile(info.Name()) {
+			return nil
+		}
+		paths, err := LoadWordlist(path)
+		if err != nil {
+			return nil
+		}
+		all = append(all, paths...)
+		return nil
+	})
+	return all, err
 }
 
 func LoadWordlistByCategory(dbDir string, categories []string) ([]string, error) {

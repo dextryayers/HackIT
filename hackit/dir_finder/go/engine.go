@@ -19,8 +19,8 @@ func CreateClient(config *ScanConfig) *http.Client {
 	}
 
 	if config.Interface != "" {
-		dialer.LocalAddr = &net.TCPAddr{
-			IP: net.ParseIP(config.Interface),
+		if ip := net.ParseIP(config.Interface); ip != nil {
+			dialer.LocalAddr = &net.TCPAddr{IP: ip}
 		}
 	}
 
@@ -55,7 +55,7 @@ func CreateClient(config *ScanConfig) *http.Client {
 			if dialAddr == "" {
 				return nil, fmt.Errorf("no resolved addresses for %s", host)
 			}
-			return dialer.DialContext(ctx, network, dialAddr+":"+port)
+			return dialer.DialContext(ctx, network, net.JoinHostPort(dialAddr, port))
 		},
 		MaxIdleConns:        50,
 		MaxConnsPerHost:     25,
@@ -79,7 +79,6 @@ func CreateClient(config *ScanConfig) *http.Client {
 	}
 
 	client := &http.Client{
-		Timeout:   time.Duration(config.Timeout) * time.Second,
 		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if config.FollowRedirect && len(via) < 5 {

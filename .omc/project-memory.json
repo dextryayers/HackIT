@@ -1,0 +1,209 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1794656410131,
+  "projectRoot": "/home/aniipid/Coding/HackIT",
+  "techStack": {
+    "languages": [
+      {
+        "name": "Python",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "requirements.txt"
+        ]
+      },
+      {
+        "name": "Go",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "go.mod"
+        ]
+      }
+    ],
+    "frameworks": [],
+    "packageManager": "go",
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": null,
+    "lintCommand": null,
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "docs"
+    ],
+    "gitBranches": {
+      "defaultBranch": "main",
+      "branchingStrategy": null
+    }
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 4,
+      "lastAccessed": 1794656410126,
+      "keyFiles": [
+        "BRUTEFORCER_V3_PLAN.md",
+        "OSINT_V4_PLAN.md",
+        "plan.md",
+        "requirements.lock"
+      ]
+    },
+    "hackit": {
+      "path": "hackit",
+      "purpose": null,
+      "fileCount": 15,
+      "lastAccessed": 1794656410128,
+      "keyFiles": [
+        "__init__.py",
+        "accuracy.py",
+        "anonymity.py",
+        "boot.py",
+        "cli.py"
+      ]
+    },
+    "hackit.egg-info": {
+      "path": "hackit.egg-info",
+      "purpose": null,
+      "fileCount": 6,
+      "lastAccessed": 1794656410129,
+      "keyFiles": [
+        "PKG-INFO",
+        "SOURCES.txt",
+        "dependency_links.txt",
+        "entry_points.txt",
+        "requires.txt"
+      ]
+    },
+    "img": {
+      "path": "img",
+      "purpose": null,
+      "fileCount": 3,
+      "lastAccessed": 1794656410129,
+      "keyFiles": [
+        "banner.png",
+        "gif.gif",
+        "main.png"
+      ]
+    },
+    "reports": {
+      "path": "reports",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1794656410129,
+      "keyFiles": []
+    },
+    "results": {
+      "path": "results",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1794656410129,
+      "keyFiles": [
+        "nike.com.txt",
+        "um-surabaya.ac.id.txt"
+      ]
+    },
+    "wordlists": {
+      "path": "wordlists",
+      "purpose": null,
+      "fileCount": 5,
+      "lastAccessed": 1794656410130,
+      "keyFiles": [
+        "common.txt",
+        "dicc.txt",
+        "fuzzing_payloads.txt",
+        "subdomains.txt",
+        "xss_payloads.txt"
+      ]
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "hackit/dir_finder/go/request_engine.go",
+      "accessCount": 1,
+      "lastAccessed": 1794656466776,
+      "type": "file"
+    },
+    {
+      "path": "hackit/dir_finder/go/conn_engine.go",
+      "accessCount": 1,
+      "lastAccessed": 1794656466828,
+      "type": "file"
+    },
+    {
+      "path": "hackit/dir_finder/go/engine.go",
+      "accessCount": 1,
+      "lastAccessed": 1794656466885,
+      "type": "file"
+    },
+    {
+      "path": "hackit/dir_finder/go/flags.go",
+      "accessCount": 1,
+      "lastAccessed": 1794656472728,
+      "type": "file"
+    },
+    {
+      "path": "hackit/dir_finder/go/main.go",
+      "accessCount": 1,
+      "lastAccessed": 1794656472787,
+      "type": "file"
+    },
+    {
+      "path": "hackit/dir_finder/go/scanner.go",
+      "accessCount": 1,
+      "lastAccessed": 1794656481136,
+      "type": "file"
+    },
+    {
+      "path": "hackit/dir_finder/go/types.go",
+      "accessCount": 1,
+      "lastAccessed": 1794656481186,
+      "type": "file"
+    },
+    {
+      "path": "hackit/dir_finder/go/scheduler.go",
+      "accessCount": 1,
+      "lastAccessed": 1794656481236,
+      "type": "file"
+    },
+    {
+      "path": "hackit/dir_finder/go/dict_engine.go",
+      "accessCount": 1,
+      "lastAccessed": 1794656499630,
+      "type": "file"
+    },
+    {
+      "path": "hackit/dir_finder/go/output.go",
+      "accessCount": 1,
+      "lastAccessed": 1794656499689,
+      "type": "file"
+    },
+    {
+      "path": "hackit/dir_finder/go/url_engine.go",
+      "accessCount": 1,
+      "lastAccessed": 1794656538582,
+      "type": "file"
+    },
+    {
+      "path": "hackit/dir_finder/go/wordlist.go",
+      "accessCount": 1,
+      "lastAccessed": 1794656538632,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}

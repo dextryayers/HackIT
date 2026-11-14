@@ -34,7 +34,15 @@ func LoadDictionary(config *ScanConfig) ([]string, DictionaryStats) {
 				continue
 			}
 			if info, err := os.Stat(wl); err == nil && info.IsDir() {
-				p, e := LoadAllPayloads(wl)
+				// External dirs get the dedicated walker; builtin db/ uses
+				// LoadAllPayloads so both keep the same dedup+merge rules.
+				var p []string
+				var e error
+				if wl == foundDB {
+					p, e = LoadAllPayloads(wl)
+				} else {
+					p, e = LoadExternalWordlistDir(wl)
+				}
 				if e == nil {
 					paths = append(paths, p...)
 					stats.FilesLoaded++
