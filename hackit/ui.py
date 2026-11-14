@@ -748,7 +748,7 @@ _HELP_DESCRIPTIONS: Dict[Tuple[str, ...], str] = {
     ("analys",): "TOTAL DEEP SCAN — recon, top1000 ports, headers audit, JS hunt, deep probes, backend malware hunt, AI assessment",
     ("config",): "Configure themes, identity, colors and terminal prompt",
     ("console",): "Launch the interactive HackIt framework console",
-    ("ddos",): "Authorized network stress-testing and resilience console",
+    ("stress",): "Authorized resilience testing — scoped, capped, audited load generation against systems you own",
     ("dirfinder",): "Discover hidden directories and files with a high-speed engine",
     ("examples",): "Show copy-ready usage examples for every tool",
     ("fetch",): "Inspect host hardware, operating system and network details",
@@ -831,7 +831,8 @@ _HELP_DESCRIPTIONS: Dict[Tuple[str, ...], str] = {
 _HELP_ROOT_CATEGORIES: List[Tuple[str, List[str]]] = [
     ("RECON & DISCOVERY", ["recon", "ports", "dirfinder", "osint"]),
     ("WEB & APPLICATION SECURITY", ["web", "vuln", "ssl", "util"]),
-    ("OFFENSIVE OPERATIONS", ["bruter", "ddos", "wireless", "agent", "malware", "analys"]),
+    ("OFFENSIVE OPERATIONS", ["bruter", "wireless", "agent", "malware", "analys"]),
+    ("RESILIENCE TESTING", ["stress"]),
     ("WORKSPACE", ["run", "console", "config", "fetch", "whoami"]),
     ("HELP & INFORMATION", ["guide", "examples", "help-tools", "banner", "help"]),
 ]

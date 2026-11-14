@@ -121,7 +121,7 @@ def welcome_animation():
         ("INJECTION", 'r', ["SQLi Engine", "XSS Engine", "RCE Exploit", "Open Redirect"]),
         ("VULN", 'm', ["CVE Scanner", "Atomix Engine", "NSE Scripts", "SSL Analyzer"]),
         ("WIRELESS", 'y', ["Deauth Attack", "Beacon Flood", "Evil Twin", "WPA Cracker", "Packet Inject"]),
-        ("ATTACK", 'rb', ["DDoS Suite", "ARP Spoof", "Anonymity Engine"]),
+        ("RESILIENCE", 'rb', ["Stress Lab", "ARP Spoof", "Anonymity Engine"]),
         ("AI", 'bb', ["AI Agent", "Swarm Scanner", "Autopilot Hunter"]),
         ("TOOLS", 'wb', ["Web UI", "Config Manager", "Console Shell"]),
     ]

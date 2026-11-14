@@ -6,13 +6,27 @@
       "sessionId": "b5aaaaac-02d2-48be-9670-130a88abc1ee",
       "attempts": 0,
       "retryAt": "2026-11-03T01:03:48.658Z",
-      "claimNonce": "017dafdf-2757-4b1c-82c9-50d0ccdb615a",
-      "leaseExpiresAt": "2026-11-03T01:19:57.184Z"
+      "claimNonce": "040674bc-3bd2-4d7d-a0e6-362bb703170f",
+      "leaseExpiresAt": "2026-11-14T08:44:58.504Z"
     },
     {
       "sessionId": "ea3d59d5-9657-48a2-a940-8f9eb103718c",
       "attempts": 0,
-      "retryAt": "2026-11-03T06:18:42.803Z"
+      "retryAt": "2026-11-03T06:18:42.803Z",
+      "claimNonce": "aa1b8be9-dd5d-4516-af9d-e914d71a21c8",
+      "leaseExpiresAt": "2026-11-14T08:44:58.504Z"
+    },
+    {
+      "sessionId": "a4d31165-de08-4638-8798-2be447e3d6c0",
+      "attempts": 0,
+      "retryAt": "2026-11-14T08:43:23.192Z",
+      "claimNonce": "38a0880d-59d4-46b9-a209-f2b6da9fd38c",
+      "leaseExpiresAt": "2026-11-14T08:44:58.504Z"
+    },
+    {
+      "sessionId": "8a7f1dde-88c7-4ea6-aad7-cdcb0ee0c21b",
+      "attempts": 0,
+      "retryAt": "2026-11-14T09:09:54.459Z"
     }
   ]
 }

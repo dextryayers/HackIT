@@ -23,7 +23,7 @@ from hackit.js import analyze_js
 from hackit.cve import check_cve
 from hackit.osint import osint as osint_console
 from hackit.agent import agent
-from hackit.ddos import ddos as ddos_attack
+from hackit.stresslab import stress as stresslab_console
 from hackit.sysfetch import sysfetch as host_fetch
 from hackit.ui import display_banner, _colored, YELLOW, GREEN, B_GREEN, B_CYAN, B_WHITE, DIM, RED, MAGENTA, BLUE, CYAN, B_MAGENTA, B_RED, B_BLUE, B_YELLOW, WHITE, BG_BLUE, BG_CYAN, BG_MAGENTA, install_modern_help, render_unknown_topic
 from hackit.config import load_config, save_config, set_theme, DEFAULT_CONFIG, VALID_THEMES, VALID_ACCENTS, VALID_BORDERS, VALID_PROMPTS, VALID_MASKING_LEVELS, MASKING_PROFILES, CONFIG_PATH, SCHEMA, apply_masking_level, get_masking_info
@@ -702,12 +702,8 @@ def ssl():
 ssl.add_command(analyze_ssl, name='check')
 
 
-# DDoS Tools
-cli.add_command(ddos_attack, name='ddos')
-
-# Server-side defense console (telemetry, flood detection, hardening)
-from hackit.ddos.defense import defense_cli
-cli.add_command(defense_cli, name='defense')
+# Authorized resilience testing console (scoped, capped, audited)
+cli.add_command(stresslab_console, name='stress')
 
 # Host profiler (neofetch-style)
 cli.add_command(host_fetch, name='fetch')
@@ -793,7 +789,7 @@ def examples():
     • Vuln:     $ hackit vuln atomix -u "https://example.com" --severity critical
     • CVE:      $ hackit util cve --software apache --version 2.4.49
     • Wireless: $ hackit wireless sniff -i wlan0 --monitor
-    • DDoS:     $ hackit ddos
+    • Stress:   $ hackit stress run --target https://staging.example.internal --scope scope.json --approval CHG-1234
     """
     click.echo(examples_text)
 
@@ -881,7 +877,7 @@ def help_tools():
     • util cve      - Vulnerability lookup
     • wireless sniff- Monitor mode sniffing & PCAP
     • wireless crack- High-speed dictionary attack
-    • ddos         - DDoS stress testing (SYN/UDP/ACK/RST/ICMP/DNS/NTP)
+    • stress       - Authorized resilience testing (scoped HTTP/TCP load, audited)
     """
     click.echo(tools_text)
 
@@ -1002,8 +998,8 @@ GUIDE_SECTIONS = [
         ("agent reset", "Reset AI keys, provider, models or everything."),
         ("agent help", "Show AI agent help and slash commands."),
     ]),
-    ("NETWORK STRESS AND WIRELESS (advanced, lab only)", [
-        ("ddos", "Open the DDoS stress testing terminal. Use only on systems you own or have written permission to test."),
+    ("NETWORK STRESS AND WIRELESS (authorized testing only)", [
+        ("stress", "Open the authorized resilience testing console. Requires a signed scope file; use only on systems you own or have written permission to assess."),
         ("wireless", "Open the interactive wireless penetration console for WiFi auditing."),
     ]),
 ]

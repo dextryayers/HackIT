@@ -1,0 +1,14 @@
+{
+  "url": "http://127.0.0.1/",
+  "result": {
+    "tool": "python-inprocess",
+    "requests": 120,
+    "errors": 0,
+    "error_rate": 0.0,
+    "rps": 1859.5,
+    "latency_p50_ms": 3.1,
+    "latency_p99_ms": 12.2,
+    "total_seconds": 0.06
+  },
+  "ts": 1794646542.1714604
+}

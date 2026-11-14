@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "lastScanned": 1793667411763,
+  "lastScanned": 1794645765131,
   "projectRoot": "/home/aniipid/Coding/HackIT",
   "techStack": {
     "languages": [
@@ -55,7 +55,7 @@
       "path": "docs",
       "purpose": "Documentation",
       "fileCount": 4,
-      "lastAccessed": 1793667411753,
+      "lastAccessed": 1794645765124,
       "keyFiles": [
         "BRUTEFORCER_V3_PLAN.md",
         "OSINT_V4_PLAN.md",
@@ -66,21 +66,21 @@
     "hackit": {
       "path": "hackit",
       "purpose": null,
-      "fileCount": 14,
-      "lastAccessed": 1793667411759,
+      "fileCount": 15,
+      "lastAccessed": 1794645765125,
       "keyFiles": [
         "__init__.py",
         "accuracy.py",
         "anonymity.py",
-        "cli.py",
-        "config.py"
+        "boot.py",
+        "cli.py"
       ]
     },
     "hardening": {
       "path": "hardening",
       "purpose": null,
       "fileCount": 3,
-      "lastAccessed": 1793667411760,
+      "lastAccessed": 1794645765128,
       "keyFiles": [
         "99-hackit-hardening.conf",
         "hackit-hardening.nft",
@@ -91,18 +91,28 @@
       "path": "img",
       "purpose": null,
       "fileCount": 3,
-      "lastAccessed": 1793667411760,
+      "lastAccessed": 1794645765128,
       "keyFiles": [
         "banner.png",
         "gif.gif",
         "main.png"
       ]
     },
+    "results": {
+      "path": "results",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1794645765129,
+      "keyFiles": [
+        "nike.com.txt",
+        "um-surabaya.ac.id.txt"
+      ]
+    },
     "wordlists": {
       "path": "wordlists",
       "purpose": null,
       "fileCount": 5,
-      "lastAccessed": 1793667411761,
+      "lastAccessed": 1794645765129,
       "keyFiles": [
         "common.txt",
         "dicc.txt",

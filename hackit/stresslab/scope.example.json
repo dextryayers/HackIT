@@ -1,0 +1,10 @@
+{
+  "operator": "Hanif",
+  "approval_ref": "CHG-1234",
+  "targets": ["staging.example.internal", "10.0.0.0/24", "*.lab.example"],
+  "max_rps": 500,
+  "max_workers": 64,
+  "max_duration_s": 120,
+  "expires": "2026-12-31T23:59:59Z",
+  "authorized": true
+}
