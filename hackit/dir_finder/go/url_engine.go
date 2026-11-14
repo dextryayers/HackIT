@@ -109,7 +109,7 @@ func PrintTargetInfo(targets []TargetInfo, config *ScanConfig) {
 
 // === DIR/FUZZ sniper marker helpers ===
 // A "DIR" or "FUZZ" token in the target URL is substituted with each wordlist
-// entry (ffuf-style), instead of joining entries as paths to the base URL.
+// entry, instead of joining entries as paths to the base URL.
 
 var validMarkers = []string{"FUZZ", "DIR"}
 

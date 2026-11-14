@@ -1,8 +1,7 @@
-# hackit dirfinder — Go expert directory & file finder (ffuf-style)
+# hackit dirfinder — HackIT expert directory & file finder
 
-Directory/file discovery engine with a **sniper marker** (`DIR` or `FUZZ`),
-modeled on ffuf: everything in the URL stays fixed, the marker slot is
-substituted with each wordlist entry.
+Directory/file discovery engine with a **sniper marker** (`DIR` or `FUZZ`): everything in the URL stays fixed,
+the marker slot is substituted with each wordlist entry.
 
 ## One-shot (no flags)
 

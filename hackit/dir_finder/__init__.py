@@ -1,5 +1,5 @@
 """
-Dir Finder Module (Go Expert Engine with 16 engines - dirsearch-equivalent)
+Dir Finder Module (Go Expert Engine with 16 engines)
 """
 import click
 import json
@@ -20,7 +20,7 @@ _DIRFINDER_BANNER = r"""
 def _interactive_examples():
     click.echo()
     click.echo(_colored(_DIRFINDER_BANNER, B_CYAN))
-    click.echo(_colored("  DIRFINDER — ffuf-style sniper directory & file discovery", BOLD))
+    click.echo(_colored("  DIRFINDER — HackIT sniper directory & file discovery", BOLD))
     click.echo(_colored("  DIR or FUZZ marks the substitution slot; everything else stays fixed.", DIM))
     click.echo()
     click.echo(_colored("  Examples:", YELLOW))
@@ -397,6 +397,9 @@ def _interactive_parse(text: str):
         return None, f"could not parse input: {exc}"
     if not tokens:
         return None, "empty"
+
+    if tokens[0].lower() in ("help", "?", "examples"):
+        return None, "help"
 
     kwargs = {"url": None, "threads": 30, "verbose": False}
     i = 0
