@@ -877,7 +877,7 @@ def help_tools():
     • util cve      - Vulnerability lookup
     • wireless sniff- Monitor mode sniffing & PCAP
     • wireless crack- High-speed dictionary attack
-    • ddos         - Authorized resilience testing (scoped HTTP/TCP load, audited)
+    • ddos         - Authorized resilience testing (method profiles, ramp, live stats, audited)
     """
     click.echo(tools_text)
 

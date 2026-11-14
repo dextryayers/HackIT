@@ -42,13 +42,20 @@ hackit/ddos/
 
 ## Usage
 
-Interactive — type a target, engines work (remote targets need a typed `yes`):
+Bare `hackit ddos` prints the console help. For the interactive console
+(remote targets need a typed `yes`):
 
 ```bash
-hackit ddos
-# Target domain/IP: 127.0.0.1:8080   → runs immediately
-# Target domain/IP: staging.example.internal   → asks for authorization first
+hackit ddos console
+# target domain/IP: 127.0.0.1:8080   → runs immediately
+# target domain/IP: staging.example.internal   → asks for authorization first
 ```
+
+Method profiles: `get post put patch delete head options mixed`
+(`mixed` rotates verbs per request). Extras: `--body` (JSON auto-detected),
+`--ramp N` (linearly ramp 1 → --rps over N seconds), `--close`
+(Connection: close), `-v/--verbose` (resolved target, caps, audit path),
+`http-raw` profile (C engine plain-HTTP GET against a raw socket path).
 
 Scripted — signed scope file required for remote targets:
 
@@ -70,6 +77,11 @@ hackit ddos run --target db.internal --port 5432 \
 
 # loopback-only smoke test, no scope file
 hackit ddos lab --target http://127.0.0.1:8080 --duration 5 --rps 20
+
+# POST with a JSON body, verbose
+hackit ddos run --target https://staging.example.internal/api \
+    --scope scope.json --approval CHG-1234 --method post \
+    --body '{"probe":true}' -v
 ```
 
 ## Scope file

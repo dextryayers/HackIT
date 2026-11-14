@@ -1,7 +1,10 @@
 // stresslab-go — scoped HTTP(S) load generator for authorized resilience testing.
 // Standard library only. No spoofing, no amplification, no evasion: it is a
-// measurement tool, not an attack kit. The caller (hackit stress) enforces
-// target scope, approval and caps before this binary ever runs.
+// measurement tool, not an attack kit. The caller (hackit ddos) enforces
+// authorization and caps before this binary ever runs.
+//
+// Wire protocol on stdout: progress lines {"type":"progress",...} every
+// -progress-ms milliseconds, then one final {"type":"result",...} object.
 package main
 
 import (
@@ -15,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -26,6 +30,8 @@ const (
 	hardMaxDuration = 600 * time.Second
 	sampleCap       = 100000
 )
+
+var mixedMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
 
 type sampler struct {
 	mu      sync.Mutex
@@ -75,18 +81,28 @@ func (s *sampler) snapshot() []float64 {
 	return out
 }
 
-type report struct {
-	Engine     string  `json:"engine"`
-	Mode       string  `json:"mode"`
-	Target     string  `json:"target"`
-	Method     string  `json:"method,omitempty"`
-	DurationS  float64 `json:"duration_s"`
-	Requests   int64   `json:"requests"`
-	OK         int64   `json:"ok"`
-	Errors     int64   `json:"errors"`
+type progress struct {
+	Type      string  `json:"type"`
+	ElapsedS  float64 `json:"elapsed_s"`
+	Requests  int64   `json:"requests"`
+	OK        int64   `json:"ok"`
+	Errors    int64   `json:"errors"`
 	AchievedRPS float64 `json:"achieved_rps"`
-	ErrorRate  float64 `json:"error_rate"`
-	LatencyMS  struct {
+}
+
+type report struct {
+	Type        string  `json:"type"`
+	Engine      string  `json:"engine"`
+	Mode        string  `json:"mode"`
+	Target      string  `json:"target"`
+	Method      string  `json:"method,omitempty"`
+	DurationS   float64 `json:"duration_s"`
+	Requests    int64   `json:"requests"`
+	OK          int64   `json:"ok"`
+	Errors      int64   `json:"errors"`
+	AchievedRPS float64 `json:"achieved_rps"`
+	ErrorRate   float64 `json:"error_rate"`
+	LatencyMS   struct {
 		P50 float64 `json:"p50"`
 		P90 float64 `json:"p90"`
 		P99 float64 `json:"p99"`
@@ -94,13 +110,24 @@ type report struct {
 	} `json:"latency_ms"`
 }
 
+func max64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func main() {
 	url := flag.String("url", "", "target URL, http(s)://host[:port]/path")
 	duration := flag.Int("duration", 10, "test duration in seconds")
 	workers := flag.Int("workers", 10, "concurrent workers")
 	rps := flag.Int("rps", 50, "global request rate cap (requests/second)")
-	method := flag.String("method", "GET", "HTTP method")
+	method := flag.String("method", "GET", "HTTP method, or MIXED for a rotating set")
 	timeoutMS := flag.Int("timeout-ms", 5000, "per-request timeout in milliseconds")
+	body := flag.String("body", "", "request body for POST/PUT/PATCH (default empty)")
+	ramp := flag.Int("ramp", 0, "seconds to linearly ramp 0 -> rps (0 = steady rate)")
+	forceClose := flag.Bool("close", false, "send Connection: close instead of keep-alive")
+	progressMS := flag.Int("progress-ms", 500, "progress line interval in milliseconds (0 = silent)")
 	flag.Parse()
 
 	if *url == "" {
@@ -125,6 +152,10 @@ func main() {
 	if *rps > hardMaxRPS {
 		*rps = hardMaxRPS
 	}
+	*method = strings.ToUpper(strings.TrimSpace(*method))
+	if *method != "MIXED" && *method == "" {
+		*method = "GET"
+	}
 
 	client := &http.Client{
 		Timeout: time.Duration(*timeoutMS) * time.Millisecond,
@@ -135,28 +166,44 @@ func main() {
 			IdleConnTimeout:     30 * time.Second,
 		},
 	}
+	defer client.CloseIdleConnections()
 
-	var okCount, errCount int64
+	var okCount, errCount, reqCount int64
 	lat := newSampler(sampleCap)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*duration)*time.Second)
 	defer cancel()
 
-	// Global token source: one token per slot. Burst is small so the rate
-	// cap is smooth rather than a thundering herd at t=0.
-	interval := time.Second / time.Duration(*rps)
-	if interval < time.Millisecond {
-		interval = time.Millisecond
-	}
-	tokens := make(chan struct{}, max(1, *rps/10))
+	start := time.Now()
+
+	// Rate source: one token per slot. With -ramp the effective rate climbs
+	// linearly from ~1 rps to the cap over the ramp window.
+	tokens := make(chan struct{}, max64(1, int64(*rps)/10))
 	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
+			default:
+			}
+			rate := float64(*rps)
+			if *ramp > 0 {
+				el := time.Since(start).Seconds()
+				if el < float64(*ramp) {
+					rate = rate * el / float64(*ramp)
+					if rate < 1 {
+						rate = 1
+					}
+				}
+			}
+			interval := time.Duration(float64(time.Second) / rate)
+			if interval < time.Microsecond {
+				interval = time.Microsecond
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(interval):
 				select {
 				case tokens <- struct{}{}:
 				default: // bucket full; drop the token rather than burst
@@ -165,25 +212,77 @@ func main() {
 		}
 	}()
 
-	start := time.Now()
+	// Progress monitor: periodic JSON lines on stdout.
+	if *progressMS > 0 {
+		go func() {
+			ticker := time.NewTicker(time.Duration(*progressMS) * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					elapsed := time.Since(start).Seconds()
+					if elapsed <= 0 {
+						continue
+					}
+					req := atomic.LoadInt64(&reqCount)
+					p := progress{
+						Type:        "progress",
+						ElapsedS:    elapsed,
+						Requests:    req,
+						OK:          atomic.LoadInt64(&okCount),
+						Errors:      atomic.LoadInt64(&errCount),
+						AchievedRPS: float64(req) / elapsed,
+					}
+					_ = json.NewEncoder(os.Stdout).Encode(p)
+				}
+			}
+		}()
+	}
+
 	var wg sync.WaitGroup
 	for i := 0; i < *workers; i++ {
 		wg.Add(1)
+		workerID := i
 		go func() {
 			defer wg.Done()
+			rng := rand.New(rand.NewSource(time.Now().UnixNano() + int64(workerID+1)*7919))
 			for {
 				select {
 				case <-ctx.Done():
 					return
 				case <-tokens:
 				}
-				req, err := http.NewRequestWithContext(ctx, *method, *url, nil)
+
+				m := *method
+				if m == "MIXED" {
+					m = mixedMethods[rng.Intn(len(mixedMethods))]
+				}
+
+				var bodyReader io.Reader
+				if *body != "" && (m == "POST" || m == "PUT" || m == "PATCH") {
+					bodyReader = strings.NewReader(*body)
+				}
+				req, err := http.NewRequestWithContext(ctx, m, *url, bodyReader)
 				if err != nil {
+					atomic.AddInt64(&reqCount, 1)
 					atomic.AddInt64(&errCount, 1)
 					continue
 				}
-				req.Header.Set("User-Agent", "hackit-stresslab/1.0 (+authorized resilience testing)")
-				req.Header.Set("Connection", "keep-alive")
+				req.Header.Set("User-Agent", "hackit-ddos/1.0 (+authorized resilience testing)")
+				if *forceClose {
+					req.Header.Set("Connection", "close")
+				} else {
+					req.Header.Set("Connection", "keep-alive")
+				}
+				if bodyReader != nil {
+					if strings.HasPrefix(strings.TrimSpace(*body), "{") || strings.HasPrefix(strings.TrimSpace(*body), "[") {
+						req.Header.Set("Content-Type", "application/json")
+					} else {
+						req.Header.Set("Content-Type", "text/plain; charset=utf-8")
+					}
+				}
 
 				t0 := time.Now()
 				resp, err := client.Do(req)
@@ -191,6 +290,7 @@ func main() {
 					if ctx.Err() != nil {
 						return
 					}
+					atomic.AddInt64(&reqCount, 1)
 					atomic.AddInt64(&errCount, 1)
 					continue
 				}
@@ -199,6 +299,7 @@ func main() {
 
 				elapsed := float64(time.Since(t0).Microseconds()) / 1000.0
 				lat.add(elapsed)
+				atomic.AddInt64(&reqCount, 1)
 				if resp.StatusCode < 500 {
 					atomic.AddInt64(&okCount, 1)
 				} else {
@@ -210,20 +311,21 @@ func main() {
 	wg.Wait()
 	elapsed := time.Since(start).Seconds()
 
-	total := okCount + errCount
+	total := atomic.LoadInt64(&okCount) + atomic.LoadInt64(&errCount)
 	out := report{
+		Type:        "result",
 		Engine:      "go",
 		Mode:        "http",
 		Target:      *url,
 		Method:      *method,
 		DurationS:   elapsed,
 		Requests:    total,
-		OK:          okCount,
-		Errors:      errCount,
+		OK:          atomic.LoadInt64(&okCount),
+		Errors:      atomic.LoadInt64(&errCount),
 		AchievedRPS: float64(total) / elapsed,
 	}
 	if total > 0 {
-		out.ErrorRate = float64(errCount) / float64(total)
+		out.ErrorRate = float64(atomic.LoadInt64(&errCount)) / float64(total)
 	}
 
 	samples := lat.snapshot()
@@ -235,6 +337,5 @@ func main() {
 		out.LatencyMS.Max = samples[len(samples)-1]
 	}
 
-	enc := json.NewEncoder(os.Stdout)
-	_ = enc.Encode(out)
+	_ = json.NewEncoder(os.Stdout).Encode(out)
 }

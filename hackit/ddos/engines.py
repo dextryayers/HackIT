@@ -3,6 +3,10 @@
 Two engines, one report schema:
   go  — HTTP(S) load generator (Go stdlib, TLS verified)
   c   — TCP connect / plain-HTTP load generator (C11, pthreads)
+
+Both engines speak the same wire protocol on stdout:
+  {"type":"progress", ...}  — periodic snapshot while running
+  {"type":"result", ...}    — the final report (last line)
 """
 from __future__ import annotations
 
@@ -10,7 +14,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Callable, Dict, Optional
 
 MODULE_DIR = Path(__file__).resolve().parent
 GO_DIR = MODULE_DIR / "go"
@@ -19,6 +23,8 @@ GO_BIN = GO_DIR / "stresslab"
 C_DIR = MODULE_DIR / "c"
 C_SRC = C_DIR / "stress_engine.c"
 C_BIN = C_DIR / "stress_engine"
+
+ProgressCB = Optional[Callable[[Dict[str, Any]], None]]
 
 
 class EngineError(Exception):
@@ -72,21 +78,55 @@ def ensure_built(which: str) -> Path:
     raise EngineError(f"unknown engine: {which}")
 
 
-def _parse_report(stdout: str, engine: str) -> Dict[str, Any]:
-    for line in reversed(stdout.strip().splitlines()):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            data = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(data, dict) and data.get("engine") == engine:
-            return data
-    raise EngineError(f"{engine} engine produced no parseable report. Output was:\n{stdout.strip() or '<empty>'}")
+def _stream(cmd: list, timeout_s: int, on_progress: ProgressCB) -> Dict[str, Any]:
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+    except OSError as exc:
+        raise EngineError(f"failed to launch engine: {exc}") from exc
+
+    result: Optional[Dict[str, Any]] = None
+    stdout = proc.stdout
+
+    def consume():
+        nonlocal result
+        assert stdout is not None
+        for line in stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(data, dict):
+                continue
+            if data.get("type") == "progress":
+                if on_progress:
+                    on_progress(data)
+            elif data.get("type") == "result" or "engine" in data:
+                result = data
+
+    import threading
+    reader = threading.Thread(target=consume, daemon=True)
+    reader.start()
+    try:
+        _, stderr = proc.communicate(timeout=timeout_s + 30)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        raise EngineError("engine timed out") from None
+    reader.join(timeout=5)
+
+    if proc.returncode != 0:
+        raise EngineError(f"engine exited {proc.returncode}:\n{(stderr or '').strip()}")
+    if result is None:
+        raise EngineError(f"engine produced no final report. stderr:\n{(stderr or '').strip() or '<empty>'}")
+    return result
 
 
-def run_go(url: str, method: str, *, rps: int, workers: int, duration_s: int, timeout_ms: int) -> Dict[str, Any]:
+def run_go(url: str, method: str, *, rps: int, workers: int, duration_s: int,
+           timeout_ms: int, body: str = "", ramp_s: int = 0,
+           force_close: bool = False, on_progress: ProgressCB = None) -> Dict[str, Any]:
     binary = ensure_built("go")
     cmd = [
         str(binary),
@@ -96,14 +136,19 @@ def run_go(url: str, method: str, *, rps: int, workers: int, duration_s: int, ti
         "-workers", str(workers),
         "-duration", str(duration_s),
         "-timeout-ms", str(timeout_ms),
+        "-progress-ms", "500",
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_s + 30)
-    if result.returncode != 0:
-        raise EngineError(f"go engine exited {result.returncode}:\n{result.stderr.strip()}")
-    return _parse_report(result.stdout, "go")
+    if body:
+        cmd += ["-body", body]
+    if ramp_s > 0:
+        cmd += ["-ramp", str(ramp_s)]
+    if force_close:
+        cmd += ["-close"]
+    return _stream(cmd, duration_s, on_progress)
 
 
-def run_c(mode: str, host: str, port: int, *, rps: int, workers: int, duration_s: int, path: str = "/") -> Dict[str, Any]:
+def run_c(mode: str, host: str, port: int, *, rps: int, workers: int, duration_s: int,
+          path: str = "/", on_progress: ProgressCB = None) -> Dict[str, Any]:
     if mode not in ("tcp", "http"):
         raise EngineError(f"c engine mode must be tcp|http, got {mode!r}")
     binary = ensure_built("c")
@@ -113,12 +158,10 @@ def run_c(mode: str, host: str, port: int, *, rps: int, workers: int, duration_s
         "--duration", str(duration_s),
         "--threads", str(threads),
         "--rps", str(rps),
+        "--progress-ms", "500",
     ]
     if mode == "http":
         cmd += ["--path", path]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_s + 30)
-    if result.returncode != 0:
-        raise EngineError(f"c engine exited {result.returncode}:\n{result.stderr.strip()}")
-    report = _parse_report(result.stdout, "c")
+    report = _stream(cmd, duration_s, on_progress)
     report["threads"] = threads
     return report

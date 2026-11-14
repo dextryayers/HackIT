@@ -59,6 +59,7 @@ typedef struct {
 
 static atomic_int g_stop;
 static atomic_uint_fast64_t g_ok, g_err;
+static double g_start_s;
 static pthread_mutex_t g_sample_lock = PTHREAD_MUTEX_INITIALIZER;
 static double g_samples[SAMPLES_PER_THREAD * HARD_MAX_THREADS];
 static size_t g_sample_n;
@@ -177,14 +178,14 @@ static void *worker(void *argp) {
 
         int fd = connect_timeout(w->host, w->port, CONNECT_TIMEOUT_MS);
         if (fd < 0) {
-            w->errors++;
+            atomic_fetch_add(&g_err, 1);
         } else {
             if (w->mode == MODE_TCP) {
-                w->ok++;
+                atomic_fetch_add(&g_ok, 1);
             } else {
                 int status = http_get_status(fd, w->host, w->path);
-                if (status > 0 && status < 500) w->ok++;
-                else w->errors++;
+                if (status > 0 && status < 500) atomic_fetch_add(&g_ok, 1);
+                else atomic_fetch_add(&g_err, 1);
             }
             close(fd);
         }
@@ -201,8 +202,6 @@ static void *worker(void *argp) {
     }
 
     sample_flush(w);
-    atomic_fetch_add(&g_ok, w->ok);
-    atomic_fetch_add(&g_err, w->errors);
     return NULL;
 }
 
@@ -232,13 +231,31 @@ static void json_escape(const char *in, char *out, size_t out_sz) {
     out[j] = '\0';
 }
 
+static void *monitor(void *arg) {
+    int progress_ms = *(int *)arg;
+    while (!atomic_load(&g_stop)) {
+        struct timespec ts = { progress_ms / 1000, (long)(progress_ms % 1000) * 1000000L };
+        nanosleep(&ts, NULL);
+        if (atomic_load(&g_stop)) break;
+        double elapsed = now_mono_s() - g_start_s;
+        if (elapsed <= 0.0) continue;
+        uint64_t ok = atomic_load(&g_ok), err = atomic_load(&g_err), total = ok + err;
+        printf("{\"type\":\"progress\",\"elapsed_s\":%.3f,\"requests\":%llu,\"ok\":%llu,\"errors\":%llu,\"achieved_rps\":%.2f}\n",
+               elapsed, (unsigned long long)total, (unsigned long long)ok,
+               (unsigned long long)err, (double)total / elapsed);
+        fflush(stdout);
+    }
+    return NULL;
+}
+
 static void usage(const char *prog) {
     fprintf(stderr,
         "usage: %s <tcp|http> <host> <port> [options]\n"
         "  --duration SEC   test duration (1-%d, default 10)\n"
         "  --threads N      worker threads (1-%d, default 4)\n"
         "  --rps N          global rate cap (1-%d, default 50)\n"
-        "  --path PATH      HTTP path (default /)\n",
+        "  --path PATH      HTTP path (default /)\n"
+        "  --progress-ms N  progress line interval, 0 = silent (default 500)\n",
         prog, HARD_MAX_DURATION_S, HARD_MAX_THREADS, HARD_MAX_RPS);
 }
 
@@ -258,12 +275,14 @@ int main(int argc, char **argv) {
     proto.duration_s = 10;
     proto.threads = 4;
     proto.rps = 50;
+    int progress_ms = 500;
 
     for (int i = 4; i < argc; i++) {
         if (!strcmp(argv[i], "--duration") && i + 1 < argc) proto.duration_s = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--threads") && i + 1 < argc) proto.threads = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--rps") && i + 1 < argc) proto.rps = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--path") && i + 1 < argc) snprintf(proto.path, sizeof(proto.path), "%s", argv[++i]);
+        else if (!strcmp(argv[i], "--progress-ms") && i + 1 < argc) progress_ms = atoi(argv[++i]);
         else { usage(argv[0]); return 2; }
     }
     if (proto.duration_s < 1) proto.duration_s = 1;
@@ -274,6 +293,7 @@ int main(int argc, char **argv) {
     if (proto.rps > HARD_MAX_RPS) proto.rps = HARD_MAX_RPS;
 
     srand((unsigned)time(NULL) ^ (unsigned)getpid());
+    g_start_s = now_mono_s();
 
     pthread_t tids[HARD_MAX_THREADS];
     worker_arg_t args[HARD_MAX_THREADS];
@@ -290,7 +310,14 @@ int main(int argc, char **argv) {
             return 1;
         }
     }
+    pthread_t mon;
+    bool mon_started = false;
+    if (progress_ms > 0) {
+        if (pthread_create(&mon, NULL, monitor, &progress_ms) == 0) mon_started = true;
+    }
     for (int i = 0; i < proto.threads; i++) pthread_join(tids[i], NULL);
+    atomic_store(&g_stop, 1);
+    if (mon_started) pthread_join(mon, NULL);
 
     double elapsed = now_mono_s() - start;
     if (elapsed <= 0.0) elapsed = 1e-6;
@@ -304,7 +331,7 @@ int main(int argc, char **argv) {
     json_escape(proto.path, esc_path, sizeof(esc_path));
 
     double err_rate = total ? (double)err / (double)total : 0.0;
-    printf("{\"engine\":\"c\",\"mode\":\"%s\",\"target\":\"%s:%s\",\"method\":%s,"
+    printf("{\"type\":\"result\",\"engine\":\"c\",\"mode\":\"%s\",\"target\":\"%s:%s\",\"method\":%s,"
            "\"duration_s\":%.3f,\"requests\":%llu,\"ok\":%llu,\"errors\":%llu,"
            "\"achieved_rps\":%.2f,\"error_rate\":%.4f,"
            "\"latency_ms\":{\"p50\":%.3f,\"p90\":%.3f,\"p99\":%.3f,\"max\":%.3f}}\n",
