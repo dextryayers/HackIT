@@ -128,8 +128,10 @@ def _print_cve_briefing(report, refs: bool = False) -> None:
 @click.option('--json-out', help='Same as --output, but still prints the briefing.')
 @click.option('--refs', is_flag=True, help='Include reference URLs and advisory links for each CVE.')
 @click.option('--no-interactive', is_flag=True, help='Skip banner and input prompts (scripted use).')
+@click.option('--nvd-concurrency', type=int, default=3, show_default=True,
+              help='Max concurrent NVD queries (1-10; public tier stays rate-limited).')
 def check_cve(target, mode_option, output, deep, subdomains, subdomains_file, api_key,
-              max_results, json_out, refs, no_interactive):
+              max_results, json_out, refs, no_interactive, nvd_concurrency):
     """Professional intelligence-backed CVE scanner.
 
     Detects technologies for the target (and optionally every advertised subdomain),
@@ -140,15 +142,15 @@ def check_cve(target, mode_option, output, deep, subdomains, subdomains_file, ap
     if target:
         if not target.startswith(("http://", "https://")):
             target = "https://" + target
-        if not no_interactive:
-            _show_cve_banner()
+        # One-shot mode: no banner, just scan. Banner is for the interactive path only.
         mode_str = mode_option or "main"
         click.secho(f"[+] Go+NVD CVE scan for {target} (mode={mode_str})...", fg='cyan', bold=True)
         report_output = json_out or output
         report = run_cve_scan(target=target, mode=mode_str, api_key=api_key,
                               max_results=max_results, output=report_output,
                               subdomains=bool(subdomains or deep or subdomains_file),
-                              deep=bool(deep), subdomains_file=subdomains_file)
+                              deep=bool(deep), subdomains_file=subdomains_file,
+                              nvd_concurrency=nvd_concurrency)
         _print_cve_briefing(report, refs=refs)
         return
 
@@ -178,5 +180,6 @@ def check_cve(target, mode_option, output, deep, subdomains, subdomains_file, ap
     report_output = json_out or output
     report = run_cve_scan(target=target, mode=mode_str, api_key=api_key,
                           max_results=max_results, output=report_output,
-                          subdomains=subdomains_flag, deep=deep_flag)
+                          subdomains=subdomains_flag, deep=deep_flag,
+                          nvd_concurrency=nvd_concurrency)
     _print_cve_briefing(report, refs=refs)

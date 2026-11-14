@@ -167,6 +167,7 @@ func main() {
 	apiKeyPtr := flag.String("api-key", "", "NVD API key (for higher rate limits)")
 	debugPtr := flag.Bool("debug", false, "Enable debug logging")
 	maxResults := flag.Int("max-results", 20, "Max CVEs per tech/scan")
+	concPtr := flag.Int("nvd-concurrency", 3, "Max concurrent NVD queries (1-10; public tier stays rate-limited)")
 	subdomainsPtr := flag.Bool("subdomains", false, "Scan built-in common subdomains of the target domain")
 	subFilePtr := flag.String("subdomains-file", "", "File with subdomain labels (one per line), read in addition to the built-in list")
 	deepPtr := flag.Bool("deep", false, "Full scan: header/body tech detection + all common subdomains + wordlist override")
@@ -254,10 +255,17 @@ func main() {
 		fmt.Printf("\n%s[*] Detected %d technologies, querying NVD in parallel...%s\n", Blue, len(techs), Reset)
 		reportTechs = techs
 
-		// Parallel NVD queries
+		// Parallel NVD queries (bounded; public API is still rate-limited globally)
+		conc := *concPtr
+		if conc < 1 {
+			conc = 1
+		}
+		if conc > 10 {
+			conc = 10
+		}
 		var mu sync.Mutex
 		var wg sync.WaitGroup
-		sema := make(chan struct{}, 3) // max 3 concurrent NVD calls
+		sema := make(chan struct{}, conc)
 
 		for _, t := range techs {
 			wg.Add(1)

@@ -62,7 +62,7 @@ class GoEngine:
         return True
 
     def run(self, target, mode="main", output=None, api_key=None, max_results=None,
-            subdomains=False, deep=False, subdomains_file=None):
+            subdomains=False, deep=False, subdomains_file=None, nvd_concurrency=None):
         if not self.ensure_compiled():
             print("[!] Engine not available.")
             return False
@@ -85,6 +85,8 @@ class GoEngine:
             cmd.append("--deep")
         if subdomains_file:
             cmd.extend(["--subdomains-file", subdomains_file])
+        if nvd_concurrency:
+            cmd.extend(["--nvd-concurrency", str(nvd_concurrency)])
 
         import threading as _threading
 
@@ -131,7 +133,8 @@ class GoEngine:
 
 
 def run_cve_scan(target, mode="main", output=None, api_key=None,
-                 max_results=20, subdomains=False, deep=False, subdomains_file=None):
+                 max_results=20, subdomains=False, deep=False, subdomains_file=None,
+                 nvd_concurrency=None):
     """Run the Go CVE worker with JSON export and return the parsed report."""
     import json
     import os
@@ -150,7 +153,8 @@ def run_cve_scan(target, mode="main", output=None, api_key=None,
     if not engine.run(target=target, mode=mode, output=parse_target,
                       api_key=api_key, max_results=max_results,
                       subdomains=subdomains, deep=deep,
-                      subdomains_file=subdomains_file):
+                      subdomains_file=subdomains_file,
+                      nvd_concurrency=nvd_concurrency):
         return None
     try:
         with open(parse_target, "r", encoding="utf-8") as fh:

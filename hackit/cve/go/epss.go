@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +29,70 @@ var (
 	epssClient  = &http.Client{Timeout: 15 * time.Second}
 	epssSema    = make(chan struct{}, 2)
 )
+
+const epssCacheTTL = 24 * time.Hour
+
+type epssDiskEntry struct {
+	Score float64 `json:"score"`
+	Date  string  `json:"date"`
+}
+
+func epssCacheFile() string {
+	root := os.Getenv("XDG_CACHE_HOME")
+	if root == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			root = filepath.Join(home, ".cache")
+		}
+	}
+	return filepath.Join(root, "hackit", "cve", "epss_cache.json")
+}
+
+func loadEPSSCache() {
+	b, err := os.ReadFile(epssCacheFile())
+	if err != nil {
+		return
+	}
+	var entries map[string]epssDiskEntry
+	if json.Unmarshal(b, &entries) != nil {
+		return
+	}
+	cutoff := time.Now().Add(-epssCacheTTL)
+	epssCacheMu.Lock()
+	defer epssCacheMu.Unlock()
+	for id, e := range entries {
+		d, err := time.Parse(time.RFC3339, e.Date)
+		if err != nil || d.Before(cutoff) {
+			continue
+		}
+		if e.Score >= 0 && e.Score <= 1 {
+			epssCache[id] = e.Score
+		}
+	}
+}
+
+func saveEPSSCacheLocked() {
+	entries := make(map[string]epssDiskEntry, len(epssCache))
+	now := time.Now().UTC().Format(time.RFC3339)
+	for id, score := range epssCache {
+		if len(entries) >= 5000 {
+			break
+		}
+		entries[id] = epssDiskEntry{Score: score, Date: now}
+	}
+	data, err := json.Marshal(entries)
+	if err != nil {
+		return
+	}
+	file := epssCacheFile()
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		return
+	}
+	_ = os.WriteFile(file, data, 0o644)
+}
+
+func init() {
+	loadEPSSCache()
+}
 
 func QueryEPSS(cveID string) float64 {
 	epssCacheMu.Lock()
@@ -64,6 +130,7 @@ func QueryEPSS(cveID string) float64 {
 	score := epssResp.Data[0].EPSS
 	epssCacheMu.Lock()
 	epssCache[cveID] = score
+	saveEPSSCacheLocked()
 	epssCacheMu.Unlock()
 
 	return score
@@ -113,12 +180,13 @@ func BatchQueryEPSS(cveIDs []string) map[string]float64 {
 		if json.Unmarshal(body, &epssResp) != nil {
 			continue
 		}
+		epssCacheMu.Lock()
 		for _, d := range epssResp.Data {
 			results[d.CVE] = d.EPSS
-			epssCacheMu.Lock()
 			epssCache[d.CVE] = d.EPSS
-			epssCacheMu.Unlock()
 		}
+		saveEPSSCacheLocked()
+		epssCacheMu.Unlock()
 	}
 
 	return results
