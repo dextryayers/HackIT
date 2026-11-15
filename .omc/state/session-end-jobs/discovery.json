@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "cursor": 0,
+  "tickets": [
+    {
+      "sessionId": "bfe34fd6-fe38-40fe-ac51-2559b1b48a83",
+      "attempts": 0,
+      "retryAt": "2026-11-14T13:40:08.772Z",
+      "claimNonce": "0bd7f320-887d-4fe9-97a3-7e3e7beeb95b",
+      "leaseExpiresAt": "2026-11-15T08:41:00.302Z"
+    }
+  ]
+}

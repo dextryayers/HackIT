@@ -164,8 +164,8 @@
     },
     {
       "path": "hackit/dir_finder/go/scanner.go",
-      "accessCount": 1,
-      "lastAccessed": 1794656481136,
+      "accessCount": 1.7158669726421052,
+      "lastAccessed": 1794698146376,
       "type": "file"
     },
     {
@@ -208,6 +208,48 @@
       "path": "hackit/dir_finder/go/detector.go",
       "accessCount": 1.9998971242799923,
       "lastAccessed": 1794660063711,
+      "type": "file"
+    },
+    {
+      "path": "hackit/ddos/engines.py",
+      "accessCount": 1,
+      "lastAccessed": 1794732258814,
+      "type": "file"
+    },
+    {
+      "path": "hackit/ddos/ddos.py",
+      "accessCount": 3.9805664451839413,
+      "lastAccessed": 1794733090794,
+      "type": "file"
+    },
+    {
+      "path": "hackit/ddos/c/stress_engine.c",
+      "accessCount": 1.999945480326077,
+      "lastAccessed": 1794732288933,
+      "type": "file"
+    },
+    {
+      "path": "hackit/ddos/scope.py",
+      "accessCount": 1,
+      "lastAccessed": 1794732289154,
+      "type": "file"
+    },
+    {
+      "path": "hackit/ddos/go/stresslab.go",
+      "accessCount": 2.98732937580075,
+      "lastAccessed": 1794733091043,
+      "type": "file"
+    },
+    {
+      "path": "hackit/ddos/c/Makefile",
+      "accessCount": 1.9982358617523759,
+      "lastAccessed": 1794733311162,
+      "type": "file"
+    },
+    {
+      "path": "hackit/ddos/c/flood_engine.c",
+      "accessCount": 5.984326996490615,
+      "lastAccessed": 1794733714690,
       "type": "file"
     }
   ],
