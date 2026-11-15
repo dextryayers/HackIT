@@ -34,6 +34,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/uio.h>
@@ -75,7 +76,7 @@ typedef struct {
     int port, duration_s, threads;
     long rps;
     int burst, size, ttl, spoof, read_reply, progress_ms, keepalive;
-    int rand_path, tls, verbose;
+    int rand_path, tls, verbose, waf;
     struct sockaddr_in dst;
     uint32_t src_ip;
 } cfg_t;
@@ -121,6 +122,23 @@ static void sleep_ns(uint64_t ns) {
 }
 
 static void on_sigint(int s) { (void)s; atomic_store(&g_stop, 1); }
+
+static void install_signals(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = on_sigint;
+    sa.sa_flags = 0;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
+
+    struct sigaction sp;
+    memset(&sp, 0, sizeof(sp));
+    sp.sa_handler = SIG_IGN;
+    sigemptyset(&sp.sa_mask);
+    sp.sa_flags = 0;
+    sigaction(SIGPIPE, &sp, NULL);
+}
 
 static inline uint64_t xr(uint64_t *s) {
     uint64_t x = *s;
@@ -248,7 +266,8 @@ static int connect_timeout(int ms) {
     int fl = fcntl(fd, F_GETFL, 0);
     if (fl < 0 || fcntl(fd, F_SETFL, fl | O_NONBLOCK) < 0) { close(fd); return -1; }
 
-    int rc = connect(fd, (struct sockaddr *)&g_workers[0].cfg->dst, sizeof(g_workers[0].cfg->dst));
+    int rc = connect(fd, (struct sockaddr *)&g_workers[0].cfg->dst,
+                     sizeof(g_workers[0].cfg->dst));
     if (rc != 0 && errno != EINPROGRESS) { close(fd); return -1; }
     if (rc != 0) {
         if (wait_fd(fd, 1, ms) <= 0) { close(fd); return -1; }
@@ -312,8 +331,8 @@ static void build_request(wctx_t *w) {
     bool body_verb = !strcmp(c->method, "POST") || !strcmp(c->method, "PUT") ||
                      !strcmp(c->method, "PATCH");
     char path[768];
-    if (c->waf.enabled) {
-        waf_build_path(&c->waf.enabled ? (waf_t *)&w->waf : NULL, c->path, path, sizeof(path));
+    if (c->waf) {
+        (void)waf_build_path(&w->waf, c->path, path, sizeof(path));
     } else if (c->rand_path) {
         snprintf(path, sizeof(path), "%s%c_=%lx%lx", c->path,
                  strchr(c->path, '?') ? '&' : '?',
@@ -325,7 +344,7 @@ static void build_request(wctx_t *w) {
     size_t body_len = body_verb ? (size_t)c->size : 0;
     char hdrs[2048];
     size_t hn;
-    if (c->waf.enabled) {
+    if (c->waf) {
         hn = waf_build_headers(&w->waf, c->host, c->keepalive != 1, hdrs, sizeof(hdrs));
     } else {
         hn = (size_t)snprintf(hdrs, sizeof(hdrs),
@@ -353,10 +372,10 @@ static void build_request(wctx_t *w) {
 }
 
 static void record_lat(wctx_t *w, double us) {
-    if (w->lat_n < LAT_SAMPLES) w->lat_us[w->lat_n++] = us;
+    if (w->lat_n < (uint64_t)LAT_SAMPLES) w->lat_us[w->lat_n++] = us;
     else {
         uint64_t j = xr(&w->rng) % (w->lat_n + 1);
-        if (j < LAT_SAMPLES) w->lat_us[j] = us;
+        if (j < (uint64_t)LAT_SAMPLES) w->lat_us[j] = us;
     }
 }
 
@@ -630,8 +649,10 @@ int main(int argc, char **argv) {
     } else if (cfg.size > MAX_PAYLOAD) cfg.size = MAX_PAYLOAD;
 
     {
-        struct addrinfo h = {0}, *r = NULL;
+        struct addrinfo h;
+        struct addrinfo *r = NULL;
         char svc[8];
+        memset(&h, 0, sizeof(h));
         h.ai_family = AF_INET;
         h.ai_socktype = (cfg.mode == M_ICMP) ? 0 : SOCK_STREAM;
         snprintf(svc, sizeof(svc), "%d", cfg.port);
@@ -667,10 +688,7 @@ int main(int argc, char **argv) {
         SSL_CTX_set_options(g_ctx, SSL_OP_NO_COMPRESSION);
     }
 
-    struct sigaction sa; memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = on_sigint;
-    sigaction(SIGINT, &sa, NULL);
-    sigaction(SIGTERM, &sa, NULL);
+    install_signals();
 
     g_start_s = now_s();
     g_nworkers = cfg.threads;
@@ -730,7 +748,7 @@ int main(int argc, char **argv) {
     static double lat[LAT_SAMPLES * HARD_MAX_THREADS];
     size_t ln = 0;
     for (int i = 0; i < cfg.threads; i++)
-        for (uint64_t k = 0; k < g_workers[i].lat_n && k < LAT_SAMPLES; k++)
+        for (uint64_t k = 0; k < g_workers[i].lat_n && k < (uint64_t)LAT_SAMPLES; k++)
             if (ln < sizeof(lat) / sizeof(lat[0])) lat[ln++] = g_workers[i].lat_us[k];
     qsort(lat, ln, sizeof(double), cmp_d);
 

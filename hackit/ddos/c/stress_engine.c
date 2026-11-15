@@ -22,12 +22,14 @@
 #include <netinet/tcp.h>
 #include <openssl/ssl.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <time.h>
@@ -88,16 +90,37 @@ static uint64_t now_ns(void) {
 
 static void on_sigint(int s) { (void)s; atomic_store(&g_stop, 1); }
 
+static void install_signals(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = on_sigint;
+    sa.sa_flags = 0;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
+
+    struct sigaction sp;
+    memset(&sp, 0, sizeof(sp));
+    sp.sa_handler = SIG_IGN;
+    sigemptyset(&sp.sa_mask);
+    sp.sa_flags = 0;
+    sigaction(SIGPIPE, &sp, NULL);
+}
+
 static void sample_add(worker_arg_t *w, double us) {
     w->lat_count++;
-    if (w->lat_filled < SAMPLES_PER_THREAD) { w->lat_us[w->lat_filled++] = us; return; }
+    if (w->lat_filled < (uint64_t)SAMPLES_PER_THREAD) {
+        w->lat_us[w->lat_filled++] = us;
+        return;
+    }
     uint64_t j = (uint64_t)rand() % w->lat_count;
-    if (j < SAMPLES_PER_THREAD) w->lat_us[j] = us;
+    if (j < (uint64_t)SAMPLES_PER_THREAD) w->lat_us[j] = us;
 }
 
 static void sample_flush(worker_arg_t *w) {
+    size_t cap = sizeof(g_samples) / sizeof(g_samples[0]);
     pthread_mutex_lock(&g_lock);
-    for (uint64_t i = 0; i < w->lat_filled && g_sample_n < sizeof(g_samples) / sizeof(g_samples[0]); i++)
+    for (uint64_t i = 0; i < w->lat_filled && g_sample_n < cap; i++)
         g_samples[g_sample_n++] = w->lat_us[i];
     pthread_mutex_unlock(&g_lock);
 }
@@ -162,6 +185,7 @@ static int connect_timeout(int ms) {
     int one = 1;
     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
     int fl = fcntl(fd, F_GETFL, 0);
+    if (fl < 0) { close(fd); return -1; }
     fcntl(fd, F_SETFL, fl | O_NONBLOCK);
     int rc = connect(fd, (struct sockaddr *)&g_target, g_target_len);
     if (rc != 0 && errno != EINPROGRESS) { close(fd); return -1; }
@@ -201,7 +225,7 @@ static SSL *tls_start(int fd, int ms) {
 static int http_exchange(worker_arg_t *w, int fd, SSL *ssl) {
     char req[3072];
     char path[768];
-    if (w->waf) waf_build_path(&w->wafp, w->path, path, sizeof(path));
+    if (w->waf) (void)waf_build_path(&w->wafp, w->path, path, sizeof(path));
     else snprintf(path, sizeof(path), "%s", w->path);
 
     char hdrs[2048];
@@ -381,9 +405,10 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--method") && i + 1 < argc) snprintf(proto.method, sizeof(proto.method), "%s", argv[++i]);
         else if (!strcmp(argv[i], "--body") && i + 1 < argc) {
             const char *b = argv[++i];
-            proto.body_len = (int)strlen(b);
-            if (proto.body_len > (int)sizeof(proto.body)) proto.body_len = (int)sizeof(proto.body);
-            memcpy(proto.body, b, (size_t)proto.body_len);
+            size_t bl = strlen(b);
+            if (bl > sizeof(proto.body)) bl = sizeof(proto.body);
+            proto.body_len = (int)bl;
+            memcpy(proto.body, b, bl);
         } else if (!strcmp(argv[i], "--tls")) proto.tls = 1;
         else if (!strcmp(argv[i], "--waf")) proto.waf = 1;
         else { usage(argv[0]); return 2; }
@@ -398,10 +423,13 @@ int main(int argc, char **argv) {
     if (proto.rps > HARD_MAX_RPS) proto.rps = HARD_MAX_RPS;
 
     srand((unsigned)time(NULL) ^ (unsigned)getpid());
+    install_signals();
     g_start_s = now_s();
 
     {
-        struct addrinfo h = {0}, *r = NULL;
+        struct addrinfo h;
+        struct addrinfo *r = NULL;
+        memset(&h, 0, sizeof(h));
         h.ai_family = AF_UNSPEC;
         if (mode == MODE_ICMP) { h.ai_family = AF_INET; h.ai_socktype = SOCK_RAW; h.ai_protocol = IPPROTO_ICMP; }
         else h.ai_socktype = SOCK_STREAM;
@@ -422,10 +450,6 @@ int main(int argc, char **argv) {
         SSL_CTX_set_min_proto_version(g_ssl, TLS1_2_VERSION);
         SSL_CTX_set_verify(g_ssl, SSL_VERIFY_NONE, NULL);
     }
-
-    struct sigaction sa; memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = on_sigint;
-    sigaction(SIGINT, &sa, NULL);
 
     worker_arg_t *args = calloc(HARD_MAX_THREADS, sizeof(worker_arg_t));
     pthread_t *tids = calloc(HARD_MAX_THREADS, sizeof(pthread_t));
