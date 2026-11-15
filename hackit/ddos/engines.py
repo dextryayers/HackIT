@@ -1,17 +1,17 @@
-"""Engine discovery, build and execution for the ddos resilience console.
+"""Engine discovery, build and execution.
 
-Three engines, one report schema:
-  go     — HTTP(S) load generator (Go stdlib, TLS verified)
-  c      — TCP connect / plain-HTTP load generator (C11, pthreads)
-  flood  — raw-packet flood engine (C11, raw sockets, optional TLS)
+Four engines, one report schema:
+  go       — HTTP(S)/HTTP2 load, DNS query rate, UDP echo throughput
+  c        — TCP connect / HTTP(S) request measurement, ICMP RTT
+  flood    — raw-packet flood, HTTP(S) request flood
+  slowloris— socket-holding engine
 
-All engines speak the same wire protocol on stdout:
-  {"type":"progress", ...}  — periodic snapshot while running
-  {"type":"result", ...}    — the final report (last line)
+All speak the same wire protocol on stdout:
+  {"type":"progress", ...}  then one {"type":"result", ...}.
 
-Staleness is tracked with a sidecar hash that also records platform and
-machine, because committing the binaries means a fresh clone can hand an
-x86-64 ELF to an ARM host with identical mtimes.
+Staleness uses a sidecar hash that records platform and machine, because the
+binaries are committed and a fresh clone can hand an x86-64 ELF to an ARM host
+with identical mtimes.
 """
 from __future__ import annotations
 
@@ -27,17 +27,21 @@ from typing import Any, Callable, Dict, Optional
 
 MODULE_DIR = Path(__file__).resolve().parent
 GO_DIR = MODULE_DIR / "go"
-GO_SRC = GO_DIR / "stresslab.go"
-GO_BIN = GO_DIR / "stresslab"
 C_DIR = MODULE_DIR / "c"
-C_SRC = C_DIR / "stress_engine.c"
-C_BIN = C_DIR / "stress_engine"
-FLOOD_SRC = C_DIR / "flood_engine.c"
-FLOOD_BIN = C_DIR / "flood_engine"
 
-# Must track the C headers and scope.py ceilings.
-FLOOD_HARD_MAX_THREADS = 256
+GO_BIN = GO_DIR / "stresslab"
+C_BIN = C_DIR / "stress_engine"
+FLOOD_BIN = C_DIR / "flood_engine"
+SLOW_BIN = C_DIR / "slowloris"
+
+GO_SRC = GO_DIR / "stresslab.go"
+C_SRC = C_DIR / "stress_engine.c"
+FLOOD_SRC = C_DIR / "flood_engine.c"
+SLOW_SRC = C_DIR / "slowloris.c"
+
 C_HARD_MAX_THREADS = 128
+FLOOD_HARD_MAX_THREADS = 256
+SLOW_HARD_MAX_SOCKETS = 200000
 
 ProgressCB = Optional[Callable[[Dict[str, Any]], None]]
 
@@ -51,16 +55,21 @@ def _marker(binary: Path) -> Path:
 
 
 def _fingerprint(src: Path) -> str:
-    digest = hashlib.sha256(src.read_bytes()).hexdigest()
-    return f"{digest}:{sys.platform}:{platform.machine()}"
+    h = hashlib.sha256(src.read_bytes()).hexdigest()
+    extra = hashlib.sha256()
+    for sibling in sorted(src.parent.glob("*.h")):
+        extra.update(sibling.read_bytes())
+    return f"{h}:{extra.hexdigest()[:16]}:{sys.platform}:{platform.machine()}"
 
 
 def _needs_build(binary: Path, src: Path) -> bool:
-    marker = _marker(binary)
-    if not binary.is_file() or not marker.is_file():
+    if not binary.is_file():
+        return True
+    m = _marker(binary)
+    if not m.is_file():
         return True
     try:
-        return marker.read_text(encoding="utf-8").strip() != _fingerprint(src)
+        return m.read_text(encoding="utf-8").strip() != _fingerprint(src)
     except OSError:
         return True
 
@@ -72,54 +81,59 @@ def _stamp(binary: Path, src: Path) -> None:
         pass
 
 
+def _make(target: str) -> Path:
+    make = shutil.which("make")
+    if not make:
+        raise EngineError("make not found — install build-essential")
+    r = subprocess.run([make, "-C", str(C_DIR), target],
+                       capture_output=True, text=True, timeout=300)
+    if r.returncode != 0:
+        raise EngineError(f"C build failed for {target}:\n{r.stderr.strip()}")
+    return C_DIR / target
+
+
 def build_go() -> Path:
     go = shutil.which("go")
     if not go:
-        raise EngineError("Go toolchain not found in PATH — install golang to build the HTTP engine")
-    result = subprocess.run(
-        [go, "build", "-o", str(GO_BIN), str(GO_SRC)],
-        cwd=str(GO_DIR), capture_output=True, text=True, timeout=300,
-    )
-    if result.returncode != 0:
-        raise EngineError(f"Go engine build failed:\n{result.stderr.strip()}")
+        raise EngineError("Go toolchain not found in PATH")
+    r = subprocess.run([go, "build", "-o", str(GO_BIN), "."],
+                       cwd=str(GO_DIR), capture_output=True, text=True, timeout=300)
+    if r.returncode != 0:
+        raise EngineError(f"Go build failed:\n{r.stderr.strip()}")
     _stamp(GO_BIN, GO_SRC)
     return GO_BIN
 
 
-def _build_with_make(target: str) -> Path:
-    make = shutil.which("make")
-    if not make:
-        raise EngineError("make not found — install build-essential")
-    result = subprocess.run(
-        [make, "-C", str(C_DIR), target],
-        capture_output=True, text=True, timeout=300,
-    )
-    if result.returncode != 0:
-        raise EngineError(f"C engine build failed:\n{result.stderr.strip()}")
-    return C_DIR / target
-
-
 def build_c() -> Path:
-    return _build_with_make("stress_engine")
+    p = _make("stress_engine")
+    _stamp(p, C_SRC)
+    return p
 
 
 def build_flood() -> Path:
-    try:
-        return _build_with_make("flood_engine")
-    except EngineError as exc:
-        raise EngineError(f"{exc}\n(flood_engine links OpenSSL — apt install libssl-dev)") from exc
+    p = _make("flood_engine")
+    _stamp(p, FLOOD_SRC)
+    return p
+
+
+def build_slowloris() -> Path:
+    p = _make("slowloris")
+    _stamp(p, SLOW_SRC)
+    return p
+
+
+_TABLE = {
+    "go": (GO_BIN, GO_SRC, build_go),
+    "c": (C_BIN, C_SRC, build_c),
+    "flood": (FLOOD_BIN, FLOOD_SRC, build_flood),
+    "slowloris": (SLOW_BIN, SLOW_SRC, build_slowloris),
+}
 
 
 def ensure_built(which: str) -> Path:
-    table = {
-        "go": (GO_BIN, GO_SRC, build_go),
-        "c": (C_BIN, C_SRC, build_c),
-        "flood": (FLOOD_BIN, FLOOD_SRC, build_flood),
-    }
-    try:
-        binary, src, builder = table[which]
-    except KeyError:
-        raise EngineError(f"unknown engine: {which}") from None
+    if which not in _TABLE:
+        raise EngineError(f"unknown engine: {which}")
+    binary, src, builder = _TABLE[which]
     if _needs_build(binary, src):
         return builder()
     return binary
@@ -135,7 +149,7 @@ def _stream(cmd: list, timeout_s: int, on_progress: ProgressCB) -> Dict[str, Any
     result: Optional[Dict[str, Any]] = None
     stdout = proc.stdout
 
-    def consume():
+    def consume() -> None:
         nonlocal result
         assert stdout is not None
         for line in stdout:
@@ -167,9 +181,7 @@ def _stream(cmd: list, timeout_s: int, on_progress: ProgressCB) -> Dict[str, Any
     reader.join(timeout=5)
 
     if proc.returncode != 0:
-        hint = ""
-        if proc.returncode == 3:
-            hint = "\nraw sockets need root or CAP_NET_RAW — run with sudo"
+        hint = "\nraw sockets need root or CAP_NET_RAW — run with sudo" if proc.returncode == 3 else ""
         raise EngineError(f"engine exited {proc.returncode}:{(stderr or '').strip()}{hint}")
     if result is None:
         raise EngineError(f"engine produced no final report. stderr:\n{(stderr or '').strip() or '<empty>'}")
@@ -177,16 +189,16 @@ def _stream(cmd: list, timeout_s: int, on_progress: ProgressCB) -> Dict[str, Any
 
 
 def run_go(url: str, method: str, *, rps: int, workers: int, duration_s: int,
-           timeout_ms: int, body: str = "", ramp_s: int = 0,
-           force_close: bool = False, mode: str = "http",
-           dns_name: str = "", dns_type: str = "A", dns_server: str = "",
-           udp_payload: str = "hackit-ddos-probe", udp_echo: bool = True,
+           timeout_ms: int, body: str = "", ramp_s: int = 0, force_close: bool = False,
+           mode: str = "http", dns_name: str = "", dns_type: str = "A",
+           dns_server: str = "", udp_payload: str = "hackit-ddos-probe",
+           udp_echo: bool = True, waf: bool = False,
            on_progress: ProgressCB = None) -> Dict[str, Any]:
     binary = ensure_built("go")
-    cmd = [
-        str(binary), "-mode", mode, "-rps", str(rps), "-workers", str(workers),
-        "-duration", str(duration_s), "-ramp", str(ramp_s), "-progress-ms", "500",
-    ]
+    cmd = [str(binary), "-mode", mode, "-rps", str(rps), "-workers", str(workers),
+           "-duration", str(duration_s), "-ramp", str(ramp_s), "-progress-ms", "500"]
+    if waf:
+        cmd.append("-waf")
     if mode == "http":
         cmd += ["-url", url, "-method", method, "-timeout-ms", str(timeout_ms)]
         if body:
@@ -202,79 +214,81 @@ def run_go(url: str, method: str, *, rps: int, workers: int, duration_s: int,
         if not udp_echo:
             cmd += ["-udp-echo=false"]
     else:
-        raise EngineError(f"go engine mode must be http|dns|udp, got {mode!r}")
+        raise EngineError(f"go mode must be http|dns|udp, got {mode!r}")
     return _stream(cmd, duration_s, on_progress)
 
 
 def run_c(mode: str, host: str, port: int, *, rps: int, workers: int, duration_s: int,
-          path: str = "/", method: str = "GET", body: str = "",
-          on_progress: ProgressCB = None) -> Dict[str, Any]:
-    if mode not in ("tcp", "http"):
-        raise EngineError(f"c engine mode must be tcp|http, got {mode!r}")
+          path: str = "/", method: str = "GET", body: str = "", tls: bool = False,
+          waf: bool = False, on_progress: ProgressCB = None) -> Dict[str, Any]:
+    if mode not in ("tcp", "http", "https", "icmp"):
+        raise EngineError(f"c mode must be tcp|http|https|icmp, got {mode!r}")
     binary = ensure_built("c")
     threads = max(1, min(workers, C_HARD_MAX_THREADS))
-    cmd = [
-        str(binary), mode, host, str(port),
-        "--duration", str(duration_s), "--threads", str(threads),
-        "--rps", str(rps), "--progress-ms", "500",
-    ]
-    if mode == "http":
+    cmd = [str(binary), mode, host]
+    if mode != "icmp":
+        cmd.append(str(port))
+    cmd += ["--duration", str(duration_s), "--threads", str(threads),
+            "--rps", str(rps)]
+    if mode in ("http", "https"):
         cmd += ["--path", path, "--method", method.upper()]
         if body:
             cmd += ["--body", body]
+        if tls or mode == "https":
+            cmd.append("--tls")
+        if waf:
+            cmd.append("--waf")
     report = _stream(cmd, duration_s, on_progress)
     report["threads"] = threads
     return report
-
-
-def run_icmp(host: str, *, rps: int, workers: int, duration_s: int,
-             on_progress: ProgressCB = None) -> Dict[str, Any]:
-    binary = ensure_built("c")
-    threads = max(1, min(workers, 64))
-    cmd = [
-        str(binary), "icmp", host, "--duration", str(duration_s),
-        "--threads", str(threads), "--rps", str(rps), "--progress-ms", "500",
-    ]
-    report = _stream(cmd, duration_s, on_progress)
-    report["threads"] = threads
-    return report
-
-
-FLOOD_MODES = frozenset({"syn", "ack", "rst", "fin", "psh", "xmas", "null",
-                         "udp", "icmp", "http"})
 
 
 def run_flood(mode: str, host: str, port: int, *, rate: int, threads: int,
-              duration_s: int, size: int = 64, spoof: bool = False,
-              path: str = "/", method: str = "GET", keepalive: int = 1,
-              rand_path: bool = False, read_reply: bool = False,
-              tls: bool = False, on_progress: ProgressCB = None) -> Dict[str, Any]:
+              duration_s: int, size: int = 64, spoof: bool = False, path: str = "/",
+              method: str = "GET", keepalive: int = 1, rand_path: bool = False,
+              read_reply: bool = False, tls: bool = False, waf: bool = False,
+              on_progress: ProgressCB = None) -> Dict[str, Any]:
     """Raw-packet flood. `rate` is packets/second; 0 means unthrottled."""
-    if mode not in FLOOD_MODES:
-        raise EngineError(f"flood mode must be one of {sorted(FLOOD_MODES)}, got {mode!r}")
     binary = ensure_built("flood")
     threads = max(1, min(threads, FLOOD_HARD_MAX_THREADS))
-    cmd = [
-        str(binary), mode, host,
-        "--duration", str(duration_s), "--threads", str(threads),
-        "--rps", str(rate), "--progress-ms", "500",
-    ]
-    if mode == "icmp":
-        pass
-    else:
+    cmd = [str(binary), mode, host]
+    if mode != "icmp":
         cmd.append(str(port))
-    if mode in ("udp", "icmp", "psh", "http"):
+    cmd += ["--duration", str(duration_s), "--threads", str(threads),
+            "--rps", str(rate), "--progress-ms", "500"]
+    if mode in ("udp", "icmp", "psh", "http", "https"):
         cmd += ["--size", str(size)]
     if spoof:
         cmd.append("--spoof")
-    if mode == "http":
+    if waf:
+        cmd.append("--waf")
+    if mode in ("http", "https"):
         cmd += ["--path", path, "--method", method.upper(), "--keepalive", str(keepalive)]
         if rand_path:
             cmd.append("--rand-path")
         if read_reply:
             cmd.append("--read")
-        if tls:
+        if tls or mode == "https":
             cmd.append("--tls")
     report = _stream(cmd, duration_s, on_progress)
     report["threads"] = threads
+    return report
+
+
+def run_slowloris(host: str, port: int, *, sockets: int, threads: int,
+                  duration_s: int, interval_ms: int, path: str = "/",
+                  tls: bool = False, waf: bool = False,
+                  on_progress: ProgressCB = None) -> Dict[str, Any]:
+    binary = ensure_built("slowloris")
+    sockets = max(1, min(sockets, SLOW_HARD_MAX_SOCKETS))
+    threads = max(1, min(threads, sockets))
+    cmd = [str(binary), host, str(port), "--duration", str(duration_s),
+           "--sockets", str(sockets), "--threads", str(threads),
+           "--interval-ms", str(interval_ms), "--path", path]
+    if tls:
+        cmd.append("--tls")
+    if waf:
+        cmd.append("--waf")
+    report = _stream(cmd, duration_s, on_progress)
+    report["sockets"] = sockets
     return report

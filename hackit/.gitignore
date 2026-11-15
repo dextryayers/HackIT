@@ -25,3 +25,9 @@ Thumbs.db
 *.log
 temp/
 results/
+
+hackit/ddos/c/stress_engine
+hackit/ddos/c/flood_engine
+hackit/ddos/c/slowloris
+hackit/ddos/c/*.sha256
+hackit/ddos/go/stresslab
