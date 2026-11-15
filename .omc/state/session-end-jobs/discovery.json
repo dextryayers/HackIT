@@ -6,8 +6,20 @@
       "sessionId": "bfe34fd6-fe38-40fe-ac51-2559b1b48a83",
       "attempts": 0,
       "retryAt": "2026-11-14T13:40:08.772Z",
-      "claimNonce": "0bd7f320-887d-4fe9-97a3-7e3e7beeb95b",
-      "leaseExpiresAt": "2026-11-15T08:41:00.302Z"
+      "claimNonce": "7e55fa44-3903-473c-85c0-f434f74e306d",
+      "leaseExpiresAt": "2026-11-15T09:23:18.186Z"
+    },
+    {
+      "sessionId": "ee2131eb-9203-4829-b9b4-495adfb69449",
+      "attempts": 0,
+      "retryAt": "2026-11-15T09:22:58.741Z",
+      "claimNonce": "6ebe854e-709c-4cc4-a741-94664ddb994f",
+      "leaseExpiresAt": "2026-11-15T09:23:18.186Z"
+    },
+    {
+      "sessionId": "3cce4a9e-e952-496e-a312-8295db229029",
+      "attempts": 0,
+      "retryAt": "2026-11-15T09:24:13.475Z"
     }
   ]
 }

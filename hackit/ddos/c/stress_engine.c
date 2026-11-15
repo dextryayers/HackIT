@@ -47,15 +47,19 @@ typedef struct {
     char     host[256];
     char     port[8];
     char     path[512];
+    char     method[16];
+    char     body[1024];
+    int      body_len;
     int      duration_s;
     int      threads;
-    int      rps;          /* global cap; divided evenly across threads */
+    int      rps;
     int      thread_id;
     uint64_t ok, errors;
     double   lat_us[SAMPLES_PER_THREAD];
-    uint64_t lat_count;    /* reservoir sampling counter */
-    uint64_t lat_filled;   /* samples actually stored */
-    uint16_t icmp_seq;     /* ICMP echo sequence */
+    uint64_t lat_count;
+    uint64_t lat_filled;
+    uint16_t icmp_seq;
+    int      icmp_fd;
 } worker_arg_t;
 
 static atomic_int g_stop;
@@ -127,14 +131,40 @@ static uint16_t icmp_checksum(const void *data, size_t len) {
 }
 
 /* One ICMP echo request -> reply. Needs root or CAP_NET_RAW. */
-static int icmp_ping(const char *host, uint16_t id, uint16_t seq, uint64_t *rtt_us, int *perm_error) {
-    (void)host; /* target pre-resolved in main */
-    *perm_error = 0;
-    int fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
-    if (fd < 0) {
-        if (errno == EPERM || errno == EACCES) *perm_error = 1;
+static int icmp_ping(int fd, uint16_t id, uint16_t seq, uint64_t *rtt_us) {
+    unsigned char payload[16];
+    for (int i = 0; i < 16; i++) payload[i] = (unsigned char)(i * 7 + 3);
+    unsigned char buf[sizeof(struct icmp_echo_hdr) + sizeof(payload)];
+    struct icmp_echo_hdr hdr = { .type = ICMP_ECHO_TYPE, .code = 0,
+                                 .checksum = 0, .id = htons(id), .seq = htons(seq) };
+    memcpy(buf, &hdr, sizeof(hdr));
+    memcpy(buf + sizeof(hdr), payload, sizeof(payload));
+    struct icmp_echo_hdr *p = (struct icmp_echo_hdr *)buf;
+    p->checksum = icmp_checksum(buf, sizeof(buf));
+
+    uint64_t t0 = now_mono_ns();
+    if (sendto(fd, buf, sizeof(buf), 0, (struct sockaddr *)&g_target, g_target_len) < 0)
         return -1;
+
+    uint8_t rbuf[2048];
+    for (;;) {
+        fd_set rfds;
+        FD_ZERO(&rfds); FD_SET(fd, &rfds);
+        struct timeval tv = { 1, 0 };
+        if (select(fd + 1, &rfds, NULL, NULL, &tv) <= 0) return -1;
+        ssize_t n = recv(fd, rbuf, sizeof(rbuf), 0);
+        if (n <= 0) return -1;
+        size_t off = 0;
+        if ((rbuf[0] >> 4) == 4 && n >= 20) off = (size_t)(rbuf[0] & 0x0F) * 4;
+        if ((size_t)n - off < sizeof(struct icmp_echo_hdr)) continue;
+        struct icmp_echo_hdr rep;
+        memcpy(&rep, rbuf + off, sizeof(rep));
+        if (rep.type != ICMP_ECHOREPLY_TYPE) continue;
+        if (ntohs(rep.id) != id || ntohs(rep.seq) != seq) continue;
+        *rtt_us = (now_mono_ns() - t0) / 1000;
+        return 0;
     }
+}
 
     unsigned char payload[16];
     for (int i = 0; i < 16; i++) payload[i] = (unsigned char)(i * 7 + 3);
@@ -214,87 +244,50 @@ static int connect_timeout(int timeout_ms) {
 }
 
 
-static int http_get_status(int fd, const char *host, const char *path) {
-    char req[1024];
+static int http_exchange(int fd, const char *host, const char *path,
+                         const char *method, const char *body, int body_len) {
+    char req[2048];
+    int has_body = (body_len > 0);
     int n = snprintf(req, sizeof(req),
-        "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: hackit-stresslab/1.0\r\nConnection: close\r\n\r\n",
-        path, host);
+        "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: hackit-stresslab/1.1\r\n"
+        "Connection: close\r\n", method, path, host);
     if (n < 0 || (size_t)n >= sizeof(req)) return -1;
+    if (has_body) {
+        int m = snprintf(req + n, sizeof(req) - (size_t)n, "Content-Length: %d\r\n\r\n", body_len);
+        if (m < 0 || (size_t)(n + m) >= sizeof(req)) return -1;
+        n += m;
+        size_t room = sizeof(req) - (size_t)n;
+        size_t copy = (size_t)body_len < room ? (size_t)body_len : room;
+        memcpy(req + n, body, copy);
+        n += (int)copy;
+    } else {
+        if ((size_t)n + 2 >= sizeof(req)) return -1;
+        memcpy(req + n, "\r\n", 2);
+        n += 2;
+    }
     if (send(fd, req, (size_t)n, MSG_NOSIGNAL) != n) return -1;
 
     char buf[RECV_BUF];
     ssize_t got = recv(fd, buf, sizeof(buf) - 1, 0);
     if (got <= 0) return -1;
     buf[got] = '\0';
-
     int status = -1;
-    if (sscanf(buf, "HTTP/1.%*s %d", &status) != 1) {
-        /* Tolerate bare "HTTP/1.1 200" as well as minor-version variants. */
-        char *sp = strchr(buf, ' ');
-        if (sp) status = atoi(sp + 1);
-    }
+    if (strncmp(buf, "HTTP/", 5) == 0) status = atoi(buf + 9);
     return status;
 }
 
 static void *worker(void *argp) {
     worker_arg_t *w = argp;
-    /* Per-worker rate: global cap split evenly. */
-    uint64_t interval_ns = (uint64_t)1000000000ull * (uint64_t)w->threads / (uint64_t)w->rps;
-    if (interval_ns == 0) interval_ns = 1000000; /* 1 ms floor */
-
-    double deadline = now_mono_s() + (double)w->duration_s;
-    while (!atomic_load(&g_stop) && now_mono_s() < deadline) {
-        uint64_t t0 = now_mono_ns();
-
-        if (w->mode == MODE_ICMP) {
-            uint16_t id = (uint16_t)((getpid() & 0xFF) << 8 | (w->thread_id & 0xFF));
-            uint16_t seq = (uint16_t)++w->icmp_seq;
-            uint64_t rtt = 0;
-            int perm_error = 0;
-            if (icmp_ping(w->host, id, seq, &rtt, &perm_error) == 0) {
-                atomic_fetch_add(&g_ok, 1);
-                sample_add(w, (double)rtt);
-                uint64_t spent = now_mono_ns() - t0;
-                if (spent < interval_ns) {
-                    struct timespec ts = { (time_t)((interval_ns - spent) / 1000000000ull),
-                                           (long)((interval_ns - spent) % 1000000000ull) };
-                    nanosleep(&ts, NULL);
-                }
-                continue;
-            }
-            atomic_fetch_add(&g_err, 1);
-            if (perm_error) { atomic_store(&g_perm, 1); atomic_store(&g_stop, 1); }
-        } else {
-            int fd = connect_timeout(CONNECT_TIMEOUT_MS);
-            if (fd < 0) {
-                atomic_fetch_add(&g_err, 1);
-            } else {
-                if (w->mode == MODE_TCP) {
-                    atomic_fetch_add(&g_ok, 1);
-                } else {
-                    int status = http_get_status(fd, w->host, w->path);
-                    if (status > 0 && status < 500) atomic_fetch_add(&g_ok, 1);
-                    else atomic_fetch_add(&g_err, 1);
-                }
-                close(fd);
-            }
-        }
-
-        double us = (double)(now_mono_ns() - t0) / 1000.0;
-        if (w->mode != MODE_ICMP) {
-            sample_add(w, us);
-        }
-
-        uint64_t spent = now_mono_ns() - t0;
-        if (spent < interval_ns) {
-            struct timespec ts = { (time_t)((interval_ns - spent) / 1000000000ull),
-                                   (long)((interval_ns - spent) % 1000000000ull) };
-            nanosleep(&ts, NULL);
+    uint64_t rtt = 0;
+            if (icmp_ping(w->icmp_fd, id, seq, &rtt) == 0) {
+    if (w->mode == MODE_ICMP) {
+        w->icmp_fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
+        if (w->icmp_fd < 0 && (errno == EPERM || errno == EACCES)) {
+            atomic_store(&g_perm, 1);
+            atomic_store(&g_stop, 1);
+            return NULL;
         }
     }
-
-    sample_flush(w);
-    return NULL;
 }
 
 static int cmp_double(const void *a, const void *b) {

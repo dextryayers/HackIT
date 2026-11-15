@@ -34,13 +34,15 @@ from rich import box
 from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
+from rich.prompt import Prompt
 from rich.table import Table
 from rich.text import Text
 
 from hackit.ddos import engines
 from hackit.ddos.scope import (
     HARD_MAX_DURATION_S,
-    HARD_MAX_RPS,
+    HARD_MAX_PPS,
+    engine_kind,
     HARD_MAX_WORKERS,
     ScopeError,
     check_run,
@@ -54,19 +56,25 @@ AUDIT_LOG = Path.home() / ".hackit" / "ddos" / "audit.log"
 AUDIT_MAX_BYTES = 5 * 1024 * 1024
 
 LAB_MAX_RPS = 500
+LAB_MAX_PPS = 20000          # raw-packet lab ceiling; flood_engine can do far more
 LAB_MAX_WORKERS = 16
 LAB_MAX_DURATION_S = 60
 
-# Interactive defaults — deliberately conservative; formal runs use scope files.
 INTERACTIVE_DEFAULT_RPS = 20
+INTERACTIVE_DEFAULT_PPS = 2000
 INTERACTIVE_DEFAULT_WORKERS = 4
 INTERACTIVE_DEFAULT_DURATION_S = 10
 INTERACTIVE_MAX_RPS = 1000
+INTERACTIVE_MAX_PPS = 200000
 INTERACTIVE_MAX_WORKERS = 64
 INTERACTIVE_MAX_DURATION_S = 300
 
 AUTH_PHRASE = "yes"
 HTTP_METHODS = ["get", "post", "put", "patch", "delete", "head", "options", "mixed"]
+
+L7_PROFILES = ["http", "http-raw", "dns", "udp", "ws"]
+L4_PROFILES = ["syn", "ack", "rst", "fin", "psh", "xmas", "null", "udp-flood", "icmp-flood"]
+ALL_PROFILES = L7_PROFILES + L4_PROFILES
 
 BANNER = [
     "██████╗ ██████╗  ██████╗  ███████╗",
@@ -452,62 +460,74 @@ def _run_engine(kind: str, *, on_progress, **kwargs) -> dict:
 
 
 def _launch_engine(profile, target, method, body, port, ramp, force_close,
-                   raw_path, rps, workers, duration, timeout_ms,
+                   raw_path, rate, workers, duration, timeout_ms,
                    dns_name, dns_type, dns_server, udp_payload, udp_echo,
+                   spoof, keepalive, rand_path, read_reply, size,
                    on_progress):
     """Route a profile to its engine and return the raw report dict."""
     host = _host_of(target)
+
+    if profile in L4_PROFILES:
+        mode = {"udp-flood": "udp", "icmp-flood": "icmp"}.get(profile, profile)
+        tls = port == 443 and mode == "http"
+        return engines.run_flood(mode, host, port, rate=rate, threads=workers,
+                                 duration_s=duration, size=size, spoof=spoof,
+                                 path=raw_path, method=method, keepalive=keepalive,
+                                 rand_path=rand_path, read_reply=read_reply,
+                                 tls=tls, on_progress=on_progress)
+
     if profile == "http":
-        return engines.run_go(_http_url(target), method.upper(), rps=rps, workers=workers,
+        return engines.run_go(_http_url(target), method.upper(), rps=rate, workers=workers,
                               duration_s=duration, timeout_ms=timeout_ms, body=body,
                               ramp_s=ramp, force_close=force_close, mode="http",
                               on_progress=on_progress)
     if profile == "http-raw":
-        return engines.run_c("http", host, port, rps=rps, workers=workers,
-                             duration_s=duration, path=raw_path, on_progress=on_progress)
+        return engines.run_c("http", host, port, rps=rate, workers=workers,
+                             duration_s=duration, path=raw_path, method=method,
+                             body=body, on_progress=on_progress)
     if profile == "tcp":
-        return engines.run_c("tcp", host, port, rps=rps, workers=workers,
+        return engines.run_c("tcp", host, port, rps=rate, workers=workers,
                              duration_s=duration, on_progress=on_progress)
     if profile == "icmp":
-        return engines.run_icmp(host, rps=rps, workers=workers,
+        return engines.run_icmp(host, rps=rate, workers=workers,
                                 duration_s=duration, on_progress=on_progress)
     if profile == "dns":
         if not dns_name:
             raise engines.EngineError("dns profile requires --dns-name")
-        if target.lower() == "system":
-            dns_server = ""
-        else:
-            dns_server = target
-        return engines.run_go("", "", rps=rps, workers=workers, duration_s=duration,
+        dns_server = "" if target.lower() == "system" else target
+        return engines.run_go("", "", rps=rate, workers=workers, duration_s=duration,
                               timeout_ms=timeout_ms, ramp_s=ramp, mode="dns",
                               dns_name=dns_name, dns_type=dns_type.upper(),
                               dns_server=dns_server, on_progress=on_progress)
     if profile == "udp":
         udp_target = target if ":" in target else f"{target}:{port}"
-        return engines.run_go(udp_target, "", rps=rps, workers=workers, duration_s=duration,
+        return engines.run_go(udp_target, "", rps=rate, workers=workers, duration_s=duration,
                               timeout_ms=timeout_ms, ramp_s=ramp, mode="udp",
                               udp_payload=udp_payload, udp_echo=udp_echo,
                               on_progress=on_progress)
     if profile == "ws":
         if not target.lower().startswith(_WS_BASE_SCHEMES):
             raise engines.EngineError("ws profile needs a ws:// or wss:// URL")
-        return _ws_run(target, rps, workers, duration, on_progress)
+        return _ws_run(target, rate, workers, duration, on_progress)
     raise engines.EngineError(f"unknown profile: {profile}")
 
 
 def _execute(*, label: str, profile: str, target: str, method: str, body: str,
-             port: int, ramp: int, force_close: bool, rps: int, workers: int,
+             port: int, ramp: int, force_close: bool, rate: int, workers: int,
              duration: int, timeout_ms: int, meta: dict, verbose: bool,
              output: str | None, raw_path: str = "/",
              dns_name: str = "", dns_type: str = "A", dns_server: str = "",
-             udp_payload: str = "hackit-ddos-probe", udp_echo: bool = True) -> None:
+             udp_payload: str = "hackit-ddos-probe", udp_echo: bool = True,
+             spoof: bool = False, keepalive: int = 1, rand_path: bool = False,
+             read_reply: bool = False, size: int = 64) -> None:
     started = time.monotonic()
     method_label = {
         "http": method.upper(), "http-raw": f"HTTP-RAW:{port}", "tcp": f"TCP:{port}",
         "dns": dns_type.upper(), "udp": "UDP", "icmp": "ICMP", "ws": "WS",
-    }.get(profile, profile.upper())
+        "udp-flood": f"UDP-FLOOD:{port}", "icmp-flood": "ICMP-FLOOD",
+    }.get(profile, f"{profile.upper()}:{port}")
     dashboard = _Dashboard(label=label, target=target, method=method_label,
-                           rps=rps, workers=workers, duration_s=duration, started=started)
+                           rps=rate, workers=workers, duration_s=duration, started=started)
 
     meta = {**meta, "started_utc": datetime.now(timezone.utc).isoformat()}
     try:
@@ -535,13 +555,15 @@ def _execute(*, label: str, profile: str, target: str, method: str, body: str,
                     on_progress(p)
                     live.update(dashboard.render())
                 report = _launch_engine(profile, target, method, body, port, ramp, force_close,
-                                        raw_path, rps, workers, duration, timeout_ms,
-                                        dns_name, dns_type, dns_server, udp_payload, udp_echo,
-                                        live_progress)
+                                    raw_path, rate, workers, duration, timeout_ms,
+                                    dns_name, dns_type, dns_server, udp_payload, udp_echo,
+                                    spoof, keepalive, rand_path, read_reply, size,
+                                    live_progress)
         else:
             report = _launch_engine(profile, target, method, body, port, ramp, force_close,
-                                    raw_path, rps, workers, duration, timeout_ms,
+                                    raw_path, rate, workers, duration, timeout_ms,
                                     dns_name, dns_type, dns_server, udp_payload, udp_echo,
+                                    spoof, keepalive, rand_path, read_reply, size,
                                     on_progress)
     except engines.EngineError as exc:
         console.print(f"[bold red]engine failure[/bold red] — {exc}")
@@ -612,8 +634,8 @@ def check(scope, target, approval, profile, port):
 @click.option("--target", required=True, help="URL (http) or bare host (tcp).")
 @click.option("--scope", type=click.Path(exists=True, dir_okay=False), help="Signed scope file (JSON) — required for remote targets.")
 @click.option("--approval", help="Approval reference; must match scope approval_ref.")
-@click.option("--profile", type=click.Choice(["http", "http-raw", "tcp", "dns", "udp", "icmp", "ws"]), default="http", show_default=True)
-@click.option("--port", default=80, show_default=True, type=int, help="Port for tcp/http-raw/udp profiles.")
+@click.option("--profile", type=click.Choice(ALL_PROFILES), default="http", show_default=True)
+@click.option("--port", default=80, show_default=True, type=int, help="Port for tcp/http-raw/udp/flood profiles.")
 @click.option("--dns-name", default="", help="Name to resolve (dns profile), e.g. example.com.")
 @click.option("--dns-type", type=click.Choice(["A", "AAAA", "MX", "TXT", "NS"]), default="A", show_default=True)
 @click.option("--udp-payload", default="hackit-ddos-probe", show_default=True)
@@ -623,16 +645,23 @@ def check(scope, target, approval, profile, port):
 @click.option("--body", default="", help="Request body for POST/PUT/PATCH.")
 @click.option("--ramp", default=0, show_default=True, type=int, help="Seconds to linearly ramp 1 → --rps.")
 @click.option("--close", "force_close", is_flag=True, help="Send Connection: close (handshake stress).")
-@click.option("--path", default="/", show_default=True, help="HTTP path (http-raw profile).")
-@click.option("--rps", default=50, show_default=True, type=int)
+@click.option("--path", default="/", show_default=True, help="HTTP path (http-raw/flood http profiles).")
+@click.option("--rps", default=50, show_default=True, type=int, help="Rate cap: requests/s (L7) or packets/s (L4).")
 @click.option("--workers", default=10, show_default=True, type=int)
 @click.option("--duration", default=10, show_default=True, type=int, help="Seconds; capped by scope and hard limit.")
 @click.option("--timeout-ms", default=5000, show_default=True, type=int, help="Per-request timeout (http profile).")
+@click.option("--spoof", is_flag=True, help="Randomise the source IP (raw L4 profiles; needs root).")
+@click.option("--keepalive", default=1, show_default=True, type=int,
+              help="Requests per connection, 0 = never reconnect (flood http).")
+@click.option("--rand-path", is_flag=True, help="Append a random query string per request (flood http).")
+@click.option("--read", "read_reply", is_flag=True, help="Also read the status line (flood http).")
+@click.option("--size", default=64, show_default=True, type=int, help="Payload bytes (flood udp/icmp/psh/http).")
 @click.option("--output", type=click.Path(dir_okay=False), help="Write the full JSON report here.")
 @click.option("-v", "--verbose", is_flag=True, help="Show resolved target, effective caps and audit path.")
 def run(target, scope, approval, profile, port, method, body, ramp, force_close, path,
         rps, workers, duration, timeout_ms, output, verbose,
-        dns_name, dns_type, udp_payload, udp_no_echo):
+        dns_name, dns_type, udp_payload, udp_no_echo,
+        spoof, keepalive, rand_path, read_reply, size):
     """Run a scripted load test. Remote targets require --scope and --approval."""
     host = _host_of(target)
     loopback = (profile == "dns" and target.lower() == "system") or _is_loopback(host)
@@ -642,8 +671,11 @@ def run(target, scope, approval, profile, port, method, body, ramp, force_close,
         sys.exit(2)
 
     if loopback:
-        eff_rps, eff_workers, eff_duration = min(rps, LAB_MAX_RPS), min(workers, LAB_MAX_WORKERS), min(duration, LAB_MAX_DURATION_S)
-        meta = _audit_meta("local", "lab-loopback", profile, target, eff_rps, eff_workers, eff_duration)
+        cap = LAB_MAX_PPS if profile in L4_PROFILES else LAB_MAX_RPS
+        eff_rate = min(rps, cap)
+        eff_workers = min(workers, LAB_MAX_WORKERS)
+        eff_duration = min(duration, LAB_MAX_DURATION_S)
+        meta = _audit_meta("local", "lab-loopback", profile, target, eff_rate, eff_workers, eff_duration)
     else:
         if not scope or not approval:
             console.print("[bold red]refused[/bold red] — remote targets require --scope and --approval (loopback works without them)")
@@ -651,20 +683,29 @@ def run(target, scope, approval, profile, port, method, body, ramp, force_close,
         try:
             sc = load_scope(scope)
             check_run(sc, host, approval)
-            limits = effective_limits(sc, rps, workers, duration)
+            limits = effective_limits(sc, profile, rps, workers, duration)
         except ScopeError as exc:
             console.print(f"[bold red]refused[/bold red] — {exc}")
             sys.exit(2)
-        eff_rps, eff_workers, eff_duration = limits.rps, limits.workers, limits.duration_s
+        eff_rate, eff_workers, eff_duration = limits.rate, limits.workers, limits.duration_s
         meta = _audit_meta(sc.operator, sc.approval_ref, profile, target,
-                           eff_rps, eff_workers, eff_duration, sc.expires.isoformat())
+                           eff_rate, eff_workers, eff_duration, sc.expires.isoformat())
+
+    #  _execute(label="loopback lab", profile=profile, target=target,
+    #          method=method, body=body, port=port, ramp=ramp, force_close=force_close,
+    #          rate=eff_rate, workers=eff_workers, duration=eff_duration, timeout_ms=2000,
+    #          meta=meta, verbose=verbose, output=None,
+    #          dns_name=dns_name, dns_type=dns_type, dns_server=target,
+    #          udp_payload=udp_payload, udp_echo=not udp_no_echo, spoof=spoof)
 
     _execute(label="scoped run" if not loopback else "loopback", profile=profile, target=target,
              method=method, body=body, port=port, ramp=ramp, force_close=force_close,
-             rps=eff_rps, workers=eff_workers, duration=eff_duration, timeout_ms=timeout_ms,
+             rate=eff_rate, workers=eff_workers, duration=eff_duration, timeout_ms=timeout_ms,
              meta=meta, verbose=verbose, output=output, raw_path=path,
              dns_name=dns_name, dns_type=dns_type, dns_server=target,
-             udp_payload=udp_payload, udp_echo=not udp_no_echo)
+             udp_payload=udp_payload, udp_echo=not udp_no_echo,
+             spoof=spoof, keepalive=keepalive, rand_path=rand_path,
+             read_reply=read_reply, size=size)
 
 
 @ddos.command()
@@ -683,8 +724,9 @@ def run(target, scope, approval, profile, port, method, body, ramp, force_close,
 @click.option("--workers", default=4, show_default=True, type=int)
 @click.option("--duration", default=5, show_default=True, type=int)
 @click.option("-v", "--verbose", is_flag=True)
+@click.option("--spoof", is_flag=True)
 def lab(target, profile, port, dns_name, dns_type, udp_payload, udp_no_echo,
-        method, body, ramp, force_close, rps, workers, duration, verbose):
+        method, body, ramp, force_close, rps, workers, duration, verbose, spoof):
     """Loopback-only smoke test. No scope file, tight caps."""
     host = _host_of(target)
     dns_system = profile == "dns" and target.lower() == "system"
@@ -705,6 +747,14 @@ def lab(target, profile, port, dns_name, dns_type, udp_payload, udp_no_echo,
              dns_name=dns_name, dns_type=dns_type, dns_server=target,
              udp_payload=udp_payload, udp_echo=not udp_no_echo)
 
+# def _ask_int(prompt: str, default: int, lo: int, hi: int) -> int:
+#     raw = Prompt.ask(prompt, default=str(default))
+#     try:
+#         return _clamp(int(raw or default), lo, hi)
+#     except ValueError:
+#         console.print(f"[yellow]bukan angka — pakai {default}[/yellow]")
+#         return _clamp(default, lo, hi)
+    
 
 @ddos.command(name="console")
 def ddos_console():
