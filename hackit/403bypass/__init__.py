@@ -59,7 +59,7 @@ VERDICT_STYLE = {
     "error": (FG_GRAY, "ERROR"),
 }
 
-BOX_WIDTH = 88
+BOX_WIDTH = 92
 
 VERDICT_ORDER = [
     "bypass",
@@ -258,7 +258,11 @@ def _render_meta(data: dict[str, Any], requested: str) -> None:
     for i, (label, value) in enumerate(rows):
         last = i == len(rows) - 1
         glyph = "└" if last else "├"
-        print(_c(glyph + "─ ", FG_GRAY) + _c(f"{label:<17}", BOLD, FG_CYAN) + _c("│ ", FG_GRAY) + str(value))
+        left = _c(glyph + "─ ", FG_GRAY) + _c(f"{label:<17}", BOLD, FG_CYAN) + _c("│ ", FG_GRAY)
+        plain_left = glyph + "─ " + f"{label:<17}" + "│ "
+        room = BOX_WIDTH + 2 - len(plain_left) - 1
+        val = _trunc(str(value), room)
+        print(left + val)
 
 
 def _render_summary(results: list[dict[str, Any]]) -> dict[str, int]:
@@ -290,57 +294,123 @@ def _render_bypass_table(results: list[dict[str, Any]], verify: bool = True) -> 
         print()
         print(_c("  no open responses — every payload stayed blocked", BOLD, FG_RED))
         return
-
     expected_verify = bool(verify)
-
     _section_header("OPEN RESPONSES", f"{len(rows)} technique(s) reached the application layer", FG_GREEN)
 
-    columns = [
+    # Fixed-width cells keep every row aligned in any monospace font.
+    cols = [
         ("#", 4),
-        ("STATUS", 7),
-        ("VERDICT", 10),
-        ("METHOD", 8),
+        ("STS", 4),
+        ("VERDICT", 9),
+        ("METHOD", 7),
         ("LEN", 8),
-        ("SIM", 6),
-        ("OK", 4),
-        ("TECHNIQUE", 0),
+        ("SIM", 5),
+        ("OK", 3),
     ]
-    header = "  "
-    for name, w in columns:
-        if w:
-            header += name.ljust(w)
-        else:
-            header += name
-    print(_c(header, BOLD, FG_WHITE))
-    print(_c("  " + "─" * BOX_WIDTH, FG_GRAY))
+    # Table total width == BOX_WIDTH:
+    #   1 border + per col (1 + w + 1 + 1 border) + (1 + tech + 1 + 1 border)
+    tech_width = BOX_WIDTH + 2 - 4 - sum(w + 3 for _, w in cols)
+    if tech_width < 20:
+        tech_width = 20
+
+    def fit(value: str, width: int, align: str) -> str:
+        value = str(value)
+        if len(value) > width:
+            value = (value[: width - 1] + "…") if width > 1 else value[:width]
+        if align == "right":
+            return value.rjust(width)
+        if align == "center":
+            return value.center(width)
+        return value.ljust(width)
+
+    def rule(left: str, mid: str, right: str) -> None:
+        segs = ["─" * (w + 2) for _, w in cols] + ["─" * (tech_width + 2)]
+        print(_c(left + mid.join(segs) + right, FG_GRAY))
+
+    def row_line(cells: list[tuple[str, str, str, str]]) -> None:
+        # cells: (plain_text, align, color, style)
+        parts = [_c("│", FG_GRAY)]
+        for (text, align, color, style), (_, width) in zip(cells, cols):
+            parts.append(" ")
+            parts.append(_c(fit(text, width, align), style, color))
+            parts.append(" ")
+            parts.append(_c("│", FG_GRAY))
+        text, align, color, style = cells[-1]
+        parts.append(" ")
+        parts.append(_c(fit(text, tech_width, align), style, color))
+        parts.append(" ")
+        parts.append(_c("│", FG_GRAY))
+        print("".join(parts))
+
+    def row_plain(cells: list[tuple[str, str, str, str]]) -> None:
+        # same layout but the last cell is the technique
+        parts = [_c("│", FG_GRAY)]
+        for (text, align, color, style), (_, width) in zip(cells[:-1], cols):
+            parts.append(" ")
+            parts.append(_c(fit(text, width, align), style, color))
+            parts.append(" ")
+            parts.append(_c("│", FG_GRAY))
+        text, align, color, style = cells[-1]
+        parts.append(" ")
+        parts.append(_c(fit(text, tech_width, align), style, color))
+        parts.append(" ")
+        parts.append(_c("│", FG_GRAY))
+        print("".join(parts))
+
+    rule("┌", "┬", "┐")
+    row_plain(
+        [(name, "left", FG_WHITE, BOLD) for name, _ in cols]
+        + [("TECHNIQUE", "left", FG_WHITE, BOLD)]
+    )
+    rule("├", "┼", "┤")
+
     for idx, r in enumerate(rows, 1):
         verdict = r.get("verdict", "neutral")
         color, label = VERDICT_STYLE.get(verdict, (FG_WHITE, verdict.upper()))
-        payload = r.get("payload", "")
         sim = r.get("baseline_similarity") or 0.0
         if r.get("verified") is True:
-            verified, vcolor = "✓", FG_GREEN
+            ok, ok_color = "Y", FG_GREEN
         elif verdict == "bypass" and expected_verify:
-            verified, vcolor = "?", FG_YELLOW
+            ok, ok_color = "?", FG_YELLOW
         else:
-            verified, vcolor = "·", FG_GRAY
-        line = "  "
-        line += _c(f"#{idx:<3}", FG_GRAY)
-        line += _c(f"{r.get('status_code', 0):<7}", BOLD, color)
-        line += _c(f"{label:<10}", color)
-        line += _c(f"{r.get('method', 'GET'):<8}", FG_WHITE)
-        line += _c(f"{r.get('length', 0):<8}", FG_GRAY)
-        line += _c(f"{sim:<6.2f}", FG_GRAY)
-        line += _c(f"{verified:<4}", vcolor)
-        line += _c(_trunc(payload, 36), FG_WHITE)
-        print(line)
+            ok, ok_color = "-", FG_GRAY
+        payload = r.get("payload", "") or ""
+
+        cells = [
+            (f"#{idx}", "left", FG_GRAY, ""),
+            (str(r.get("status_code", 0)), "left", color, BOLD),
+            (label, "left", color, ""),
+            (r.get("method", "GET"), "left", FG_WHITE, ""),
+            (str(r.get("length", 0)), "right", FG_GRAY, ""),
+            (f"{sim:.2f}", "right", FG_GRAY, ""),
+            (ok, "center", ok_color, BOLD),
+            (payload, "left", FG_WHITE, ""),
+        ]
+        row_plain(cells)
+
+        def subline(label_text: str, value: str, label_color: str, value_color: str) -> None:
+            # 1 wall + 7 lead spaces + label + body + pad + 1 wall == 94
+            inner = BOX_WIDTH + 2
+            avail = inner - 2 - 7 - len(label_text)
+            body = _trunc(value, max(0, avail))
+            pad = max(0, inner - 2 - 7 - len(label_text) - len(body))
+            print(
+                _c("│", FG_GRAY)
+                + " " * 7
+                + _c(label_text, label_color)
+                + _c(body, value_color)
+                + " " * pad
+                + _c("│", FG_GRAY)
+            )
 
         location = r.get("location")
         if location:
-            print("       " + _c("→ " + location, DIM, FG_CYAN))
+            subline("-> ", location, FG_CYAN, DIM + FG_CYAN)
         title = r.get("title")
         if title:
-            print("       " + _c("title: " + _trunc(title, 60), DIM, FG_MAGENTA))
+            subline("title: ", title, FG_MAGENTA, DIM + FG_MAGENTA)
+
+    rule("└", "┴", "┘")
 
 
 def _render_techniques(results: list[dict[str, Any]], only_success: bool) -> None:
@@ -360,14 +430,43 @@ def _render_techniques(results: list[dict[str, Any]], only_success: bool) -> Non
         counter[family] += 1
         examples.setdefault(family, r)
 
+    verdict_w = 11
+    count_w = 8
+    tech_w = (BOX_WIDTH + 2) - 10 - verdict_w - count_w
+
+    def fit(value: str, width: int, align: str = "left") -> str:
+        value = str(value)
+        if len(value) > width:
+            value = value[: width - 1] + "…"
+        return value.rjust(width) if align == "right" else value.ljust(width)
+
+    def rule(left: str, mid: str, right: str) -> None:
+        segs = ["─" * (tech_w + 2), "─" * (verdict_w + 2), "─" * (count_w + 2)]
+        print(_c(left + mid.join(segs) + right, FG_GRAY))
+
+    def line(cells: list[tuple[str, int, str, str, str]]) -> None:
+        parts = [_c("│", FG_GRAY)]
+        for text, width, align, color, style in cells:
+            parts.append(" " + _c(fit(text, width, align), style, color) + " " + _c("│", FG_GRAY))
+        print("".join(parts))
+
+    rule("┌", "┬", "┐")
+    line([
+        ("TECHNIQUE", tech_w, "left", FG_WHITE, BOLD),
+        ("VERDICT", verdict_w, "left", FG_WHITE, BOLD),
+        ("HITS", count_w, "right", FG_WHITE, BOLD),
+    ])
+    rule("├", "┼", "┤")
     for family, count in counter.most_common():
         sample = examples[family]
         verdict = sample.get("verdict", "blocked")
         color, label = VERDICT_STYLE.get(verdict, (FG_RED, verdict.upper()))
-        name = _c(f"{family:<28}", FG_WHITE)
-        body = "  " + name + _c(f"{label:<10}", color) + _c(f"{count:>4} hit(s)", FG_GRAY)
-        print(body)
-
+        line([
+            (family, tech_w, "left", FG_WHITE, ""),
+            (label, verdict_w, "left", color, ""),
+            (str(count), count_w, "right", FG_GRAY, ""),
+        ])
+    rule("└", "┴", "┘")
     print()
     print(_c("  run with --verbose to list every rejected payload", DIM, FG_GRAY))
 
@@ -376,16 +475,24 @@ def _render_clusters(data: dict[str, Any]) -> None:
     clusters = data.get("clusters") or []
     if not clusters:
         return
-    # Keep only fingerprints from non-error responses — 5xx bodies vary per
-    # request and drown the signal.
     interesting = [c for c in clusters if not c.startswith(("5", "0"))]
     if not interesting:
         return
     _section_header("RESPONSE CLUSTERS", "distinct server fingerprints observed", FG_YELLOW)
-    for c in interesting[:15]:
-        print(_c("  • ", FG_YELLOW) + _c(str(c), FG_WHITE))
-    if len(interesting) > 15:
-        print(_c(f"  … {len(interesting) - 15} more", DIM, FG_GRAY))
+
+    inner = BOX_WIDTH
+    shown = interesting[:15]
+    header_txt = "  STATUS    HASH        LENGTH   COUNT    TITLE"
+    print(_c("┌" + "─" * BOX_WIDTH + "┐", FG_YELLOW))
+    print(_c("│", FG_YELLOW) + _c(header_txt.ljust(inner)[:inner], BOLD, FG_WHITE) + _c("│", FG_YELLOW))
+    print(_c("├" + "─" * BOX_WIDTH + "┤", FG_YELLOW))
+    for c in shown:
+        text = _trunc(str(c), inner - 2)
+        print(_c("│", FG_YELLOW) + " " + _c(text.ljust(inner - 2), FG_WHITE) + " " + _c("│", FG_YELLOW))
+    if len(interesting) > len(shown):
+        note = f"  … {len(interesting) - len(shown)} more"
+        print(_c("│", FG_YELLOW) + _c(note.ljust(inner - 2), DIM, FG_GRAY) + " " + _c("│", FG_YELLOW))
+    print(_c("└" + "─" * BOX_WIDTH + "┘", FG_YELLOW))
 
 
 def _render_verbose(results: list[dict[str, Any]]) -> None:
@@ -468,7 +575,7 @@ def run_bypass_cli(
     print(_c("  ▶ target    ", BOLD, FG_CYAN) + _c(url, FG_WHITE))
     print(_c("  ▶ workers   ", BOLD, FG_CYAN) + _c(str(threads), FG_WHITE))
     print(_c("  ▶ timeout   ", BOLD, FG_CYAN) + _c(f"{timeout}s", FG_WHITE))
-    print(_c("  ▶ baseline  ", BOLD, FG_CYAN) + _c("comparing each 2xx against a random 404 probe", DIM, FG_GRAY))
+    print(_c("  ▶ baseline  ", BOLD, FG_CYAN) + _c("5 probes + trigram similarity scoring", DIM, FG_GRAY))
     print()
 
     run = run_engine(url, threads=threads, timeout=timeout)
