@@ -1,11 +1,12 @@
-// 403bypass engine — industrial-grade 403 / WAF bypass fuzzer.
+// 403bypass engine — industrial-grade 403 / WAF authorization bypass fuzzer.
 //
 // Protocol: one JSON object on stdout.
 //
-//	{"target":..., "waf":..., "baseline":{...}, "requested_status":...,
-//	 "results":[...], "clusters":[...], "duration_ms":..., "version":...}
+//	{"target":..., "waf":..., "baselines":[...], "requested_status":...,
+//	 "results":[...], "clusters":[...], "confirmed":[...], "duration_ms":...,
+//	 "version":...}
 //
-// Flags: -url -threads -timeout -insecure
+// Flags: -url -threads -timeout -insecure -verify
 package main
 
 import (
@@ -22,14 +23,15 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 )
 
-const engineVersion = "2.0.0"
+const engineVersion = "3.0.0"
 
-const maxBodyBytes = 4 * 1024 * 1024 // hard cap per response to avoid memory blowup
+const maxBodyBytes = 4 * 1024 * 1024
 
 // ---------- result types ----------
 
@@ -47,30 +49,46 @@ type Result struct {
 	Duration   float64 `json:"duration_ms"`
 	Error      string  `json:"error,omitempty"`
 	SameAsBase bool    `json:"same_as_baseline"`
+	Similarity float64 `json:"baseline_similarity"`
 	Verdict    string  `json:"verdict"`
+	Verified   bool    `json:"verified,omitempty"`
+
+	shingles map[uint64]struct{} `json:"-"`
 }
 
 type Baseline struct {
-	URL      string  `json:"url"`
-	Status   int     `json:"status_code"`
-	Length   int     `json:"length"`
-	BodyHash string  `json:"body_hash"`
-	Title    string  `json:"title"`
-	Server   string  `json:"server"`
-	FinalURL string  `json:"final_url"`
-	Duration float64 `json:"duration_ms"`
-	Error    string  `json:"error,omitempty"`
+	URL      string              `json:"url"`
+	Status   int                 `json:"status_code"`
+	Length   int                 `json:"length"`
+	BodyHash string              `json:"body_hash"`
+	Title    string              `json:"title"`
+	Server   string              `json:"server"`
+	FinalURL string              `json:"final_url"`
+	Duration float64             `json:"duration_ms"`
+	Error    string              `json:"error,omitempty"`
+	Shingles map[uint64]struct{} `json:"-"`
+}
+
+type Confirmed struct {
+	Method     string  `json:"method"`
+	Payload    string  `json:"payload"`
+	Type       string  `json:"type"`
+	Status     int     `json:"status_code"`
+	Length     int     `json:"length"`
+	Title      string  `json:"title"`
+	Similarity float64 `json:"baseline_similarity"`
 }
 
 type Output struct {
-	Target    string   `json:"target"`
-	WAF       string   `json:"waf"`
-	Baseline  Baseline `json:"baseline"`
-	Requested string   `json:"requested_status"`
-	Results   []Result `json:"results"`
-	Clusters  []string `json:"clusters"`
-	Duration  float64  `json:"duration_ms"`
-	Version   string   `json:"version"`
+	Target    string      `json:"target"`
+	WAF       string      `json:"waf"`
+	Baselines []Baseline  `json:"baselines"`
+	Requested string      `json:"requested_status"`
+	Results   []Result    `json:"results"`
+	Clusters  []string    `json:"clusters"`
+	Confirmed []Confirmed `json:"confirmed"`
+	Duration  float64     `json:"duration_ms"`
+	Version   string      `json:"version"`
 }
 
 // ---------- main ----------
@@ -80,6 +98,7 @@ func main() {
 	threads := flag.Int("threads", 60, "Concurrent workers")
 	timeout := flag.Int("timeout", 12, "Per-request timeout seconds")
 	insecure := flag.Bool("insecure", true, "Accept invalid TLS")
+	verify := flag.Bool("verify", true, "Re-issue each 2xx candidate to confirm stability")
 	flag.Parse()
 
 	if *targetURL == "" {
@@ -95,21 +114,28 @@ func main() {
 	client := buildClient(*insecure, *timeout)
 	start := time.Now()
 
-	base := fetchBaseline(client, *targetURL, *timeout)
-	waf := detectWAF(base.Server)
+	baselines := fetchBaselines(client, *targetURL, *timeout)
+	waf := detectWAF(firstServer(baselines))
 	payloads := generatePayloads(u.Host, u.Path)
 	results := runBypasses(client, *targetURL, payloads, *threads, *timeout)
 
-	classify(results, base)
+	classifyAll(results, baselines)
+
+	if *verify {
+		verifyCandidates(client, results, baselines, *timeout)
+	}
+
 	sortResults(results)
+	confirmed := collectConfirmed(results)
 
 	out := Output{
 		Target:    *targetURL,
 		WAF:       waf,
-		Baseline:  base,
-		Requested: statusClass(base.Status),
+		Baselines: baselines,
+		Requested: statusClass(pickBaselineStatus(baselines)),
 		Results:   results,
 		Clusters:  clusterSignatures(results),
+		Confirmed: confirmed,
 		Duration:  float64(time.Since(start).Microseconds()) / 1000.0,
 		Version:   engineVersion,
 	}
@@ -120,6 +146,27 @@ func main() {
 func emitError(msg string) {
 	j, _ := json.Marshal(map[string]string{"error": msg})
 	fmt.Println(string(j))
+}
+
+func firstServer(bs []Baseline) string {
+	for _, b := range bs {
+		if b.Server != "" {
+			return b.Server
+		}
+	}
+	return ""
+}
+
+func pickBaselineStatus(bs []Baseline) int {
+	for _, b := range bs {
+		if b.URL == "original" {
+			return b.Status
+		}
+	}
+	if len(bs) > 0 {
+		return bs[0].Status
+	}
+	return 0
 }
 
 func statusClass(code int) string {
@@ -147,7 +194,7 @@ func statusClass(code int) string {
 
 func buildClient(insecure bool, timeoutSec int) *http.Client {
 	tr := &http.Transport{
-		TLSClientConfig:       &tls.Config{InsecureSkipVerify: insecure}, //nolint:gosec // assessment tool
+		TLSClientConfig:       &tls.Config{InsecureSkipVerify: insecure}, //nolint:gosec
 		MaxIdleConns:          400,
 		MaxIdleConnsPerHost:   400,
 		IdleConnTimeout:       30 * time.Second,
@@ -185,6 +232,7 @@ type fetchOut struct {
 	finalURL string
 	dur      float64
 	err      string
+	shingles map[uint64]struct{}
 }
 
 func doFetch(client *http.Client, req *http.Request, timeoutSec int) fetchOut {
@@ -211,6 +259,7 @@ func doFetch(client *http.Client, req *http.Request, timeoutSec int) fetchOut {
 		location: resp.Header.Get("Location"),
 		server:   resp.Header.Get("Server"),
 		dur:      ms(started),
+		shingles: shingle(body),
 	}
 	if m := titleRe.FindSubmatch(body); len(m) == 2 {
 		fo.title = strings.TrimSpace(strings.Join(strings.Fields(string(m[1])), " "))
@@ -228,35 +277,119 @@ func ms(t time.Time) float64 {
 	return float64(time.Since(t).Microseconds()) / 1000.0
 }
 
-// ---------- baseline ----------
+// ---------- body similarity ----------
 
-func fetchBaseline(client *http.Client, target string, timeoutSec int) Baseline {
-	probe := target
+// shingle converts the body into a set of trigram hashes after whitespace
+// collapsing. Two responses with volatile tokens still produce the same set if
+// the surrounding markup is identical.
+func shingle(body []byte) map[uint64]struct{} {
+	if len(body) == 0 {
+		return nil
+	}
+	norm := normalizeBody(body)
+	set := make(map[uint64]struct{}, len(norm)/4+1)
+	for i := 0; i+3 <= len(norm); i++ {
+		var h uint64 = 1469598103934665603
+		for j := 0; j < 3; j++ {
+			h ^= uint64(norm[i+j])
+			h *= 1099511628211
+		}
+		set[h] = struct{}{}
+	}
+	return set
+}
+
+var wsRun = regexp.MustCompile(`\s+`)
+
+func normalizeBody(body []byte) []byte {
+	b := wsRun.ReplaceAll(body, []byte(" "))
+	if len(b) > 200000 {
+		b = b[:200000]
+	}
+	return b
+}
+
+func jaccard(a, b map[uint64]struct{}) float64 {
+	if len(a) == 0 || len(b) == 0 {
+		if len(a) == 0 && len(b) == 0 {
+			return 1
+		}
+		return 0
+	}
+	inter := 0
+	small, large := a, b
+	if len(a) > len(b) {
+		small, large = b, a
+	}
+	for k := range small {
+		if _, ok := large[k]; ok {
+			inter++
+		}
+	}
+	union := len(a) + len(b) - inter
+	if union == 0 {
+		return 1
+	}
+	return float64(inter) / float64(union)
+}
+
+// maxSimilarity returns how close a response is to any captured deny page.
+func maxSimilarity(sh map[uint64]struct{}, bs []Baseline) float64 {
+	best := 0.0
+	for _, b := range bs {
+		if b.Shingles == nil {
+			continue
+		}
+		if s := jaccard(sh, b.Shingles); s > best {
+			best = s
+		}
+	}
+	return best
+}
+
+// ---------- baselines ----------
+
+func fetchBaselines(client *http.Client, target string, timeoutSec int) []Baseline {
+	out := []Baseline{}
+	seen := map[string]struct{}{}
+
+	capture := func(label, probe string) {
+		if _, ok := seen[label]; ok {
+			return
+		}
+		seen[label] = struct{}{}
+		req, err := http.NewRequest("GET", probe, nil)
+		if err != nil {
+			out = append(out, Baseline{URL: label, Error: err.Error()})
+			return
+		}
+		req.Header.Set("User-Agent", browserUA())
+		fo := doFetch(client, req, timeoutSec)
+		out = append(out, Baseline{
+			URL: label, Status: fo.status, Length: fo.length, BodyHash: fo.hash,
+			Title: fo.title, Server: fo.server, FinalURL: fo.finalURL,
+			Duration: fo.dur, Error: fo.err, Shingles: fo.shingles,
+		})
+	}
+
+	capture("original", target)
+
 	if u, err := url.Parse(target); err == nil {
-		u.Path = "/" + randomSlug(10)
-		u.RawQuery = ""
-		u.Fragment = ""
-		probe = u.String()
+		for i := 0; i < 3; i++ {
+			probe := *u
+			probe.Path = "/" + randomSlug(10+i)
+			probe.RawQuery = ""
+			probe.Fragment = ""
+			capture(fmt.Sprintf("random%d", i+1), probe.String())
+		}
+		// 404 fingerprint: a deep nested random path that almost certainly does
+		// not exist.
+		deep := *u
+		deep.Path = "/" + randomSlug(6) + "/" + randomSlug(6) + "/" + randomSlug(6)
+		deep.RawQuery = ""
+		capture("deep404", deep.String())
 	}
-
-	req, err := http.NewRequest("GET", probe, nil)
-	if err != nil {
-		return Baseline{URL: probe, Error: err.Error()}
-	}
-	req.Header.Set("User-Agent", browserUA())
-
-	fo := doFetch(client, req, timeoutSec)
-	return Baseline{
-		URL:      probe,
-		Status:   fo.status,
-		Length:   fo.length,
-		BodyHash: fo.hash,
-		Title:    fo.title,
-		Server:   fo.server,
-		FinalURL: fo.finalURL,
-		Duration: fo.dur,
-		Error:    fo.err,
-	}
+	return out
 }
 
 // ---------- WAF fingerprint ----------
@@ -277,6 +410,8 @@ func detectWAF(server string) string {
 		{"fortiweb", "FortiWeb"},
 		{"netscaler", "Citrix NetScaler"},
 		{"citrix", "Citrix NetScaler"},
+		{"azure", "Azure Front Door"},
+		{"cloudfront", "AWS CloudFront"},
 	}
 	for _, c := range cases {
 		if strings.Contains(s, c.needle) {
@@ -373,6 +508,7 @@ func runBypasses(client *http.Client, target string, payloads []Payload, threads
 				Server:     fo.server,
 				Duration:   fo.dur,
 				Error:      fo.err,
+				shingles:   fo.shingles,
 			})
 			mu.Unlock()
 		}(pl)
@@ -381,13 +517,18 @@ func runBypasses(client *http.Client, target string, payloads []Payload, threads
 	return results
 }
 
-// buildRequest computes the final URL and method for a payload.
 func buildRequest(target string, pl Payload) (reqURL, method string, headers map[string]string, err error) {
 	method = pl.Method
 	if method == "" {
 		method = "GET"
 	}
 	headers = pl.Header
+	if headers != nil {
+		if at, ok := headers["__req_target"]; ok {
+			delete(headers, "__req_target")
+			return at, method, headers, nil
+		}
+	}
 
 	u, perr := url.Parse(target)
 	if perr != nil {
@@ -396,7 +537,6 @@ func buildRequest(target string, pl Payload) (reqURL, method string, headers map
 
 	switch {
 	case pl.PathOverride != "":
-		// Rebuild the URL against host so Go doesn't re-encode the payload path.
 		reqURL = u.Scheme + "://" + u.Host + pl.PathOverride
 	case pl.Suffix != "":
 		raw := strings.TrimSuffix(target, "/")
@@ -412,8 +552,13 @@ func buildRequest(target string, pl Payload) (reqURL, method string, headers map
 
 func headerDesc(pl Payload) string {
 	parts := []string{}
-	for k, v := range pl.Header {
-		parts = append(parts, k+": "+v)
+	keys := make([]string, 0, len(pl.Header))
+	for k := range pl.Header {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		parts = append(parts, k+": "+pl.Header[k])
 	}
 	desc := pl.Type
 	if len(parts) > 0 {
@@ -429,62 +574,175 @@ func headerDesc(pl Payload) string {
 
 // ---------- classification ----------
 
-func classify(results []Result, base Baseline) {
+const similarityThreshold = 0.85
+
+func classifyAll(results []Result, bs []Baseline) {
+	denyHashes := map[string]bool{}
+	for _, b := range bs {
+		if b.Status >= 400 && b.BodyHash != "" {
+			denyHashes[b.BodyHash] = true
+		}
+	}
+
 	for i := range results {
 		r := &results[i]
 		switch {
 		case r.Error != "":
 			r.Verdict = "error"
+			continue
 		case r.StatusCode == 0:
 			r.Verdict = "error"
-		case base.BodyHash != "" && r.BodyHash == base.BodyHash:
+			continue
+		}
+
+		sim := maxSimilarity(r.shingles, bs)
+		r.Similarity = sim
+
+		if denyHashes[r.BodyHash] {
 			r.SameAsBase = true
 			if r.StatusCode >= 200 && r.StatusCode < 300 {
-				r.Verdict = "soft-200" // 200 with baseline body → custom error page
+				r.Verdict = "soft-200"
 			} else {
 				r.Verdict = "blocked"
 			}
-		case r.StatusCode >= 200 && r.StatusCode < 300:
-			r.Verdict = "bypass"
-		case r.StatusCode >= 300 && r.StatusCode < 400:
+			continue
+		}
+
+		if r.StatusCode >= 200 && r.StatusCode < 300 {
+			if sim >= similarityThreshold {
+				// 2xx body nearly identical to the deny page → custom error.
+				r.SameAsBase = true
+				r.Verdict = "soft-200"
+			} else if r.Length == 0 && r.Location == "" {
+				r.Verdict = "neutral"
+			} else {
+				r.Verdict = "bypass"
+			}
+			continue
+		}
+
+		if r.StatusCode >= 300 && r.StatusCode < 400 {
 			r.Verdict = "redirect"
-		case r.StatusCode == 401:
+			continue
+		}
+		if r.StatusCode == 401 {
 			r.Verdict = "auth-required"
-		case r.StatusCode == 403:
+			continue
+		}
+		if r.StatusCode == 403 {
 			r.Verdict = "blocked"
-		case r.StatusCode >= 500:
+			if sim >= similarityThreshold {
+				r.SameAsBase = true
+			}
+			continue
+		}
+		if r.StatusCode >= 500 {
 			r.Verdict = "error5xx"
-		default:
-			r.Verdict = "neutral"
+			continue
+		}
+		r.Verdict = "neutral"
+	}
+}
+
+// verifyCandidates re-issues every 2xx/3xx bypass or redirect once so flapping
+// servers don't inflate the result set.
+func verifyCandidates(client *http.Client, results []Result, bs []Baseline, timeoutSec int) {
+	var denySets []map[uint64]struct{}
+	for _, b := range bs {
+		if b.Shingles != nil && b.Status >= 400 {
+			denySets = append(denySets, b.Shingles)
+		}
+	}
+
+	for i := range results {
+		r := &results[i]
+		if r.Verdict != "bypass" && r.Verdict != "redirect" && r.Verdict != "soft-200" {
+			continue
+		}
+		req, err := http.NewRequest(r.Method, r.URL, nil)
+		if err != nil {
+			continue
+		}
+		req.Header.Set("User-Agent", browserUA())
+		fo := doFetch(client, req, timeoutSec)
+		if fo.err != "" {
+			continue
+		}
+		// Treat as verified when the second attempt reaches the application
+		// layer again (2xx/3xx) and the body is not the deny page.
+		sim := 0.0
+		for _, d := range denySets {
+			if s := jaccard(fo.shingles, d); s > sim {
+				sim = s
+			}
+		}
+		if (fo.status >= 200 && fo.status < 400) && sim < similarityThreshold {
+			r.Verified = true
 		}
 	}
 }
 
-// clusterSignatures groups results by status + body hash so noisy duplicates
-// collapse into a single line in the report.
-func clusterSignatures(results []Result) []string {
-	seen := map[string]struct{}{}
-	var clusters []string
+// ---------- aggregation ----------
+
+func collectConfirmed(results []Result) []Confirmed {
+	out := []Confirmed{}
 	for _, r := range results {
-		key := fmt.Sprintf("%d|%s", r.StatusCode, r.BodyHash)
-		if _, ok := seen[key]; ok {
+		if r.Verdict != "bypass" && r.Verdict != "redirect" {
 			continue
 		}
-		seen[key] = struct{}{}
-		short := r.BodyHash
+		if r.Verified || r.Verdict == "bypass" {
+			out = append(out, Confirmed{
+				Method:     r.Method,
+				Payload:    r.Payload,
+				Type:       r.Type,
+				Status:     r.StatusCode,
+				Length:     r.Length,
+				Title:      r.Title,
+				Similarity: r.Similarity,
+			})
+		}
+	}
+	return out
+}
+
+func clusterSignatures(results []Result) []string {
+	type cluster struct {
+		status int
+		hash   string
+		length int
+		title  string
+		count  int
+	}
+	index := map[string]*cluster{}
+	var order []string
+	for _, r := range results {
+		if r.BodyHash == "" {
+			continue
+		}
+		key := fmt.Sprintf("%d|%s", r.StatusCode, r.BodyHash)
+		c, ok := index[key]
+		if !ok {
+			c = &cluster{status: r.StatusCode, hash: r.BodyHash, length: r.Length, title: r.Title}
+			index[key] = c
+			order = append(order, key)
+		}
+		c.count++
+	}
+
+	out := make([]string, 0, len(order))
+	for _, key := range order {
+		c := index[key]
+		short := c.hash
 		if len(short) >= 8 {
 			short = short[:8]
 		}
-		if short == "" {
-			short = "nohash"
+		label := fmt.Sprintf("%d %s len=%d x%d", c.status, short, c.length, c.count)
+		if c.title != "" {
+			label += " title=" + c.title
 		}
-		label := fmt.Sprintf("%d %s len=%d", r.StatusCode, short, r.Length)
-		if r.Title != "" {
-			label += " title=" + r.Title
-		}
-		clusters = append(clusters, label)
+		out = append(out, label)
 	}
-	return clusters
+	return out
 }
 
 func sortResults(results []Result) {
@@ -498,7 +756,6 @@ func sortResults(results []Result) {
 		"error5xx":      6,
 		"error":         7,
 	}
-	// Insertion sort is fine here (1200+ items × tiny constant).
 	for i := 1; i < len(results); i++ {
 		cur := results[i]
 		j := i - 1

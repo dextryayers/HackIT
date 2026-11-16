@@ -770,7 +770,7 @@ _HELP_DESCRIPTIONS: Dict[Tuple[str, ...], str] = {
     ("web", "headers"): "Audit HTTP security headers and browser protection policies",
     ("web", "tech"): "Fingerprint servers, CMS platforms, frameworks and libraries",
     ("web", "fuzz"): "ParamSpider-grade passive parameter harvester (domain + subdomains)",
-    ("web", "403bypass"): "Bypass HTTP 403 restrictions with a large payload and technique set",
+    ("web", "403bypass"): "Defeat 403/401/WAF controls 1300+ techniques with baseline-diff scoring",
     ("web", "js"): "Extract endpoints, secrets and API keys from JavaScript assets",
     ("web", "params"): "Discover hidden parameters and test them for reflection",
     ("web", "fuzz"): "Harvest parameter-bearing URLs for a domain and all subdomains",
