@@ -37,6 +37,13 @@ func CreateClient(config *ScanConfig) *http.Client {
 					port = "80"
 				}
 			}
+			// Reuse the resolve-once cache when this is the target host;
+			// otherwise resolve normally (proxy, redirects).
+			if host == resolvedHost && len(resolvedIPs) > 0 {
+				if ip := nextDialIP(); ip != "" {
+					return dialer.DialContext(ctx, network, net.JoinHostPort(ip, port))
+				}
+			}
 			addrs, err := net.DefaultResolver.LookupHost(ctx, host)
 			if err != nil {
 				return nil, err

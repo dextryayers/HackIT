@@ -21,17 +21,17 @@ var (
 		"openapi", "endpoint", "service", "rpc", "soap", "wsdl",
 	}
 
-	loginFormPattern = regexp.MustCompile(`(?i)<form[^>]*(?:login|signin|auth|password)[^>]*>`)
+	loginFormPattern  = regexp.MustCompile(`(?i)<form[^>]*(?:login|signin|auth|password)[^>]*>`)
 	loginInputPattern = regexp.MustCompile(`(?i)<input[^>]*(?:password|type=["']password["'])[^>]*>`)
-	apiPattern = regexp.MustCompile(`(?i)(?:api|endpoint|swagger|graphql)`)
+	apiPattern        = regexp.MustCompile(`(?i)(?:api|endpoint|swagger|graphql)`)
 )
 
 type DetectionResult struct {
-	IsLogin      bool
-	IsAPI        bool
-	LoginType    string
-	APIType      string
-	Confidence   int
+	IsLogin    bool
+	IsAPI      bool
+	LoginType  string
+	APIType    string
+	Confidence int
 }
 
 func DetectLoginPage(result *DirResult, body string) DetectionResult {

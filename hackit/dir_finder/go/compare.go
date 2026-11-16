@@ -26,10 +26,10 @@ type ResponseCluster struct {
 }
 
 type CompareEngine struct {
-	mu          sync.Mutex
+	mu        sync.Mutex
 	profiles  map[string]*ResponseCluster
 	wildcard  *RespProfile
-	threshold   float64
+	threshold float64
 }
 
 var compareEngine = &CompareEngine{

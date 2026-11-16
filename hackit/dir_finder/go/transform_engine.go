@@ -8,11 +8,11 @@ import (
 )
 
 type TransformStats struct {
-	Original     int
-	AfterExt     int
-	AfterCase    int
-	AfterAffix   int
-	Total        int
+	Original   int
+	AfterExt   int
+	AfterCase  int
+	AfterAffix int
+	Total      int
 }
 
 func ProcessPathTransforms(paths []string, config *ScanConfig) []string {

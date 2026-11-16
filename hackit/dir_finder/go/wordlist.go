@@ -261,6 +261,10 @@ func isWordlistFile(name string) bool {
 	if name == "user-agents.txt" || name == "generate_wpscan_wordlists.py" {
 		return false
 	}
+	// Status blacklists are filter data, not paths to request.
+	if strings.HasSuffix(name, "_blacklist.txt") {
+		return false
+	}
 	ext := strings.ToLower(filepath.Ext(name))
 	switch ext {
 	case ".txt", ".lst", ".list", ".csv", ".dic", ".words":

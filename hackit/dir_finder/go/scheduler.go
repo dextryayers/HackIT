@@ -27,7 +27,7 @@ type Scheduler struct {
 	jitterMin     time.Duration
 	jitterMax     time.Duration
 
-	lastAdjust time.Time
+	lastAdjust     time.Time
 	adjustCooldown time.Duration
 }
 

@@ -2,10 +2,10 @@ package main
 
 import (
 	"encoding/json"
-	"sync/atomic"
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/fatih/color"

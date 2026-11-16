@@ -9,14 +9,14 @@ import (
 )
 
 type RequestBuilder struct {
-	Method  string
-	URL     string
-	Body    io.Reader
-	Headers map[string]string
-	Auth    string
+	Method   string
+	URL      string
+	Body     io.Reader
+	Headers  map[string]string
+	Auth     string
 	AuthType string
-	Cookie  string
-	UA      string
+	Cookie   string
+	UA       string
 }
 
 func BuildHTTPRequest(config *ScanConfig, fullURL string, reqBody io.Reader) (*http.Request, error) {

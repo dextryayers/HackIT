@@ -1,11 +1,11 @@
 package main
 
 import (
-	"path/filepath"
 	"bufio"
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/fatih/color"
@@ -106,7 +106,6 @@ func PrintTargetInfo(targets []TargetInfo, config *ScanConfig) {
 	}
 }
 
-
 // === DIR/FUZZ sniper marker helpers ===
 // A "DIR" or "FUZZ" token in the target URL is substituted with each wordlist
 // entry, instead of joining entries as paths to the base URL.
@@ -172,4 +171,3 @@ func sniperWordlist(mode string) (string, string) {
 	}
 	return "", candidates[0].name
 }
-

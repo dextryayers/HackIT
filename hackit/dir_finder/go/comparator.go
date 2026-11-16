@@ -177,7 +177,7 @@ func AdaptiveWildcardThreshold(freq map[string]int, total int) (threshold int) {
 		return highest/3 + 1
 	}
 	if total >= 20 && highest > total/2 {
-		return highest/2
+		return highest / 2
 	}
 	return 0
 }

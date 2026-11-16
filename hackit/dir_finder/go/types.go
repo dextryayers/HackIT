@@ -39,62 +39,62 @@ type RawRequest struct {
 }
 
 type ScanConfig struct {
-	Target    string
-	URLsFile  string
-	RawFile   string
-	Stdin     bool
+	Target   string
+	URLsFile string
+	RawFile  string
+	Stdin    bool
 
 	// DIR/FUZZ sniper marker: when non-empty, each wordlist entry is
 	// substituted into the target instead of path-joining.
 	ReplaceMarker string
 	ReplaceMode   string // "host" | "ext" | "path"
 
-	Wordlists          []string
-	WordlistCategories []string
-	Extensions         []string
-	ForceExtensions    bool
+	Wordlists           []string
+	WordlistCategories  []string
+	Extensions          []string
+	ForceExtensions     bool
 	OverwriteExtensions bool
-	ExcludeExtensions  []string
-	Prefixes           []string
-	Suffixes           []string
-	Uppercase          bool
-	Lowercase          bool
-	Capital            bool
+	ExcludeExtensions   []string
+	Prefixes            []string
+	Suffixes            []string
+	Uppercase           bool
+	Lowercase           bool
+	Capital             bool
 
-	Threads        int
-	Recursive      bool
-	DeepRecursive  bool
-	ForceRecursive bool
-	MaxDepth       int
+	Threads         int
+	Recursive       bool
+	DeepRecursive   bool
+	ForceRecursive  bool
+	MaxDepth        int
 	RecursionStatus []int
-	Subdirs        []string
-	ExcludeSubdirs []string
-	IncludeStatus  []int
-	ExcludeStatus  []int
-	ExcludeSizes   []string
-	ExcludeText    []string
-	ExcludeRegex   string
+	Subdirs         []string
+	ExcludeSubdirs  []string
+	IncludeStatus   []int
+	ExcludeStatus   []int
+	ExcludeSizes    []string
+	ExcludeText     []string
+	ExcludeRegex    string
 	ExcludeRedirect string
 	ExcludeResponse string
-	SkipOnStatus   []int
+	SkipOnStatus    []int
 	MinResponseSize int64
 	MaxResponseSize int64
-	MaxTime        int
-	ExitOnError    bool
+	MaxTime         int
+	ExitOnError     bool
 
-	AutoCalibration  bool
-	MatchStatus      []int
-	FilterStatus     []int
-	MatchSize        []SizeRange
-	FilterSize       []SizeRange
-	MatchWords       []SizeRange
-	FilterWords      []SizeRange
-	MatchLines       []SizeRange
-	FilterLines      []SizeRange
-	MatchRegex       string
-	FilterRegex      string
-	MatchHeader      []string
-	FilterHeader     []string
+	AutoCalibration bool
+	MatchStatus     []int
+	FilterStatus    []int
+	MatchSize       []SizeRange
+	FilterSize      []SizeRange
+	MatchWords      []SizeRange
+	FilterWords     []SizeRange
+	MatchLines      []SizeRange
+	FilterLines     []SizeRange
+	MatchRegex      string
+	FilterRegex     string
+	MatchHeader     []string
+	FilterHeader    []string
 
 	Method         string
 	Data           string
@@ -108,25 +108,25 @@ type ScanConfig struct {
 	UserAgent      string
 	Cookie         string
 
-	Timeout       int
-	Delay         int
-	Proxy         string
-	ProxiesFile   string
-	ProxyAuth     string
-	ReplayProxy   string
-	Tor           bool
-	Scheme        string
-	MaxRate       float64
-	Retries       int
-	IP            string
-	Interface     string
+	Timeout     int
+	Delay       int
+	Proxy       string
+	ProxiesFile string
+	ProxyAuth   string
+	ReplayProxy string
+	Tor         bool
+	Scheme      string
+	MaxRate     float64
+	Retries     int
+	IP          string
+	Interface   string
 
 	Crawl bool
 
-	FullURL  bool
-	NoColor  bool
-	Quiet    bool
-	Verbose  bool
+	FullURL bool
+	NoColor bool
+	Quiet   bool
+	Verbose bool
 
 	OutputFormats []string
 	OutputFile    string
@@ -144,11 +144,11 @@ type ScanConfig struct {
 	ExtractJS    bool
 	AutoWordlist bool
 
-	SaveSession bool
-	HTTP2       bool
-	JSONBody    bool
-	GraphQL     bool
-	APIMode     bool
+	SaveSession  bool
+	HTTP2        bool
+	JSONBody     bool
+	GraphQL      bool
+	APIMode      bool
 	AdaptiveRate bool
 	DetectLogin  bool
 	DetectAPI    bool
@@ -169,10 +169,10 @@ type ScanConfig struct {
 	ResolveHost string
 	ResolvedIPs []string
 
-	Paths             []string
-	SessionFile    string
-	SessionID      int
-	RestoredPaths  []string
+	Paths           []string
+	SessionFile     string
+	SessionID       int
+	RestoredPaths   []string
 	RestoredResults []DirResult
 
 	Blacklists        map[int][]string

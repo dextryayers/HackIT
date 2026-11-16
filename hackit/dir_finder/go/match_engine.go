@@ -6,9 +6,9 @@ import (
 )
 
 type MatchResult struct {
-	Matched   bool
-	Filtered  bool
-	Reason    string
+	Matched  bool
+	Filtered bool
+	Reason   string
 }
 
 func MatchResponseAdvanced(res *DirResult, body string, header string, config *ScanConfig) MatchResult {
@@ -122,5 +122,3 @@ func sizeInRangesUint(val uint64, ranges []SizeRange) bool {
 	}
 	return false
 }
-
-

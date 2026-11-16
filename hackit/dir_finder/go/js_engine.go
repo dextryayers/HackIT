@@ -10,11 +10,11 @@ import (
 )
 
 var (
-	jsURLPattern   = regexp.MustCompile(`(?:['"`+"`"+`])(/[^'"`+"`"+`\s]+?)(?:['"`+"`"+`])`)
-	jsImportPattern = regexp.MustCompile(`(?:import|require)\s*\(?\s*['"]([^'"]+)['"]`)
-	jsFetchPattern  = regexp.MustCompile(`(?:fetch|axios|ajax|getJSON|postJSON)\s*\(\s*['"]([^'"]+)['"]`)
-	jsConcatPattern = regexp.MustCompile(`['"]([^'"]+)['"]\s*\+`)
-	jsEndpointPattern = regexp.MustCompile(`['"`+"`"+`](/[a-zA-Z0-9_\-./?&=%]+)['"`+"`"+`]`)
+	jsURLPattern      = regexp.MustCompile(`(?:['"` + "`" + `])(/[^'"` + "`" + `\s]+?)(?:['"` + "`" + `])`)
+	jsImportPattern   = regexp.MustCompile(`(?:import|require)\s*\(?\s*['"]([^'"]+)['"]`)
+	jsFetchPattern    = regexp.MustCompile(`(?:fetch|axios|ajax|getJSON|postJSON)\s*\(\s*['"]([^'"]+)['"]`)
+	jsConcatPattern   = regexp.MustCompile(`['"]([^'"]+)['"]\s*\+`)
+	jsEndpointPattern = regexp.MustCompile(`['"` + "`" + `](/[a-zA-Z0-9_\-./?&=%]+)['"` + "`" + `]`)
 )
 
 func ExtractJSEndpoints(target string, client *http.Client) []string {

@@ -6,13 +6,13 @@ import (
 )
 
 type RecursionPlan struct {
-	Enabled      bool
-	MaxDepth     int
-	Strategy     string
-	StatusCodes  []int
-	Directories  []string
-	ExcludeDirs  []string
-	Level        int
+	Enabled     bool
+	MaxDepth    int
+	Strategy    string
+	StatusCodes []int
+	Directories []string
+	ExcludeDirs []string
+	Level       int
 }
 
 func BuildRecursionPlan(config *ScanConfig) RecursionPlan {
@@ -100,4 +100,3 @@ func FilterExcludedSubdirs(paths []string, excluded []string) []string {
 	}
 	return result
 }
-

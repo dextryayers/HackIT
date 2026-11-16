@@ -48,6 +48,7 @@ def _interactive_help():
         ("exclude 404", "hide these status codes"),
         ("ext php,bak", "file extensions to try (also fuzz marker position)"),
         ("full", "use db/dicc.txt (9680 lines) instead of db/categories/common.txt"),
+        ("all", "use every list in db/ (20k+ paths — thorough but slow)"),
         ("subdomains", "use wordlists/subdomains.txt (host fuzz)"),
         ("wordlists a,b/f", "external lists — file or folder, comma-separated, any folder"),
         ("method GET|POST|HEAD|PUT|DELETE", "HTTP method (default GET)"),
@@ -359,7 +360,7 @@ def _run_engine(kwargs):
 
     try:
         result = subprocess.run(cmd)
-        if result.returncode != 0:
+        if result.returncode not in (0, 1):
             click.echo(f"[!] Go binary exited with code {result.returncode}")
     except FileNotFoundError:
         click.echo(f"[!] Go binary not found: {go_bin}")
@@ -509,6 +510,10 @@ def _interactive_parse(text: str):
         elif key == "full":
             repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             kwargs["wordlists"] = os.path.join(repo, "hackit", "dir_finder", "db", "dicc.txt")
+            i += 1
+        elif key == "all":
+            repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            kwargs["wordlists"] = os.path.join(repo, "hackit", "dir_finder", "db")
             i += 1
         elif key == "subdomains":
             repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

@@ -17,9 +17,9 @@ const (
 )
 
 type OutputEngine struct {
-	mu           sync.Mutex
+	mu              sync.Mutex
 	lastWasProgress bool
-	noColor      bool
+	noColor         bool
 }
 
 var outputEngine = &OutputEngine{}

@@ -61,8 +61,20 @@ func LoadDictionary(config *ScanConfig) ([]string, DictionaryStats) {
 		paths = Deduplicate(paths)
 		stats.Source = "custom: " + strings.Join(config.Wordlists, ", ")
 	} else {
-		paths, err = LoadAllPayloads(foundDB)
-		stats.Source = "auto (all db/)"
+		// Default = the curated common list, not every file in db/. The
+		// full dump is opt-in via the `full` (dicc.txt) or `all` key so a
+		// default run is fast and low-noise.
+		commonPath := filepath.Join(foundDB, "categories", "common.txt")
+		if p, e := LoadWordlist(commonPath); e == nil && len(p) > 0 {
+			paths = p
+			stats.Source = "default (db/categories/common.txt)"
+		} else if p, e := LoadWordlist(filepath.Join(foundDB, "dicc.txt")); e == nil && len(p) > 0 {
+			paths = p
+			stats.Source = "default (db/dicc.txt)"
+		} else {
+			paths, err = LoadAllPayloads(foundDB)
+			stats.Source = "auto (all db/)"
+		}
 	}
 
 	if err != nil || len(paths) == 0 {

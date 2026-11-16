@@ -10,20 +10,20 @@ import (
 )
 
 type AnalysisResult struct {
-	Server       string   `json:"server,omitempty"`
-	Framework    string   `json:"framework,omitempty"`
-	CMS          string   `json:"cms,omitempty"`
-	Language     string   `json:"language,omitempty"`
-	WAF          string   `json:"waf,omitempty"`
-	Charset      string   `json:"charset,omitempty"`
-	DetectedLang string   `json:"detected_lang,omitempty"`
-	Technologies []string `json:"technologies,omitempty"`
-	Endpoints    []string `json:"endpoints,omitempty"`
-	Title        string   `json:"title,omitempty"`
-	BodyPreview  string   `json:"body_preview,omitempty"`
-	ContentType  string   `json:"content_type,omitempty"`
-	Status       int      `json:"status"`
-	Size         int64    `json:"size"`
+	Server       string            `json:"server,omitempty"`
+	Framework    string            `json:"framework,omitempty"`
+	CMS          string            `json:"cms,omitempty"`
+	Language     string            `json:"language,omitempty"`
+	WAF          string            `json:"waf,omitempty"`
+	Charset      string            `json:"charset,omitempty"`
+	DetectedLang string            `json:"detected_lang,omitempty"`
+	Technologies []string          `json:"technologies,omitempty"`
+	Endpoints    []string          `json:"endpoints,omitempty"`
+	Title        string            `json:"title,omitempty"`
+	BodyPreview  string            `json:"body_preview,omitempty"`
+	ContentType  string            `json:"content_type,omitempty"`
+	Status       int               `json:"status"`
+	Size         int64             `json:"size"`
 	Headers      map[string]string `json:"headers,omitempty"`
 }
 
@@ -186,17 +186,17 @@ func (ae *AnalyzeEngine) detectWAF(headers http.Header, body string, target stri
 	bodyLower := strings.ToLower(body)
 
 	wafSignatures := map[string][]string{
-		"Cloudflare":   {"cloudflare", "__cfduid", "cf-ray"},
-		"Akamai":       {"akamai", "akamaized"},
-		"ModSecurity":  {"mod_security", "modsecurity", "No modifications are allowed"},
-		"AWS WAF":      {"awselb", "aws-waf", "x-amz-rid"},
-		"F5 BIG-IP":    {"big-ip", "f5"},
-		"Barracuda":    {"barracuda", "barra"},
-		"Sucuri":       {"sucuri", "cloudproxy"},
-		"Wordfence":    {"wordfence"},
-		"Stackpath":    {"stackpath"},
-		"Comodo":       {"comodo"},
-		"Imperva":      {"imperva", "incapsula"},
+		"Cloudflare":  {"cloudflare", "__cfduid", "cf-ray"},
+		"Akamai":      {"akamai", "akamaized"},
+		"ModSecurity": {"mod_security", "modsecurity", "No modifications are allowed"},
+		"AWS WAF":     {"awselb", "aws-waf", "x-amz-rid"},
+		"F5 BIG-IP":   {"big-ip", "f5"},
+		"Barracuda":   {"barracuda", "barra"},
+		"Sucuri":      {"sucuri", "cloudproxy"},
+		"Wordfence":   {"wordfence"},
+		"Stackpath":   {"stackpath"},
+		"Comodo":      {"comodo"},
+		"Imperva":     {"imperva", "incapsula"},
 	}
 
 	headerStr := ""

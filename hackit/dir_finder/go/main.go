@@ -170,7 +170,7 @@ func formatWordlistInfo(config *ScanConfig) string {
 	if len(config.Wordlists) > 0 {
 		return strings.Join(config.Wordlists, ",")
 	}
-	return "auto (db/)"
+	return "default (db/categories/common.txt)"
 }
 
 func orchestrate(config *ScanConfig) {

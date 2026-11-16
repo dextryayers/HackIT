@@ -7,11 +7,11 @@ import (
 )
 
 type Signature struct {
-	Name        string
-	Type        string
-	Pattern     *regexp.Regexp
-	Location    string
-	Version     int
+	Name     string
+	Type     string
+	Pattern  *regexp.Regexp
+	Location string
+	Version  int
 }
 
 var signatures = []Signature{
@@ -82,11 +82,11 @@ var signatures = []Signature{
 }
 
 type FingerprintResult struct {
-	Tech     []string
-	Server   string
-	CMS      string
-	WAF      string
-	Language string
+	Tech      []string
+	Server    string
+	CMS       string
+	WAF       string
+	Language  string
 	Framework string
 }
 

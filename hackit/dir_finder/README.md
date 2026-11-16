@@ -30,8 +30,10 @@ input : https://example.com/DIR threads 25 sc 200,404 verbose on
 
 Keys (case-insensitive, anywhere on the line):
 `threads/t N` (1-200, default 30) · `sc 200,403` · `exclude 404` · `ext php,bak` ·
-`full` (db/dicc.txt, 9680 lines) · `subdomains` (subdomains.txt) · `method GET|POST|HEAD` ·
+`full` (db/dicc.txt, 9680 lines) · `all` (every list in db/, 20k+ paths) ·
+`subdomains` (subdomains.txt) · `method GET|POST|HEAD` ·
 `verbose on|off` (bare = on) · `quiet` · `recursive on|off` ·
+`stealth on|off` · `waf on|off` · `mutate on|off` · `errors on|off` · `ignore-dns` · `ip <addr>` ·
 `delay N` · `timeout N` · `rate N` ·
 `wordlists /path/to/list.txt[,/other/folder]` · `help` · empty input quits.
 
@@ -53,8 +55,39 @@ All original functionality remains as flags - see `hackit dirfinder --help`:
 Internal lists live in `hackit/dir_finder/db/` - path sniper defaults to
 `db/categories/common.txt`, ext sniper to `db/extensions.txt`, `full` uses
 `db/dicc.txt`, host sniper falls back to `hackit/wordlists/subdomains.txt`
-(there is no subdomain list in db/). With no `-w`, the engine loads **every**
-list under db/ recursively (dict + categories + cms + LFI + blacklists).
+(there is no subdomain list in db/). With no `-w`, the engine loads
+`db/categories/common.txt` (6718 paths) as a fast default; use `full` for
+`dicc.txt` or `all` for every list under db/ recursively.
+
+## Reliability, evasion and accuracy
+- **Resolve once.** The target host is resolved a single time and every request
+  dials the cached IP, so a 20k-path run pays one DNS lookup, not 20k.
+- **Fail fast.** If the host does not resolve, the scan aborts with a clear
+  message instead of firing 20k doomed requests. Override with `-ignore-dns`.
+- **http fallback.** A bare host defaults to https; if https fails and no
+  `-scheme` was pinned, the scan retries once over http.
+- **No error flood.** Only the first 5 request errors print; the rest are
+  counted in the summary. `-v` prints every error; `--error-log <file>` writes
+  all of them to disk.
+- **Empty files are results.** A 200 with a 0-byte body is reported (size `0B`),
+  not silently dropped as an error.
+- **Stealth (`-stealth`, `stealth on`).** Rotates a browser User-Agent from
+  `db/user-agents.txt`, sets Accept/Accept-Language/Accept-Encoding, and spoofs
+  a random `X-Forwarded-For`/`X-Real-IP`/`CF-Connecting-IP` per request.
+- **WAF bypass (`-waf-bypass`, on by default).** On 403/406/501 the path is
+  retried with bypass headers (`X-Forwarded-For: 127.0.0.1`, `X-Original-URL`,
+  `X-Rewrite-URL`, `X-Forwarded-Host`, `CF-Connecting-IP`) and encoded path
+  variants (`/path/`, `/path/.`, `//path`, `/%2e/path`, `/path%20`, `/path..;/`).
+  Global budget caps the retries so a hostile site cannot multiply the scan.
+- **Rate-limit handling.** 429/503/403 trigger a global exponential backoff
+  shared by every worker (capped at 8s), then decay as clean responses arrive.
+- **Wildcard/soft-404 calibration.** Four random probes establish the baseline
+  status, median size and body hashes. Matching responses are filtered by a
+  ±2% size tolerance *and* body-hash set, so a soft-404 that drifts by a few
+  bytes is suppressed while a real page is kept.
+- **Frequency suppression.** Responses clustered by status + 16-byte size bucket
+  + word count are suppressed after 8 repeats — catches SPA shells that return
+  200 for every path.
 
 Sniper marker works in flag form too:
 

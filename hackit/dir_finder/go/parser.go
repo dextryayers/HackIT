@@ -9,13 +9,13 @@ import (
 )
 
 var (
-	hrefRe      = regexp.MustCompile(`(?i)(?:href|src|action|data-url|data-href)\s*=\s*["']([^"']+)["']`)
-	formRe      = regexp.MustCompile(`(?i)<form[^>]*action\s*=\s*["']([^"']+)["']`)
-	scriptRe    = regexp.MustCompile(`(?i)<script[^>]*src\s*=\s*["']([^"']+)["']`)
-	linkRe      = regexp.MustCompile(`(?i)<link[^>]*href\s*=\s*["']([^"']+)["']`)
-	commentRe   = regexp.MustCompile(`(?i)<!--([^-]*)-->`)
+	hrefRe       = regexp.MustCompile(`(?i)(?:href|src|action|data-url|data-href)\s*=\s*["']([^"']+)["']`)
+	formRe       = regexp.MustCompile(`(?i)<form[^>]*action\s*=\s*["']([^"']+)["']`)
+	scriptRe     = regexp.MustCompile(`(?i)<script[^>]*src\s*=\s*["']([^"']+)["']`)
+	linkRe       = regexp.MustCompile(`(?i)<link[^>]*href\s*=\s*["']([^"']+)["']`)
+	commentRe    = regexp.MustCompile(`(?i)<!--([^-]*)-->`)
 	jsEndpointRe = regexp.MustCompile(`(?i)(?:["'](/[a-z0-9_\-./]+)["']|\b(fetch|axios|ajax|getJSON|post|put|delete)\s*\(\s*["']([^"']+)["'])`)
-	sitemapRe   = regexp.MustCompile(`(?i)<loc>\s*([^<]+)\s*</loc>`)
+	sitemapRe    = regexp.MustCompile(`(?i)<loc>\s*([^<]+)\s*</loc>`)
 	robotsPathRe = regexp.MustCompile(`(?i)(?:Disallow|Allow)\s*:\s*(/\S*)`)
 )
 
@@ -210,7 +210,7 @@ func ExtractAllPaths(body, baseURL string) []string {
 	all = append(all, ExtractFormActions(body, baseURL)...)
 	all = append(all, ExtractScriptSrc(body, baseURL)...)
 
-	re := regexp.MustCompile(`(?i)(?:["'`+"`"+`])(/[a-z0-9_\-./]+(?:\.[a-z]+)?)(?:["'`+"`"+`])`)
+	re := regexp.MustCompile(`(?i)(?:["'` + "`" + `])(/[a-z0-9_\-./]+(?:\.[a-z]+)?)(?:["'` + "`" + `])`)
 	matches := re.FindAllStringSubmatch(body, -1)
 	for _, m := range matches {
 		p := CleanURLPath(m[1])
