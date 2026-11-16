@@ -141,6 +141,13 @@ func parseFlags() *ScanConfig {
 	similarity := flag.Int("similarity", 0, "Response similarity threshold (0-100) for filtering")
 	reportFile := flag.String("report", "", "Generate scan report file (JSON format)")
 
+	// Evasion / WAF bypass
+	stealth := flag.Bool("stealth", false, "Evasion mode: rotate User-Agent and spoof forwarding headers per request")
+	wafBypass := flag.Bool("waf-bypass", true, "On 403/406/429/503 retry the path with bypass headers and path mutations")
+	pathMutations := flag.Bool("path-mutations", true, "Generate encoded path variants when a path is blocked")
+	ignoreDNS := flag.Bool("ignore-dns", false, "Continue scanning even if DNS resolution fails")
+	errorLog := flag.String("error-log", "", "Write per-path request errors to this file")
+
 	flag.Parse()
 
 	// Handle help
@@ -357,6 +364,13 @@ func parseFlags() *ScanConfig {
 	config.Swagger = *swagger
 	config.Similarity = *similarity
 	config.ReportFile = *reportFile
+
+	// Evasion / WAF bypass
+	config.Stealth = *stealth
+	config.WAFBypass = *wafBypass
+	config.PathMutations = *pathMutations
+	config.IgnoreDNS = *ignoreDNS
+	config.ErrorLog = *errorLog
 
 	// Compile regex patterns
 	if config.ExcludeRegex != "" {

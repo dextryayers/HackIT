@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/fatih/color"
@@ -30,10 +31,12 @@ type ConnectionConfig struct {
 }
 
 func SetupConnection(config *ScanConfig) *http.Client {
+	resolveTargetOnce(config)
+
 	dialer := &net.Dialer{
 		Timeout:   time.Duration(config.Timeout) * time.Second,
-		KeepAlive: 15 * time.Second,
-		DualStack: false,
+		KeepAlive: 30 * time.Second,
+		DualStack: true,
 	}
 
 	if config.Interface != "" {
@@ -42,18 +45,21 @@ func SetupConnection(config *ScanConfig) *http.Client {
 		}
 	}
 
-	connsPerHost := config.Threads * 5
-	if connsPerHost < 10 {
-		connsPerHost = 10
+	connsPerHost := config.Threads * 2
+	if connsPerHost < 16 {
+		connsPerHost = 16
 	}
-	if connsPerHost > 100 {
-		connsPerHost = 100
+	if connsPerHost > 256 {
+		connsPerHost = 256
 	}
 
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true,
 			MinVersion:         tls.VersionTLS12,
+			CurvePreferences: []tls.CurveID{
+				tls.X25519, tls.CurveP256, tls.CurveP384,
+			},
 		},
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			host, port, err := net.SplitHostPort(addr)
@@ -64,18 +70,23 @@ func SetupConnection(config *ScanConfig) *http.Client {
 					port = "80"
 				}
 			}
-
-			// Host comes from addr (DNS already resolved by the
-			// transport). Connect directly to it so the Host header
-			// stays correct for SNI/vhosts.
-			conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(host, port))
+			// Use the cached address for the target host; other hosts
+			// (proxy, redirect target) resolve normally. Host header and
+			// TLS SNI stay tied to the URL host, so vhosts still work.
+			dialHost := host
+			if host == resolvedHost && len(resolvedIPs) > 0 {
+				if ip := nextDialIP(); ip != "" {
+					dialHost = ip
+				}
+			}
+			conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(dialHost, port))
 			if err != nil {
 				return nil, err
 			}
 			if tcpConn, ok := conn.(*net.TCPConn); ok {
 				_ = tcpConn.SetNoDelay(true)
 				_ = tcpConn.SetKeepAlive(true)
-				_ = tcpConn.SetKeepAlivePeriod(15 * time.Second)
+				_ = tcpConn.SetKeepAlivePeriod(30 * time.Second)
 			}
 			return conn, nil
 		},
@@ -83,11 +94,11 @@ func SetupConnection(config *ScanConfig) *http.Client {
 		MaxConnsPerHost:       connsPerHost,
 		MaxIdleConnsPerHost:   connsPerHost,
 		IdleConnTimeout:       90 * time.Second,
-		DisableCompression:    true,
+		DisableCompression:    false,
 		DisableKeepAlives:     false,
 		WriteBufferSize:       32 * 1024,
 		ReadBufferSize:        32 * 1024,
-		ForceAttemptHTTP2:     true,
+		ForceAttemptHTTP2:     config.HTTP2,
 		TLSHandshakeTimeout:   time.Duration(config.Timeout) * time.Second,
 		ResponseHeaderTimeout: time.Duration(config.Timeout) * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
@@ -106,6 +117,64 @@ func SetupConnection(config *ScanConfig) *http.Client {
 	}
 
 	return client
+}
+
+// Resolved target host and its addresses, cached once per target so a 30k
+// wordlist does not pay a DNS lookup per request. A dead domain is detected
+// here and reported immediately instead of timing out 30k times.
+var (
+	resolvedHost string
+	resolvedIPs  []string
+	dialCounter  uint64
+)
+
+func resolveTargetOnce(config *ScanConfig) (bool, string) {
+	resolvedHost = ""
+	resolvedIPs = nil
+	if config.Target == "" {
+		return true, ""
+	}
+	u, err := url.Parse(config.Target)
+	if err != nil || u.Hostname() == "" {
+		return false, "invalid URL: " + config.Target
+	}
+	host := u.Hostname()
+	if config.IP != "" {
+		resolvedHost = host
+		resolvedIPs = []string{config.IP}
+		return true, config.IP
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(maxInt(config.Timeout, 3))*time.Second)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupHost(ctx, host)
+	if err != nil || len(addrs) == 0 {
+		msg := "DNS failed for " + host
+		if err != nil {
+			msg += ": " + err.Error()
+		}
+		return false, msg
+	}
+	var v4 []string
+	for _, a := range addrs {
+		if !strings.Contains(a, ":") {
+			v4 = append(v4, a)
+		}
+	}
+	if len(v4) > 0 {
+		resolvedIPs = v4
+	} else {
+		resolvedIPs = addrs
+	}
+	resolvedHost = host
+	return true, resolvedIPs[0]
+}
+
+func nextDialIP() string {
+	if len(resolvedIPs) == 0 {
+		return ""
+	}
+	i := atomic.AddUint64(&dialCounter, 1)
+	return resolvedIPs[int(i)%len(resolvedIPs)]
 }
 
 func ApplyProxy(transport *http.Transport, config *ScanConfig) {
@@ -217,6 +286,12 @@ func PrintConnectionInfo(config *ScanConfig) {
 	}
 	if config.MaxRate > 0 {
 		fmt.Fprintf(color.Output, "%s Max rate: %.1f req/s\n", color.CyanString("[*]"), config.MaxRate)
+	}
+	if config.Stealth {
+		fmt.Fprintf(color.Output, "%s Stealth: UA rotation + forwarding-header spoof\n", color.GreenString("[+]"))
+	}
+	if config.WAFBypass {
+		fmt.Fprintf(color.Output, "%s WAF bypass: on (403/406/429/503 retried with mutations)\n", color.GreenString("[+]"))
 	}
 }
 

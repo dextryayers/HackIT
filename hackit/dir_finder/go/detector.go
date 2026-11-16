@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha1"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,8 +9,18 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"sort"
 	"strings"
 	"time"
+)
+
+// Multi-probe wildcard calibration. Four random paths are requested; if they
+// all share a status the site is wildcarding. The representative size is the
+// median and the body hashes are recorded so soft-404 bodies that drift by a
+// few bytes are still recognised as noise instead of "found".
+var (
+	wildcardHashes = make(map[string]bool)
+	wildcardSizes  []int64
 )
 
 func DetectWildcard(target string, client *http.Client) (int, int64) {
@@ -18,9 +29,6 @@ func DetectWildcard(target string, client *http.Client) (int, int64) {
 		return 404, -1
 	}
 
-	// Calibrate relative to the target's own directory. For a file base
-	// like /DVWA/index.php, the wildcard probe goes next to it
-	// (/DVWA/<random>), not at the web root.
 	dirPath := base.Path
 	if ext := path.Ext(dirPath); ext != "" {
 		dirPath = path.Dir(dirPath)
@@ -28,34 +36,67 @@ func DetectWildcard(target string, client *http.Client) (int, int64) {
 	dirPath = strings.TrimSuffix(dirPath, "/")
 
 	mkProbe := func(tag string) string {
-		probe := fmt.Sprintf("hackit_wildcard_%s_%d", tag, time.Now().UnixNano())
+		probe := fmt.Sprintf("hackit_wc_%s_%d", tag, time.Now().UnixNano())
 		if dirPath == "" {
 			return strings.TrimSuffix(base.Scheme+"://"+base.Host, "/") + "/" + probe
 		}
 		return strings.TrimSuffix(base.Scheme+"://"+base.Host+dirPath, "/") + "/" + probe
 	}
 
-	resp, err := client.Get(mkProbe("a"))
-	if err != nil {
+	type probe struct {
+		status int
+		size   int64
+		hash   string
+	}
+	var probes []probe
+	for _, tag := range []string{"a", "b", "c", "d"} {
+		resp, err := client.Get(mkProbe(tag))
+		if err != nil {
+			continue
+		}
+		st, sz, hash := followAndReadHash(resp, client, target)
+		probes = append(probes, probe{st, sz, hash})
+	}
+	if len(probes) == 0 {
 		return 404, -1
 	}
-	status, size := followAndRead(resp, client, target)
 
-	resp2, err2 := client.Get(mkProbe("b"))
-	if err2 == nil {
-		status2, size2 := followAndRead(resp2, client, target)
-		if status2 == status && size2 == size {
-			return status, size
+	wildcardHashes = make(map[string]bool)
+	wildcardSizes = nil
+	for _, p := range probes {
+		if p.hash != "" {
+			wildcardHashes[p.hash] = true
 		}
+		wildcardSizes = append(wildcardSizes, p.size)
 	}
 
-	return status, size
+	// All probes agree on status → the site returns that for any path.
+	sameStatus := true
+	for _, p := range probes[1:] {
+		if p.status != probes[0].status {
+			sameStatus = false
+			break
+		}
+	}
+	if !sameStatus {
+		// Divergent statuses mean no reliable wildcard; use the first probe.
+		return probes[0].status, probes[0].size
+	}
+
+	// Representative size = median, robust against a probe that drifted.
+	sizes := append([]int64(nil), wildcardSizes...)
+	sort.Slice(sizes, func(i, j int) bool { return sizes[i] < sizes[j] })
+	median := sizes[len(sizes)/2]
+	return probes[0].status, median
 }
 
 func followAndRead(resp *http.Response, client *http.Client, baseTarget string) (int, int64) {
+	st, sz, _ := followAndReadHash(resp, client, baseTarget)
+	return st, sz
+}
+
+func followAndReadHash(resp *http.Response, client *http.Client, baseTarget string) (int, int64, string) {
 	finalResp := resp
-	// DVWA and other local apps can bounce a missing path back to
-	// itself; cap redirect hops so calibration can't loop forever.
 	for hops := 0; finalResp.StatusCode >= 300 && finalResp.StatusCode < 400 && hops < 8; hops++ {
 		loc := finalResp.Header.Get("Location")
 		if loc == "" {
@@ -73,13 +114,14 @@ func followAndRead(resp *http.Response, client *http.Client, baseTarget string) 
 		finalResp.Body.Close()
 		nextResp, err := client.Do(req)
 		if err != nil || nextResp == nil {
-			break
+			return finalResp.StatusCode, -1, ""
 		}
 		finalResp = nextResp
 	}
 	defer finalResp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(finalResp.Body, 1024*1024))
-	return finalResp.StatusCode, int64(len(body))
+	hash := fmt.Sprintf("%x", sha1.Sum(body))[:16]
+	return finalResp.StatusCode, int64(len(body)), hash
 }
 
 func DetectWAF(target string, client *http.Client) string {

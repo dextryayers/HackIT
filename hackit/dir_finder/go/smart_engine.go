@@ -76,11 +76,17 @@ func SmartFilterResult(res *DirResult, config *ScanConfig, fpFrequency map[strin
 		return false
 	}
 
-	fpKey := fmt.Sprintf("%s-%d-%d-%d-%d", res.BodyHash, res.Status, res.Size, res.Words, res.Lines)
+	// Bucket size so bodies that differ only by a rendered timestamp still
+	// cluster instead of each becoming its own "unique" pattern.
+	bucket := int64(0)
+	if res.Size > 0 {
+		bucket = res.Size / 16
+	}
+	fpKey := fmt.Sprintf("%d-%d-%d", res.Status, bucket, res.Words)
 	fpFrequency[fpKey]++
 
-	if fpFrequency[fpKey] > 10 {
-		if fpFrequency[fpKey] == 11 {
+	if fpFrequency[fpKey] > 8 {
+		if fpFrequency[fpKey] == 9 {
 			fmt.Fprintf(color.Output, "%s%s Suppressing high-frequency pattern (status=%d size=%s words=%d lines=%d)\n",
 				ANSI_CLEAR_LINE, color.YellowString("[!]"),
 				res.Status, FormatSize(res.Size), res.Words, res.Lines)
@@ -122,6 +128,10 @@ var soft404Keywords = []string{
 	"halaman tidak ditemukan", "pagina no encontrada",
 	"seite nicht gefunden", "page non trouvee",
 	"404 - not found", "error 404 - not found",
+	"404 page", "file not found", "resource not found",
+	"the page you are looking for", "could not be found",
+	"object not found", "the requested resource could not be found",
+	"tidak ditemukan", "tidak ada", "maaf, halaman",
 }
 
 func CheckSoft404(body string, title string) bool {

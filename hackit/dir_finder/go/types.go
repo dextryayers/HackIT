@@ -157,6 +157,18 @@ type ScanConfig struct {
 	Similarity   int
 	ReportFile   string
 
+	// Evasion / WAF bypass
+	Stealth       bool
+	WAFBypass     bool
+	PathMutations bool
+	IgnoreDNS     bool
+	ErrorLog      string
+
+	// Resolve-once cache: host is resolved a single time so 30k paths do
+	// not each pay a DNS round trip (and so a dead domain fails fast).
+	ResolveHost string
+	ResolvedIPs []string
+
 	Paths             []string
 	SessionFile    string
 	SessionID      int
@@ -178,6 +190,7 @@ type ScanStats struct {
 	Found         int
 	Filtered      int
 	Errors        int
+	Blocked       int
 	StartTime     time.Time
 	EndTime       time.Time
 }

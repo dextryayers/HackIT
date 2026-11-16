@@ -35,6 +35,15 @@ func RunScan(config *ScanConfig) ([]DirResult, *ScanStats) {
 		uaList = LoadUserAgents(findDBDir())
 	}
 
+	// Error log: first few errors print with detail, the rest are counted
+	// and only surfaced in the summary. Verbose prints all of them.
+	var errLogged int32
+	if config.ErrorLog != "" {
+		if f, ferr := os.Create(config.ErrorLog); ferr == nil {
+			f.Close()
+		}
+	}
+
 	var ticker *time.Ticker
 	if config.MaxRate > 0 {
 		interval := time.Duration(float64(time.Second) / config.MaxRate)
@@ -102,6 +111,7 @@ func RunScan(config *ScanConfig) ([]DirResult, *ScanStats) {
 		}
 	}()
 
+	resetBackoff()
 	prioQueue := NewPrioritizedQueue(config.Paths)
 
 	for {
@@ -117,6 +127,7 @@ func RunScan(config *ScanConfig) ([]DirResult, *ScanStats) {
 		if ticker != nil {
 			<-ticker.C
 		}
+		waitBackoff()
 
 		if config.Scheduler != nil {
 			config.Scheduler.AdjustIfNeeded()
@@ -163,6 +174,9 @@ func RunScan(config *ScanConfig) ([]DirResult, *ScanStats) {
 			mu.Lock()
 			if sr != nil && sr.res != nil {
 				if sr.filtered {
+					if isBlockStatus(sr.res.Status) {
+						stats.Blocked++
+					}
 					stats.Filtered++
 					mu.Unlock()
 					return
@@ -202,7 +216,7 @@ func RunScan(config *ScanConfig) ([]DirResult, *ScanStats) {
 						regexRes.Filtered || redirectRes.Filtered || refRes.Filtered ||
 						matchRes.Filtered
 
-					if !config.Quiet {
+					if !config.Quiet && (!filtered || config.Verbose) {
 						printAttempt(sr.res, config, filtered)
 					}
 					if !filtered {
@@ -220,19 +234,7 @@ func RunScan(config *ScanConfig) ([]DirResult, *ScanStats) {
 			} else {
 				stats.Errors++
 				isErr = true
-				if !config.Quiet {
-					errTag := "ERR"
-					if scanElapsed >= 9*time.Second {
-						errTag = "TIMEOUT"
-					} else if scanElapsed >= 3*time.Second {
-						errTag = "SLOW"
-					}
-					fmt.Fprintf(color.Output, "%s[%s] %s %s\n",
-						ANSI_CLEAR_LINE,
-						time.Now().Format("15:04:05"),
-						color.RedString(errTag),
-						"/"+strings.TrimPrefix(p, "/"))
-				}
+				logRequestError(config, p, scanElapsed, &errLogged)
 			}
 			mu.Unlock()
 		}(path)
@@ -325,6 +327,92 @@ type scanResult struct {
 	fullURL  string
 }
 
+type httpAttempt struct {
+	resp   *http.Response
+	cancel context.CancelFunc
+	timeMs int64
+}
+
+// applyBaseHeaders applies explicit user headers and auth. Stealth headers are
+// layered afterwards so an explicit -H/--user-agent/--cookie always wins.
+func applyBaseHeaders(req *http.Request, config *ScanConfig) {
+	for k, v := range config.Headers {
+		req.Header.Set(k, v)
+	}
+	if config.JSONBody && config.Data == "" {
+		req.Header.Set("Content-Type", "application/json")
+	} else if config.GraphQL {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if config.APIMode && req.Header.Get("Accept") == "" {
+		req.Header.Set("Accept", "application/json, text/plain, */*")
+	}
+	if config.UserAgent != "" {
+		req.Header.Set("User-Agent", config.UserAgent)
+	}
+	if config.Cookie != "" {
+		req.Header.Set("Cookie", config.Cookie)
+	}
+	if config.Auth != "" {
+		switch config.AuthType {
+		case "basic":
+			if parts := strings.SplitN(config.Auth, ":", 2); len(parts) == 2 {
+				req.SetBasicAuth(parts[0], parts[1])
+			}
+		case "bearer", "jwt":
+			req.Header.Set("Authorization", "Bearer "+config.Auth)
+		case "digest":
+			req.Header.Set("Authorization", "Digest "+config.Auth)
+		case "ntlm":
+			req.Header.Set("Authorization", "NTLM "+config.Auth)
+		default:
+			if strings.Contains(config.Auth, ":") {
+				parts := strings.SplitN(config.Auth, ":", 2)
+				req.SetBasicAuth(parts[0], parts[1])
+			} else {
+				req.Header.Set("Authorization", "Bearer "+config.Auth)
+			}
+		}
+	}
+}
+
+// doRequest performs one attempt. The returned attempt owns a live context;
+// the caller MUST call cancel only after the body has been fully read. The
+// old code cancelled the context immediately after Do() returned, which
+// aborted every body read and turned every success into a phantom error.
+func doRequest(config *ScanConfig, client *http.Client, method, fullURL, bodyStr string, uaList []string, hook func(*http.Request)) (*httpAttempt, error) {
+	reqCtx, cancel := context.WithTimeout(context.Background(), time.Duration(config.Timeout)*time.Second)
+	var bodyReader io.Reader
+	if bodyStr != "" {
+		bodyReader = strings.NewReader(bodyStr)
+	}
+	req, err := http.NewRequestWithContext(reqCtx, method, fullURL, bodyReader)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	applyBaseHeaders(req, config)
+	applyStealth(req, config, uaList)
+	if hook != nil {
+		hook(req)
+	}
+	start := time.Now()
+	resp, err := client.Do(req)
+	elapsed := time.Since(start).Milliseconds()
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	return &httpAttempt{resp: resp, cancel: cancel, timeMs: elapsed}, nil
+}
+
+func readAttemptBody(att *httpAttempt) ([]byte, error) {
+	defer att.cancel()
+	defer att.resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(att.resp.Body, 4*1024*1024))
+	return body, err
+}
+
 func scanPath(config *ScanConfig, client *http.Client, path string, uaList []string) *scanResult {
 	if skipPathRe.MatchString(path) {
 		return nil
@@ -361,97 +449,24 @@ func scanPath(config *ScanConfig, client *http.Client, path string, uaList []str
 		bodyStrInit = "{}"
 	}
 
-	// Pre-hash UA index for consistent selection
-	uaIdx := 0
-	if len(uaList) > 0 {
-		uaIdx = int(hashPath(path) % uint64(len(uaList)))
-	}
-
-	var resp *http.Response
+	var att *httpAttempt
 	var err error
-	var timeMs int64
-
-	headerSetup := func(req *http.Request) {
-		for k, v := range config.Headers {
-			req.Header.Set(k, v)
-		}
-		if config.JSONBody && config.Data == "" {
-			req.Header.Set("Content-Type", "application/json")
-		} else if config.GraphQL {
-			req.Header.Set("Content-Type", "application/json")
-		}
-		if config.APIMode && req.Header.Get("Accept") == "" {
-			req.Header.Set("Accept", "application/json, text/plain, */*")
-		}
-		if config.UserAgent != "" {
-			req.Header.Set("User-Agent", config.UserAgent)
-		} else if len(uaList) > 0 {
-			req.Header.Set("User-Agent", strings.TrimSpace(uaList[uaIdx]))
-		}
-		if config.Cookie != "" {
-			req.Header.Set("Cookie", config.Cookie)
-		}
-		if config.Auth != "" {
-			switch config.AuthType {
-			case "basic":
-				if parts := strings.SplitN(config.Auth, ":", 2); len(parts) == 2 {
-					req.SetBasicAuth(parts[0], parts[1])
-				}
-			case "bearer", "jwt":
-				req.Header.Set("Authorization", "Bearer "+config.Auth)
-			case "digest":
-				req.Header.Set("Authorization", "Digest "+config.Auth)
-			case "ntlm":
-				req.Header.Set("Authorization", "NTLM "+config.Auth)
-			}
-		}
-	}
-
 	for retry := 0; retry <= config.Retries; retry++ {
-		start := time.Now()
-		// Cap each request to Timeout; DialContext, TLS handshake and
-		// ResponseHeaderTimeout also enforce it. Reading a streaming body
-		// is bounded below by LimitReader.
-		reqCtx, cancel := context.WithTimeout(context.Background(), time.Duration(config.Timeout)*time.Second)
-		var bodyReader io.Reader
-		if bodyStrInit != "" {
-			bodyReader = strings.NewReader(bodyStrInit)
-		}
-		req, err := http.NewRequestWithContext(reqCtx, config.Method, fullURL, bodyReader)
-		if err != nil {
-			cancel()
-			return nil
-		}
-		headerSetup(req)
-
-		resp, err = client.Do(req)
-		timeMs = time.Since(start).Milliseconds()
+		att, err = doRequest(config, client, config.Method, fullURL, bodyStrInit, uaList, nil)
 		if err == nil {
-			// Body reads below honor the same deadline; a server that
-			// sends headers but stalls mid-body gets cut, not re-read.
-			if ctxErr := reqCtx.Err(); ctxErr != nil {
-				cancel()
-				resp.Body.Close()
-				resp = nil
-				err = ctxErr
-			}
-		}
-		if err == nil {
-			cancel()
 			break
 		}
-		cancel()
-		// Backoff scales with retries; a dead server gets one more probe
-		// then the path is counted as an error, never a hang.
-		if retry < config.Retries {
-			time.Sleep(time.Duration(300*(retry+1)) * time.Millisecond)
+		if retry < config.Retries && shouldRetryError(err) {
+			time.Sleep(time.Duration(150*(retry+1)) * time.Millisecond)
+		} else {
+			break
 		}
 	}
-
-	if err != nil || resp == nil {
+	if err != nil || att == nil {
 		return nil
 	}
 
+	resp := att.resp
 	finalStatus := resp.StatusCode
 	redirectURL := ""
 	if finalStatus >= 300 && finalStatus < 400 {
@@ -465,32 +480,48 @@ func scanPath(config *ScanConfig, client *http.Client, path string, uaList []str
 			}
 		}
 		if redirectURL != "" && config.FollowRedirect {
-			followReq, _ := http.NewRequest("GET", redirectURL, nil)
-			if followReq != nil {
-				if config.UserAgent != "" {
-					followReq.Header.Set("User-Agent", config.UserAgent)
-				} else if len(uaList) > 0 {
-					followReq.Header.Set("User-Agent", strings.TrimSpace(uaList[uaIdx]))
-				}
-				if followResp, followErr := client.Do(followReq); followErr == nil && followResp != nil {
-					resp.Body.Close()
-					resp = followResp
-					finalStatus = followResp.StatusCode
+			if body, _ := readAttemptBody(att); len(body) > 0 {
+				// body discarded; the followed response is authoritative
+			}
+			if followAtt, ferr := doRequest(config, client, "GET", redirectURL, "", uaList, nil); ferr == nil {
+				att = followAtt
+				resp = followAtt.resp
+				finalStatus = resp.StatusCode
+				if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+					redirectURL = resp.Header.Get("Location")
 				}
 			}
 		}
 	}
-	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
-	finalSize := int64(len(body))
-
-	if finalSize == 0 && (finalStatus == 200 || finalStatus == 301 || finalStatus == 302) {
-		return nil
+	// WAF / rate-limit handling: back off globally, then try a bounded number
+	// of bypass variants before giving up on this path.
+	if isBlockStatus(finalStatus) {
+		noteBlockStatus(finalStatus)
+		readAttemptBody(att) // drain + release the blocked response
+		if config.WAFBypass {
+			if alt := tryBypass(config, client, path, fullURL, bodyStrInit, uaList, finalStatus); alt != nil {
+				return alt
+			}
+		}
+		return &scanResult{
+			res: &DirResult{
+				Path: path, Status: finalStatus, Size: 0,
+				ContentType: resp.Header.Get("Content-Type"), TimeMs: att.timeMs,
+			},
+			body:     "",
+			header:   headerMapToString(resp.Header),
+			filtered: true,
+			fullURL:  fullURL,
+		}
 	}
 
+	body, readErr := readAttemptBody(att)
+	if readErr != nil && len(body) == 0 {
+		return nil
+	}
+	finalSize := int64(len(body))
 	bodyStr := string(body)
-
 	contentType := resp.Header.Get("Content-Type")
 	title := extractTitle(bodyStr)
 	words := countWords(bodyStr)
@@ -498,16 +529,15 @@ func scanPath(config *ScanConfig, client *http.Client, path string, uaList []str
 	hdrStr := headerMapToString(resp.Header)
 	bodyHash := fmt.Sprintf("%x", sha1.Sum(body))[:16]
 
-	// 404 + wildcard size is the soft-404 signature; keep it as a
-	// filtered result so stats count it, never as an error/timeout.
-	if config.SmartFilter && finalStatus == config.WildcardStatus &&
-		config.WildcardSize > 0 && finalSize == config.WildcardSize {
+	// Soft-404 / wildcard: keep as a filtered result so stats count it,
+	// never as an error.
+	if config.SmartFilter && isWildcardStatusSize(finalStatus, finalSize, config) {
 		return &scanResult{
 			res: &DirResult{
-				Path: path, Status: 404, Size: finalSize,
+				Path: path, Status: finalStatus, Size: finalSize,
 				ContentType: contentType, Title: title,
 				Redirect: redirectURL, Words: words, Lines: lines,
-				BodyHash: bodyHash, TimeMs: timeMs,
+				BodyHash: bodyHash, TimeMs: att.timeMs,
 			},
 			body:     bodyStr,
 			header:   hdrStr,
@@ -515,14 +545,13 @@ func scanPath(config *ScanConfig, client *http.Client, path string, uaList []str
 			fullURL:  fullURL,
 		}
 	}
-
 	if config.SmartFilter && CheckSoft404(bodyStr, title) {
 		return &scanResult{
 			res: &DirResult{
-				Path: path, Status: 404, Size: finalSize,
+				Path: path, Status: finalStatus, Size: finalSize,
 				ContentType: contentType, Title: title,
 				Redirect: redirectURL, Words: words, Lines: lines,
-				BodyHash: bodyHash, TimeMs: timeMs,
+				BodyHash: bodyHash, TimeMs: att.timeMs,
 			},
 			body:     bodyStr,
 			header:   hdrStr,
@@ -530,23 +559,93 @@ func scanPath(config *ScanConfig, client *http.Client, path string, uaList []str
 			fullURL:  fullURL,
 		}
 	}
-
 	if config.ExcludeResponse != "" && config.ReferenceResponse != nil {
 		if finalSize == config.ReferenceResponse.Size && finalStatus == config.ReferenceResponse.Status {
 			return nil
 		}
 	}
-
 	return &scanResult{
 		res: &DirResult{
 			Path: path, Status: finalStatus, Size: finalSize,
 			ContentType: contentType, Redirect: redirectURL, Title: title,
-			BodyHash: bodyHash, Words: words, Lines: lines, TimeMs: timeMs,
+			BodyHash: bodyHash, Words: words, Lines: lines, TimeMs: att.timeMs,
 		},
 		body:    bodyStr,
 		header:  hdrStr,
 		fullURL: fullURL,
 	}
+}
+
+// shouldRetryError avoids burning retries on a dead domain or a refused
+// connection — those never recover inside a scan.
+func shouldRetryError(err error) bool {
+	s := strings.ToLower(err.Error())
+	if strings.Contains(s, "no such host") || strings.Contains(s, "dns") {
+		return false
+	}
+	if strings.Contains(s, "connection refused") {
+		return false
+	}
+	return true
+}
+
+// tryBypass retries a blocked path with bypass headers and encoded path
+// variants. Bounded globally so a site that blocks everything cannot turn
+// a 30k scan into a 300k scan.
+var bypassTries int32
+
+func tryBypass(config *ScanConfig, client *http.Client, path, fullURL, bodyStr string, uaList []string, blockedStatus int) *scanResult {
+	const maxGlobalTries = 3000
+	if atomic.LoadInt32(&bypassTries) >= maxGlobalTries {
+		return nil
+	}
+	type variant struct {
+		url    string
+		header int
+	}
+	variants := []variant{{fullURL, 0}}
+	if config.PathMutations {
+		for i, m := range pathMutations(path) {
+			u := buildURL(config.Target, m)
+			if u == fullURL || len(u) > 4096 {
+				continue
+			}
+			variants = append(variants, variant{u, i})
+			if len(variants) >= 5 {
+				break
+			}
+		}
+	}
+	for _, v := range variants {
+		if atomic.AddInt32(&bypassTries, 1) > maxGlobalTries {
+			break
+		}
+		idx := v.header
+		att, err := doRequest(config, client, config.Method, v.url, bodyStr, uaList, func(r *http.Request) {
+			applyBypassHeaders(r, idx)
+		})
+		if err != nil || att == nil {
+			continue
+		}
+		status := att.resp.StatusCode
+		body, _ := readAttemptBody(att)
+		if !isBlockStatus(status) && status != blockedStatus {
+			bodyStr2 := string(body)
+			return &scanResult{
+				res: &DirResult{
+					Path: path, Status: status, Size: int64(len(body)),
+					ContentType: att.resp.Header.Get("Content-Type"),
+					Title:       extractTitle(bodyStr2),
+					Words:       countWords(bodyStr2), Lines: countLines(bodyStr2),
+					BodyHash: fmt.Sprintf("%x", sha1.Sum(body))[:16], TimeMs: att.timeMs,
+				},
+				body:    bodyStr2,
+				header:  headerMapToString(att.resp.Header),
+				fullURL: v.url,
+			}
+		}
+	}
+	return nil
 }
 
 func buildURL(target, path string) string {
@@ -755,4 +854,41 @@ func findDBDir() string {
 		home = filepath.Dir(home)
 	}
 	return "db"
+}
+
+// logRequestError prints the first handful of errors with detail, then
+// silences the rest so a dead target cannot flood the terminal with 30k
+// identical ERR lines. -v prints every one; --error-log writes all of them.
+func logRequestError(config *ScanConfig, path string, elapsed time.Duration, logged *int32) {
+	tag := "ERR"
+	if elapsed >= time.Duration(config.Timeout)*time.Second {
+		tag = "TIMEOUT"
+	} else if elapsed >= time.Duration(config.Timeout)*time.Second/2 {
+		tag = "SLOW"
+	}
+	if config.ErrorLog != "" {
+		if f, err := os.OpenFile(config.ErrorLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+			fmt.Fprintf(f, "%s %s\n", tag, "/"+strings.TrimPrefix(path, "/"))
+			f.Close()
+		}
+	}
+	if config.Quiet {
+		return
+	}
+	if !config.Verbose {
+		n := atomic.AddInt32(logged, 1)
+		if n > 5 {
+			return
+		}
+		if n == 5 {
+			fmt.Fprintf(color.Output, "%s[%s] %s further errors suppressed (use -v or --error-log)\n",
+				ANSI_CLEAR_LINE, time.Now().Format("15:04:05"), color.YellowString("!"))
+			return
+		}
+	}
+	fmt.Fprintf(color.Output, "%s[%s] %s %s\n",
+		ANSI_CLEAR_LINE,
+		time.Now().Format("15:04:05"),
+		color.RedString(tag),
+		"/"+strings.TrimPrefix(path, "/"))
 }

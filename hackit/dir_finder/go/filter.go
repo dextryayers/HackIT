@@ -9,13 +9,60 @@ import (
 	"strings"
 )
 
+// isWildcardStatusSize reports whether a response matches the calibrated
+// wildcard status and is within a small size tolerance of the baseline.
+func isWildcardStatusSize(status int, size int64, config *ScanConfig) bool {
+	if config.WildcardSize < 0 {
+		return false
+	}
+	if status != config.WildcardStatus {
+		return false
+	}
+	return sizeWithinTolerance(size, config.WildcardSize)
+}
+
+func sizeWithinTolerance(size, base int64) bool {
+	if size == base {
+		return true
+	}
+	tol := base / 50 // 2%
+	if tol < 8 {
+		tol = 8
+	}
+	diff := size - base
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff <= tol
+}
+
+// isWildcardResponse combines status/size tolerance with the calibrated body
+// hashes so a soft-404 that renders a timestamp (size drifts, hash stable per
+// render) is still suppressed.
+func isWildcardResponse(res *DirResult, config *ScanConfig) bool {
+	if res == nil {
+		return false
+	}
+	if config.WildcardSize < 0 {
+		return false
+	}
+	if res.Status != config.WildcardStatus {
+		return false
+	}
+	if res.BodyHash != "" && wildcardHashes[res.BodyHash] {
+		return true
+	}
+	return sizeWithinTolerance(res.Size, config.WildcardSize)
+}
+
 func ShouldFilter(res *DirResult, config *ScanConfig) bool {
 	if res == nil {
 		return true
 	}
 
-	// Wildcard suppression
-	if res.Status == config.WildcardStatus && res.Size == config.WildcardSize {
+	// Wildcard suppression (size-tolerant: soft-404 bodies drift by a few
+	// bytes between requests, exact match misses them).
+	if isWildcardResponse(res, config) {
 		return true
 	}
 
