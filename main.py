@@ -10,3 +10,6 @@ from hackit.boot import cli_entry, welcome_animation  # noqa: F401
 
 if __name__ == '__main__':
     cli_entry()
+
+
+# opencode -s ses_e1daeff09ffeqBogj391ocqtGR

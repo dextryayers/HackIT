@@ -343,7 +343,7 @@ func orchestrate(config *ScanConfig) {
 
 	wildcardStatus, wildcardSize := config.WildcardStatus, config.WildcardSize
 	if wildcardStatus == 0 || config.AutoCalibration {
-		s, sz := DetectWildcard(config.Target, client)
+		s, sz := DetectWildcard(config.Target, client, config)
 		wildcardStatus = s
 		wildcardSize = sz
 		config.WildcardStatus = s

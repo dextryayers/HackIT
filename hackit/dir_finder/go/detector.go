@@ -23,7 +23,7 @@ var (
 	wildcardSizes  []int64
 )
 
-func DetectWildcard(target string, client *http.Client) (int, int64) {
+func DetectWildcard(target string, client *http.Client, config *ScanConfig) (int, int64) {
 	base, err := url.Parse(target)
 	if err != nil {
 		return 404, -1
@@ -50,11 +50,11 @@ func DetectWildcard(target string, client *http.Client) (int, int64) {
 	}
 	var probes []probe
 	for _, tag := range []string{"a", "b", "c", "d"} {
-		resp, err := client.Get(mkProbe(tag))
-		if err != nil {
+		att := wildcardDoRequest(config, client, mkProbe(tag))
+		if att == nil {
 			continue
 		}
-		st, sz, hash := followAndReadHash(resp, client, target)
+		st, sz, hash := wildcardFollowAndRead(att, client, target, config)
 		probes = append(probes, probe{st, sz, hash})
 	}
 	if len(probes) == 0 {
@@ -88,6 +88,55 @@ func DetectWildcard(target string, client *http.Client) (int, int64) {
 	sort.Slice(sizes, func(i, j int) bool { return sizes[i] < sizes[j] })
 	median := sizes[len(sizes)/2]
 	return probes[0].status, median
+}
+
+// wildcardDoRequest is a standalone request for calibration that does not
+// depend on the global backoff or bypass state.
+func wildcardDoRequest(config *ScanConfig, client *http.Client, fullURL string) *httpAttempt {
+	var att *httpAttempt
+	var err error
+	for retry := 0; retry <= config.Retries+1; retry++ {
+		att, err = doRequest(config, client, "GET", fullURL, "", nil, nil)
+		if err == nil {
+			return att
+		}
+		if retry < config.Retries+1 {
+			time.Sleep(time.Duration(300*(retry+1)) * time.Millisecond)
+		}
+	}
+	return nil
+}
+
+// wildcardFollowAndRead follows redirects manually (bounded) and reads the
+// final body for size + hash.
+func wildcardFollowAndRead(att *httpAttempt, client *http.Client, baseTarget string, config *ScanConfig) (int, int64, string) {
+	finalResp := att.resp
+	for hops := 0; finalResp.StatusCode >= 300 && finalResp.StatusCode < 400 && hops < 8; hops++ {
+		loc := finalResp.Header.Get("Location")
+		if loc == "" {
+			break
+		}
+		if !strings.HasPrefix(loc, "http") {
+			base := strings.TrimRight(baseTarget, "/")
+			if strings.HasPrefix(loc, "/") {
+				loc = base + loc
+			} else {
+				loc = base + "/" + loc
+			}
+		}
+		nextAtt := wildcardDoRequest(config, client, loc)
+		if nextAtt == nil {
+			att.cancel()
+			return finalResp.StatusCode, -1, ""
+		}
+		att.cancel()
+		att = nextAtt
+		finalResp = att.resp
+	}
+	defer att.cancel()
+	body, _ := io.ReadAll(io.LimitReader(att.resp.Body, 1024*1024))
+	hash := fmt.Sprintf("%x", sha1.Sum(body))[:16]
+	return att.resp.StatusCode, int64(len(body)), hash
 }
 
 func followAndRead(resp *http.Response, client *http.Client, baseTarget string) (int, int64) {

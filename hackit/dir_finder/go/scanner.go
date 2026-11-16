@@ -65,6 +65,7 @@ func RunScan(config *ScanConfig) ([]DirResult, *ScanStats) {
 	results := make([]DirResult, 0)
 	fpFrequency := make(map[string]int)
 	seenPaths := make(map[string]bool)
+	var rescuePaths []string
 	pathCount := len(config.Paths)
 
 	adaptiveRate := NewAdaptiveRateController(config)
@@ -164,6 +165,12 @@ func RunScan(config *ScanConfig) ([]DirResult, *ScanStats) {
 			scanElapsed := time.Since(scanStart)
 			if sr != nil && sr.res != nil {
 				isErr = false
+			} else if scanElapsed >= adaptiveTimeout(config) {
+				// Record for the rescue pass: this path may still be reachable
+				// with a longer deadline once the server settles.
+				mu.Lock()
+				rescuePaths = append(rescuePaths, p)
+				mu.Unlock()
 			}
 			if config.Scheduler != nil {
 				defer func() {
@@ -171,83 +178,135 @@ func RunScan(config *ScanConfig) ([]DirResult, *ScanStats) {
 				}()
 			}
 			adaptiveRate.RecordResult(isErr)
-
-			mu.Lock()
-			if sr != nil && sr.res != nil {
-				if sr.filtered {
-					if isBlockStatus(sr.res.Status) {
-						stats.Blocked++
-					}
-					stats.Filtered++
-					mu.Unlock()
-					return
-				}
-				if !seenPaths[sr.res.Path] {
-					seenPaths[sr.res.Path] = true
-
-					// Classify response (login, API)
-					ClassifyResponse(sr.res, sr.body)
-
-					// SmartFilter: false-positive suppression
-					if SmartFilterResult(sr.res, config, fpFrequency) {
-						stats.Filtered++
-						mu.Unlock()
-						return
-					}
-
-					// Advanced filtering via filter_engine + match_engine + text_engine
-					filterRes := FilterResponseAdvanced(sr.res, config)
-					textRes := ExcludeByText(config.ExcludeText, sr.body)
-					regexRes := ExcludeByRegex(config.ExcludeRegex, sr.body)
-					redirectRes := ExcludeByRedirect(config.ExcludeRedirect, sr.res.Redirect)
-					refRes := ExcludeByReference(sr.res, config.ReferenceResponse)
-					matchRes := MatchResponseAdvanced(sr.res, sr.body, sr.header, config)
-
-					// Legacy filter integration
-					isRedirect := sr.res.Status >= 300 && sr.res.Status < 400
-					legacyFiltered := ShouldFilter(sr.res, config) ||
-						ShouldFilterBody([]byte(sr.body), sr.res, config) ||
-						ShouldFilterRedirect(sr.res, config) ||
-						ShouldFilterHeaders(sr.header, config)
-					if isRedirect && legacyFiltered && sr.res.Status == config.WildcardStatus && sr.res.Size == config.WildcardSize {
-						legacyFiltered = false
-					}
-
-					filtered := legacyFiltered || filterRes.Filtered || textRes.Filtered ||
-						regexRes.Filtered || redirectRes.Filtered || refRes.Filtered ||
-						matchRes.Filtered
-
-					if !config.Quiet && (!filtered || config.Verbose) {
-						printAttempt(sr.res, config, filtered)
-					}
-					if !filtered {
-						results = append(results, *sr.res)
-						stats.Found++
-					} else {
-						stats.Filtered++
-					}
-
-					// Recursion check
-					if ShouldRecurse(sr.res, recursionPlan) {
-						recursionPlan.Level++
-					}
-				}
-			} else {
-				stats.Errors++
-				isErr = true
-				logRequestError(config, p, scanElapsed, &errLogged)
-			}
-			mu.Unlock()
+			processScanResult(config, sr, p, scanElapsed, mu, &errLogged, seenPaths, fpFrequency, &recursionPlan, &results, stats)
 		}(path)
 	}
 
 	wg.Wait()
 	close(done)
+
+	// Rescue pass: paths that timed out get a second chance with a much
+	// longer deadline, run at low concurrency so the server can breathe.
+	if len(rescuePaths) > 0 && atomic.LoadInt32(&timedOut) == 0 {
+		rescueScan(config, client, uaList, rescuePaths, mu, &errLogged, seenPaths, fpFrequency, &recursionPlan, &results, stats)
+	}
+
 	stats.EndTime = time.Now()
 	if !config.Quiet {
 		fmt.Println()
 	}
 	return results, stats
+}
+
+// rescueScan re-requests paths that timed out on the first pass with a
+// deadline 4x longer and low concurrency. Bounded to 5 min so it can never
+// hang the whole scan.
+func rescueScan(config *ScanConfig, client *http.Client, uaList []string, rescuePaths []string, mu *sync.Mutex, errLogged *int32, seenPaths map[string]bool, fpFrequency map[string]int, recursionPlan *RecursionPlan, results *[]DirResult, stats *ScanStats) {
+	if !config.Quiet {
+		fmt.Fprintf(color.Output, "%s[%s] %s Rescue pass: %d timed-out paths (longer deadline)\n",
+			ANSI_CLEAR_LINE, time.Now().Format("15:04:05"), color.YellowString("[!]"), len(rescuePaths))
+	}
+
+	// Longer deadline for the rescue pass.
+	saved := config.Timeout
+	config.Timeout = saved * 4
+	if config.Timeout > 60 {
+		config.Timeout = 60
+	}
+	defer func() { config.Timeout = saved }()
+
+	const rescueConc = 4
+	sem := make(chan struct{}, rescueConc)
+	var wg sync.WaitGroup
+
+	deadline := time.Now().Add(5 * time.Minute)
+	for _, p := range rescuePaths {
+		if time.Now().After(deadline) {
+			break
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(p string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			sr := scanPath(config, client, p, uaList)
+			if sr == nil || sr.res == nil {
+				mu.Lock()
+				stats.Errors++
+				logRequestError(config, p, adaptiveTimeout(config), errLogged)
+				mu.Unlock()
+				return
+			}
+			processScanResult(config, sr, p, 0, mu, errLogged, seenPaths, fpFrequency, recursionPlan, results, stats)
+		}(p)
+	}
+	wg.Wait()
+}
+
+// processScanResult handles one scanPath outcome: filtering, stats, printing,
+// recursion. Shared by the main pass and the rescue pass so both behave
+// identically.
+func processScanResult(config *ScanConfig, sr *scanResult, p string, scanElapsed time.Duration, mu *sync.Mutex, errLogged *int32, seenPaths map[string]bool, fpFrequency map[string]int, recursionPlan *RecursionPlan, results *[]DirResult, stats *ScanStats) {
+	mu.Lock()
+	defer mu.Unlock()
+
+	if sr == nil || sr.res == nil {
+		stats.Errors++
+		logRequestError(config, p, scanElapsed, errLogged)
+		return
+	}
+	if sr.filtered {
+		if isBlockStatus(sr.res.Status) {
+			stats.Blocked++
+		}
+		stats.Filtered++
+		return
+	}
+	if seenPaths[sr.res.Path] {
+		return
+	}
+	seenPaths[sr.res.Path] = true
+
+	ClassifyResponse(sr.res, sr.body)
+
+	if SmartFilterResult(sr.res, config, fpFrequency) {
+		stats.Filtered++
+		return
+	}
+
+	filterRes := FilterResponseAdvanced(sr.res, config)
+	textRes := ExcludeByText(config.ExcludeText, sr.body)
+	regexRes := ExcludeByRegex(config.ExcludeRegex, sr.body)
+	redirectRes := ExcludeByRedirect(config.ExcludeRedirect, sr.res.Redirect)
+	refRes := ExcludeByReference(sr.res, config.ReferenceResponse)
+	matchRes := MatchResponseAdvanced(sr.res, sr.body, sr.header, config)
+
+	isRedirect := sr.res.Status >= 300 && sr.res.Status < 400
+	legacyFiltered := ShouldFilter(sr.res, config) ||
+		ShouldFilterBody([]byte(sr.body), sr.res, config) ||
+		ShouldFilterRedirect(sr.res, config) ||
+		ShouldFilterHeaders(sr.header, config)
+	if isRedirect && legacyFiltered && sr.res.Status == config.WildcardStatus && sr.res.Size == config.WildcardSize {
+		legacyFiltered = false
+	}
+
+	filtered := legacyFiltered || filterRes.Filtered || textRes.Filtered ||
+		regexRes.Filtered || redirectRes.Filtered || refRes.Filtered ||
+		matchRes.Filtered
+
+	if !config.Quiet && (!filtered || config.Verbose) {
+		printAttempt(sr.res, config, filtered)
+	}
+	if !filtered {
+		*results = append(*results, *sr.res)
+		stats.Found++
+	} else {
+		stats.Filtered++
+	}
+
+	if ShouldRecurse(sr.res, *recursionPlan) {
+		recursionPlan.Level++
+	}
 }
 
 func printAttempt(res *DirResult, config *ScanConfig, filtered bool) {
@@ -381,8 +440,11 @@ func applyBaseHeaders(req *http.Request, config *ScanConfig) {
 // the caller MUST call cancel only after the body has been fully read. The
 // old code cancelled the context immediately after Do() returned, which
 // aborted every body read and turned every success into a phantom error.
+//
+// The deadline is adaptive: a server that answers in 6s but is alive gets a
+// longer window instead of a false TIMEOUT on every single path.
 func doRequest(config *ScanConfig, client *http.Client, method, fullURL, bodyStr string, uaList []string, hook func(*http.Request)) (*httpAttempt, error) {
-	reqCtx, cancel := context.WithTimeout(context.Background(), time.Duration(config.Timeout)*time.Second)
+	reqCtx, cancel := context.WithTimeout(context.Background(), adaptiveTimeout(config))
 	var bodyReader io.Reader
 	if bodyStr != "" {
 		bodyReader = strings.NewReader(bodyStr)
@@ -399,12 +461,17 @@ func doRequest(config *ScanConfig, client *http.Client, method, fullURL, bodyStr
 	}
 	start := time.Now()
 	resp, err := client.Do(req)
-	elapsed := time.Since(start).Milliseconds()
+	elapsed := time.Since(start)
 	if err != nil {
 		cancel()
+		if isTimeoutErr(err) {
+			noteTimeout()
+		}
 		return nil, err
 	}
-	return &httpAttempt{resp: resp, cancel: cancel, timeMs: elapsed}, nil
+	latency.record(elapsed)
+	clearTimeout()
+	return &httpAttempt{resp: resp, cancel: cancel, timeMs: elapsed.Milliseconds()}, nil
 }
 
 func readAttemptBody(att *httpAttempt) ([]byte, error) {
@@ -452,18 +519,34 @@ func scanPath(config *ScanConfig, client *http.Client, path string, uaList []str
 
 	var att *httpAttempt
 	var err error
+	// Timeouts get extra attempts (a live-but-slow server needs them) and a
+	// longer backoff; hard connection failures do not.
+	timedOut := false
 	for retry := 0; retry <= config.Retries; retry++ {
 		att, err = doRequest(config, client, config.Method, fullURL, bodyStrInit, uaList, nil)
 		if err == nil {
 			break
 		}
-		if retry < config.Retries && shouldRetryError(err) {
-			time.Sleep(time.Duration(150*(retry+1)) * time.Millisecond)
+		if isTimeoutErr(err) {
+			timedOut = true
+		}
+		maxRetry := effectiveRetries(config, timedOut)
+		if retry < maxRetry && shouldRetryError(err) {
+			if timedOut {
+				// Long enough that the server can catch its breath, capped
+				// so a truly dead target does not stall the whole scan.
+				time.Sleep(time.Duration(500*(retry+1)) * time.Millisecond)
+			} else {
+				time.Sleep(time.Duration(150*(retry+1)) * time.Millisecond)
+			}
 		} else {
 			break
 		}
 	}
 	if err != nil || att == nil {
+		if timedOut {
+			noteTimeout()
+		}
 		return nil
 	}
 
