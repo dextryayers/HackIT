@@ -291,11 +291,25 @@ func orchestrate(config *ScanConfig) {
 		fmt.Fprintf(color.Output, "%s Checking target connectivity...\n", cCyan.Sprint("[*]"))
 	}
 	connOK, connInfo := ValidateConnectivity(config.Target, client)
+
+	// If https fails but the user did not pin a scheme, try http once. A bare
+	// host with no scheme defaults to https, and plenty of lab boxes are
+	// plain http — retrying here saves a dead 30k-path run.
+	if !connOK && config.Scheme == "" && strings.HasPrefix(config.Target, "https://") {
+		alt := "http://" + strings.TrimPrefix(config.Target, "https://")
+		if ok, info := ValidateConnectivity(alt, client); ok {
+			fmt.Fprintf(color.Output, "%s https failed, falling back to %s\n", cYellow.Sprint("[!]"), cCyan.Sprint(alt))
+			config.Target = alt
+			connOK, connInfo = true, info
+		}
+	}
+
 	if !connOK {
 		fmt.Fprintf(color.Output, "\n%s Cannot reach target: %s\n", cRed.Sprint("[!]"), cYellow.Sprint(config.Target))
 		fmt.Fprintf(color.Output, "%s %s\n", cYellow.Sprint("[*]"), connInfo)
-		if strings.Contains(connInfo, "DNS lookup failed") {
-			fmt.Fprintf(color.Output, "%s The domain does not resolve. Check your DNS or internet connection.\n", cYellow.Sprint("[!]"))
+		dnsFailed := strings.Contains(connInfo, "DNS") || strings.Contains(connInfo, "no such host")
+		if dnsFailed {
+			fmt.Fprintf(color.Output, "%s The host does not resolve. Check the domain, your DNS, or the internet connection.\n", cYellow.Sprint("[!]"))
 		} else if strings.Contains(connInfo, "timeout") {
 			fmt.Fprintf(color.Output, "%s Connection timed out. The server may be down or blocking your IP.\n", cYellow.Sprint("[!]"))
 			fmt.Fprintf(color.Output, "%s Try: --proxy http://your-proxy:port or -timeout 10 -t 5\n", cYellow.Sprint("[*]"))
@@ -305,8 +319,19 @@ func orchestrate(config *ScanConfig) {
 			fmt.Fprintf(color.Output, "%s Connection reset. The server closed the connection.\n", cYellow.Sprint("[!]"))
 			fmt.Fprintf(color.Output, "%s Reduce threads: -t 5 or use a proxy.\n", cYellow.Sprint("[*]"))
 		}
+		// A dead domain never recovers mid-scan: 30k requests would each pay
+		// a DNS timeout. Abort unless the operator forces it.
+		if dnsFailed && !config.IgnoreDNS {
+			fmt.Fprintf(color.Output, "%s Aborting: target does not resolve. Fix the host or pass -ignore-dns to force.\n", cRed.Sprint("[!]"))
+			os.Exit(1)
+		}
 		if config.ExitOnError {
 			os.Exit(1)
+		}
+		if config.IgnoreDNS {
+			fmt.Fprintf(color.Output, "%s Continuing anyway (-ignore-dns): expect per-path errors.\n", cYellow.Sprint("[!]"))
+		} else {
+			fmt.Fprintf(color.Output, "%s Continuing anyway; unreachable paths will be counted as errors.\n", cYellow.Sprint("[!]"))
 		}
 	} else if !config.Quiet {
 		fmt.Fprintf(color.Output, "%s Target is reachable: %s\n", cGreen.Sprint("[+]"), connInfo)

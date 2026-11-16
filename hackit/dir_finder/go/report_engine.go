@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"sync/atomic"
 	"fmt"
 	"os"
 	"strings"
@@ -76,6 +77,10 @@ func PrintResultsSummary(config *ScanConfig, results []DirResult, stats *ScanSta
 	fmt.Fprintf(color.Output, "\n%s Scan completed in %s\n", color.GreenString("[+]"), elapsed)
 	fmt.Fprintf(color.Output, "%s Requests: %d | Found: %d | Filtered: %d | Errors: %d\n",
 		color.CyanString("[*]"), stats.TotalRequests, stats.Found, stats.Filtered, stats.Errors)
+	if stats.Blocked > 0 {
+		fmt.Fprintf(color.Output, "%s WAF/block responses: %d (retried with bypass: %d)\n",
+			color.YellowString("[!]"), stats.Blocked, atomic.LoadInt32(&bypassTries))
+	}
 
 	if len(results) > 0 {
 		fmt.Fprintf(color.Output, "\n%s Results (%d found):\n", color.GreenString("[+]"), len(results))

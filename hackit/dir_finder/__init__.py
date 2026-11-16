@@ -55,6 +55,11 @@ def _interactive_help():
         ("quiet on|off", "only findings, no progress line"),
         ("recursive on|off", "recurse into found directories"),
         ("http2", "HTTP/2 auto-negotiated via ALPN (no-op key, kept for muscle memory)"),
+        ("stealth on|off", "rotate UA + spoof X-Forwarded-For/X-Real-IP per request"),
+        ("waf on|off", "retry 403/406/429/503 with bypass headers + encoded path variants"),
+        ("mutate on|off", "generate encoded path variants when a path is blocked"),
+        ("errors on|off", "print every per-path error instead of the first 5"),
+        ("ignore-dns", "keep scanning even if the host does not resolve (not recommended)"),
         ("delay N", "delay between requests in ms"),
         ("timeout N", "per-request timeout in seconds"),
         ("rate N", "cap requests per second"),
@@ -284,6 +289,7 @@ def _run_engine(kwargs):
         'output_formats': '-O',
         'output': '-o',
         'log': '-log',
+        'error_log': '-error-log',
     }
 
     for kw, flag in flag_map.items():
@@ -331,11 +337,20 @@ def _run_engine(kwargs):
         'api_mode': '-api-mode',
         'json_body': '-json-body',
         'graphql': '-graphql',
+        'stealth': '-stealth',
+        'waf_bypass': '-waf-bypass',
+        'path_mutations': '-path-mutations',
+        'ignore_dns': '-ignore-dns',
     }
 
     for kw, flag in bool_flags.items():
         if kwargs.get(kw):
             cmd.append(flag)
+    # These two default to ON in the Go engine, so an explicit "off" must be
+    # sent as -flag=false or the default would silently win.
+    for kw, flag in (('waf_bypass', '-waf-bypass'), ('path_mutations', '-path-mutations')):
+        if kwargs.get(kw) is False:
+            cmd.append(flag + '=false')
 
     # Headers (multi-value)
     if kwargs.get('header'):
@@ -515,6 +530,29 @@ def _interactive_parse(text: str):
             flag, consumed = _bool_token(tokens, i)
             kwargs["http2"] = flag
             i += consumed
+        elif key in ("stealth", "evade"):
+            flag, consumed = _bool_token(tokens, i)
+            kwargs["stealth"] = flag
+            i += consumed
+        elif key in ("waf", "bypass", "waf-bypass"):
+            flag, consumed = _bool_token(tokens, i)
+            kwargs["waf_bypass"] = flag
+            i += consumed
+        elif key in ("mutate", "mutations", "path-mutations"):
+            flag, consumed = _bool_token(tokens, i)
+            kwargs["path_mutations"] = flag
+            i += consumed
+        elif key in ("errors", "errorlog", "error-log"):
+            # 'errors on' = verbose (show all), 'errors off' = default throttle
+            flag, consumed = _bool_token(tokens, i)
+            kwargs["verbose"] = flag
+            i += consumed
+        elif key in ("ignore-dns", "ignoredns"):
+            kwargs["ignore_dns"] = True
+            i += 1
+        elif key in ("ip",) and val:
+            kwargs["ip"] = val
+            i += 2
         elif key == "help":
             return None, "help"
         else:

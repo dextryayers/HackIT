@@ -163,22 +163,22 @@ var (
 )
 
 func noteBlockStatus(code int) {
-	base := int64(300 * time.Millisecond)
+	base := int64(250 * time.Millisecond)
 	switch code {
 	case 429:
-		base = int64(2 * time.Second)
+		base = int64(1500 * time.Millisecond)
 	case 503:
-		base = int64(time.Second)
+		base = int64(800 * time.Millisecond)
 	case 403, 406:
-		base = int64(400 * time.Millisecond)
+		base = int64(300 * time.Millisecond)
 	}
 	n := atomic.AddInt32(&blockCount, 1)
-	if n > 4 {
-		n = 4
+	if n > 3 {
+		n = 3
 	}
 	d := time.Duration(base * int64(1<<uint(n)))
-	if d > 30*time.Second {
-		d = 30 * time.Second
+	if d > 8*time.Second {
+		d = 8 * time.Second
 	}
 	until := time.Now().Add(d).UnixNano()
 	for {
@@ -212,4 +212,18 @@ func waitBackoff() {
 func resetBackoff() {
 	atomic.StoreInt64(&backoffUntilNano, 0)
 	atomic.StoreInt32(&blockCount, 0)
+}
+
+// decayBlock lowers the block counter after a clean response so a site that
+// throttles intermittently does not stay pinned at the maximum backoff.
+func decayBlock() {
+	if atomic.LoadInt32(&blockCount) > 0 {
+		atomic.AddInt32(&blockCount, -1)
+	}
+}
+
+// bypassableStatus: path mutation only helps against rule-based blocks, not
+// against rate limits or overload, where retrying a variant just wastes budget.
+func bypassableStatus(code int) bool {
+	return code == 403 || code == 406 || code == 501
 }

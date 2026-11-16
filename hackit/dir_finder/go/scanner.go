@@ -112,6 +112,7 @@ func RunScan(config *ScanConfig) ([]DirResult, *ScanStats) {
 	}()
 
 	resetBackoff()
+	atomic.StoreInt32(&bypassTries, 0)
 	prioQueue := NewPrioritizedQueue(config.Paths)
 
 	for {
@@ -499,7 +500,7 @@ func scanPath(config *ScanConfig, client *http.Client, path string, uaList []str
 	if isBlockStatus(finalStatus) {
 		noteBlockStatus(finalStatus)
 		readAttemptBody(att) // drain + release the blocked response
-		if config.WAFBypass {
+		if config.WAFBypass && bypassableStatus(finalStatus) {
 			if alt := tryBypass(config, client, path, fullURL, bodyStrInit, uaList, finalStatus); alt != nil {
 				return alt
 			}
@@ -519,6 +520,9 @@ func scanPath(config *ScanConfig, client *http.Client, path string, uaList []str
 	body, readErr := readAttemptBody(att)
 	if readErr != nil && len(body) == 0 {
 		return nil
+	}
+	if !isBlockStatus(finalStatus) {
+		decayBlock()
 	}
 	finalSize := int64(len(body))
 	bodyStr := string(body)
