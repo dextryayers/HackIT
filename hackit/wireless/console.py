@@ -1674,7 +1674,32 @@ Usage: run"""
     def do_quit(self, arg):
         return self.do_exit(arg)
 
+    def parseline(self, line):
+        """Split line into (cmd, arg) allowing dashes in command names.
+
+        cmd.Cmd's default identchars excludes '-', which would read
+        'deauth-multi' as 'deauth' with arg '-multi ...'. Allow the dash so
+        dashed commands resolve to the underscore method via default().
+        """
+        stripped = line.strip()
+        if not stripped:
+            return "", "", ""
+        parts = stripped.split(None, 1)
+        cmd = parts[0]
+        arg = parts[1] if len(parts) > 1 else ""
+        if cmd == "?":
+            return "help", arg, stripped
+        return cmd, arg, stripped
+
     def default(self, line):
+        # Accept dashed commands (inject-test, band-scan, deauth-multi) by
+        # translating to the do_* method name with underscores.
+        parts = line.split(None, 1)
+        if parts:
+            candidate = parts[0].replace("-", "_")
+            method = getattr(self, f"do_{candidate}", None)
+            if method is not None:
+                return method(parts[1] if len(parts) > 1 else "")
         UI.print_error(f"Unknown command: {line}")
         UI.print_info("Type 'help' to see available commands.")
 
