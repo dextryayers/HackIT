@@ -92,8 +92,16 @@ class EngineBridge:
         self._discover_engines()
         return results
 
+    def _cpu_count(self) -> int:
+        try:
+            return max(1, os.cpu_count() or 1)
+        except Exception:
+            return 1
+
     def _build_go(self, cb) -> bool:
         if not shutil.which("go"):
+            if cb:
+                cb("go", "go toolchain not installed - skipped")
             return False
         go_dir = BASE / "go_workers"
         if cb:
@@ -102,20 +110,28 @@ class EngineBridge:
             out_dir = go_dir / "bin"
             out_dir.mkdir(exist_ok=True)
             binary = out_dir / ("hackit-worker.exe" if os.name == "nt" else "hackit-worker")
+            env = dict(os.environ)
+            env.setdefault("CGO_ENABLED", "0")
             subprocess.run(
-                ["go", "build", "-ldflags=-s -w", "-o", str(binary), "."],
-                cwd=str(go_dir), check=True, capture_output=True, text=True
+                ["go", "build", "-trimpath", "-ldflags=-s -w", "-o", str(binary), "."],
+                cwd=str(go_dir), check=True, capture_output=True, text=True, env=env,
             )
             os.chmod(binary, 0o755)
             self._go_bin = str(binary)
             return True
         except subprocess.CalledProcessError as e:
             if cb:
-                cb("go", f"FAILED: {e.stderr[:200]}")
+                cb("go", f"FAILED: {(e.stderr or '')[:200]}")
+            return False
+        except OSError as e:
+            if cb:
+                cb("go", f"FAILED: {e}")
             return False
 
     def _build_rust(self, cb) -> bool:
         if not shutil.which("cargo"):
+            if cb:
+                cb("rust", "cargo not installed - skipped")
             return False
         rust_dir = BASE / "rust_engine"
         if cb:
@@ -123,38 +139,97 @@ class EngineBridge:
         try:
             subprocess.run(
                 ["cargo", "build", "--release"],
-                cwd=str(rust_dir), check=True, capture_output=True, text=True
+                cwd=str(rust_dir), check=True, capture_output=True, text=True,
             )
             self._discover_engines()
-            return self._rust_bin is not None
+            return self._rust_bin is not None and self._rust_bin != "cargo_build"
         except subprocess.CalledProcessError as e:
             if cb:
-                cb("rust", f"FAILED: {e.stderr[:200]}")
+                cb("rust", f"FAILED: {(e.stderr or '')[:300]}")
+            return False
+        except OSError as e:
+            if cb:
+                cb("rust", f"FAILED: {e}")
             return False
 
     def _build_c_core(self, cb) -> bool:
-        if not shutil.which("cmake"):
-            return False
+        """Build the C/C++ core.
+
+        Prefers CMake when available, but falls back to the standalone
+        Makefile and then a direct gcc invocation so the engine still builds
+        on hosts without cmake installed.
+        """
         c_dir = BASE / "c_core"
-        build_dir = c_dir / "build"
-        build_dir.mkdir(exist_ok=True)
-        if cb:
-            cb("c_core", "Building C/C++ core with CMake...")
-        try:
-            subprocess.run(
-                ["cmake", "..", "-DCMAKE_BUILD_TYPE=Release"],
-                cwd=str(build_dir), check=True, capture_output=True, text=True
-            )
-            subprocess.run(
-                ["make", "-j$(nproc)"],
-                cwd=str(build_dir), check=True, capture_output=True, text=True
-            )
-            self._discover_engines()
-            return self._c_lib is not None or self._cxx_lib is not None
-        except subprocess.CalledProcessError as e:
-            if cb:
-                cb("c_core", f"FAILED: {e.stderr[:200]}")
+        if not c_dir.exists():
             return False
+
+        have_cmake = shutil.which("cmake") is not None
+        have_make = shutil.which("make") is not None
+        have_gcc = shutil.which("gcc") is not None or shutil.which("cc") is not None
+
+        if have_cmake:
+            if cb:
+                cb("c_core", "Building with CMake...")
+            build_dir = c_dir / "build"
+            build_dir.mkdir(exist_ok=True)
+            try:
+                subprocess.run(
+                    ["cmake", "..", "-DCMAKE_BUILD_TYPE=Release"],
+                    cwd=str(build_dir), check=True, capture_output=True, text=True,
+                )
+                subprocess.run(
+                    ["cmake", "--build", ".", "--parallel", str(self._cpu_count())],
+                    cwd=str(build_dir), check=True, capture_output=True, text=True,
+                )
+                self._discover_engines()
+                if self._c_lib is not None or self._cxx_lib is not None:
+                    return True
+            except (subprocess.CalledProcessError, OSError) as e:
+                if cb:
+                    cb("c_core", f"CMake failed ({(getattr(e, 'stderr', '') or str(e))[:160]}) - trying make...")
+
+        if have_make and (c_dir / "Makefile").exists():
+            if cb:
+                cb("c_core", "Building with Makefile...")
+            try:
+                subprocess.run(
+                    ["make", f"-j{self._cpu_count()}"],
+                    cwd=str(c_dir), check=True, capture_output=True, text=True,
+                )
+                self._discover_engines()
+                if self._c_lib is not None or self._cxx_lib is not None:
+                    return True
+            except (subprocess.CalledProcessError, OSError) as e:
+                if cb:
+                    cb("c_core", f"make failed ({(getattr(e, 'stderr', '') or str(e))[:160]}) - trying gcc...")
+
+        if have_gcc:
+            if cb:
+                cb("c_core", "Building static injectors with gcc...")
+            cc = shutil.which("gcc") or shutil.which("cc")
+            built_any = False
+            for src, out in (
+                (c_dir / "deauth_inject.c", c_dir / "deauth-inject"),
+                (c_dir / "eviltwin_inject.c", c_dir / "eviltwin-inject"),
+            ):
+                if not src.exists():
+                    continue
+                try:
+                    subprocess.run(
+                        [cc, "-O2", "-static", "-o", str(out), str(src), "-lm"],
+                        check=True, capture_output=True, text=True,
+                    )
+                    os.chmod(out, 0o755)
+                    built_any = True
+                except (subprocess.CalledProcessError, OSError) as e:
+                    if cb:
+                        cb("c_core", f"{src.name}: {(getattr(e, 'stderr', '') or str(e))[:120]}")
+            self._discover_engines()
+            return built_any or self._c_lib is not None
+
+        if cb:
+            cb("c_core", "No C toolchain found - skipped")
+        return False
 
     def _build_csharp(self, cb) -> bool:
         if not shutil.which("dotnet"):

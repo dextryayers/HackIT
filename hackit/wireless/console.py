@@ -183,8 +183,24 @@ def _parse_flags(args: list[str], known_flags: set[str],
     return pos, flags
 
 
+def clear_screen() -> None:
+    """Clear the terminal only when attached to a TTY.
+
+    Piped output (CI, log capture, `hackit wireless | tee`) has no controlling
+    terminal, so an unconditional `clear` raises OSError errno 25 on some
+    kernels. Detect first, fall back to newline padding otherwise.
+    """
+    try:
+        if not sys.stdout.isatty():
+            print()
+            return
+        clear_screen()
+    except (OSError, ValueError):
+        print()
+
+
 def print_banner():
-    os.system('cls' if os.name == 'nt' else 'clear')
+    clear_screen()
 
     banner = """[bold cyan]  .;'                     `;,[/bold cyan]
 [bold cyan] .;'  ,;'             `;,  `;,[/bold cyan]   [bold white]HackIT V2.1[/bold white]
@@ -454,7 +470,7 @@ Flags: --json | --watch | --interval <sec>"""
         pos, flags = _parse_flags(arg.split(), {"--json", "--watch"}, {"--interval": int})
 
         def _scan_and_render():
-            os.system("cls" if os.name == "nt" else "clear")
+            clear_screen()
 
             # ── Animated scan ──
             spinner_frames = ["◐", "◓", "◑", "◒"]
@@ -474,7 +490,7 @@ Flags: --json | --watch | --interval <sec>"""
             sys.stdout.write("\033[1;32m ✓ Scan complete! Detecting capabilities...\033[0m\n")
             time.sleep(0.3)
 
-            os.system("cls" if os.name == "nt" else "clear")
+            clear_screen()
 
             # ── Tab header ──
             tab_w = os.get_terminal_size().columns if hasattr(os, 'get_terminal_size') else 80
@@ -1565,7 +1581,7 @@ Flags: --json | --check-updates"""
 
     def do_clear(self, arg):
         """Clear screen."""
-        os.system("cls" if os.name == "nt" else "clear")
+        clear_screen()
         self._banner_shown = False
 
     def do_banner(self, arg):
