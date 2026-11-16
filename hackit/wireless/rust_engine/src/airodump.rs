@@ -125,6 +125,7 @@ impl AirodumpCapture {
         let frame_subtype = (fc >> 4) & 0x0F;
 
         // Signal strength from radiotap
+        #[allow(unused_variables)]
         let signal = self.extract_signal(data, hdr);
 
         let sa = format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
@@ -134,6 +135,7 @@ impl AirodumpCapture {
         let da = format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
             data[hdr+22], data[hdr+23], data[hdr+24], data[hdr+25], data[hdr+26], data[hdr+27]);
 
+        #[allow(unused_variables)]
         let signal = self.extract_signal(data, hdr);
         let bssid = if frame_type == 0 { sa.clone() } else { ta.clone() };
 

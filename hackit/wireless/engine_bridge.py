@@ -136,21 +136,30 @@ class EngineBridge:
         rust_dir = BASE / "rust_engine"
         if cb:
             cb("rust", "Compiling Rust engine (release)...")
-        try:
-            subprocess.run(
-                ["cargo", "build", "--release"],
-                cwd=str(rust_dir), check=True, capture_output=True, text=True,
-            )
-            self._discover_engines()
-            return self._rust_bin is not None and self._rust_bin != "cargo_build"
-        except subprocess.CalledProcessError as e:
-            if cb:
-                cb("rust", f"FAILED: {(e.stderr or '')[:300]}")
-            return False
-        except OSError as e:
-            if cb:
-                cb("rust", f"FAILED: {e}")
-            return False
+        # The default feature set links libpcap. Hosts without libpcap-dev fail
+        # at link time, so fall back to --no-default-features which builds the
+        # raw-socket injector path only.
+        attempts = [
+            ["cargo", "build", "--release"],
+            ["cargo", "build", "--release", "--no-default-features"],
+        ]
+        last_err = ""
+        for argv in attempts:
+            try:
+                subprocess.run(
+                    argv, cwd=str(rust_dir), check=True, capture_output=True, text=True,
+                )
+                self._discover_engines()
+                if self._rust_bin is not None and self._rust_bin != "cargo_build":
+                    return True
+            except subprocess.CalledProcessError as e:
+                last_err = (e.stderr or "")[-300:]
+            except OSError as e:
+                last_err = str(e)
+                break
+        if cb:
+            cb("rust", f"FAILED: {last_err[-200:] if last_err else 'unknown error'}")
+        return False
 
     def _build_c_core(self, cb) -> bool:
         """Build the C/C++ core.

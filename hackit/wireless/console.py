@@ -595,6 +595,69 @@ Flags: --json | --watch | --interval <sec>"""
                 console.print()
                 UI.print_info("Watch stopped.")
 
+    def do_caps(self, arg):
+        """Show adapter capability probe (chipset, bands, monitor/inject support).
+Usage: caps [--json]"""
+        from . import executor_caps
+        flags = set(arg.split()) if arg.strip() else set()
+        executor_caps.caps_report(json_out="--json" in flags)
+
+    def do_chipset(self, arg):
+        """Detailed chipset report for one interface.
+Usage: chipset <iface>"""
+        from . import executor_caps
+        iface = arg.strip().split()[0] if arg.strip() else self.executor._default_iface()
+        if not iface:
+            UI.print_error("No interface given and none detected.")
+            return
+        executor_caps.chipset_detail(iface)
+
+    def do_inject_test(self, arg):
+        """Verify the adapter can actually inject frames.
+Usage: inject-test <iface> [--frames N]"""
+        from . import executor_caps
+        pos, flags = _parse_flags(arg.split(), set(), {"--frames": int})
+        iface = pos[0] if pos else self.executor._default_iface()
+        if not iface:
+            UI.print_error("No interface given and none detected.")
+            return
+        executor_caps.inject_test(iface, frames=flags.get("--frames", 20))
+
+    def do_band_scan(self, arg):
+        """Scan access points band-by-band (native iw, no airodump needed).
+Usage: band-scan <iface> [2.4|5|6|both] [--timeout N]"""
+        from . import executor_caps
+        pos, flags = _parse_flags(arg.split(), {"2.4", "5", "6", "both"}, {"--timeout": int})
+        iface = pos[0] if pos else self.executor._default_iface()
+        band = pos[1] if len(pos) > 1 else "both"
+        if not iface:
+            UI.print_error("No interface given and none detected.")
+            return
+        executor_caps.band_scan(iface, band=band, timeout=flags.get("--timeout", 15))
+
+    def do_deauth_multi(self, arg):
+        """Dual-band, multi-station deauth with reason-code rotation.
+Usage: deauth-multi <iface> <bssid> <station,...> [--band 2.4|5|both] [--channel N] [--duration S]"""
+        from . import executor_caps
+        pos, flags = _parse_flags(
+            arg.split(), {"2.4", "5", "both"},
+            {"--channel": int, "--duration": float, "--reason": int, "--band": str},
+        )
+        if len(pos) < 3:
+            UI.print_error("Syntax: deauth-multi <iface> <bssid> <station|station,station|ff:ff:ff:ff:ff:ff>")
+            return
+        iface, bssid, stations_raw = pos[0], pos[1], pos[2]
+        stations = [x.strip() for x in stations_raw.split(",") if x.strip()]
+        band = flags.get("--band", "both")
+        for token in pos:
+            if token in ("2.4", "5", "both"):
+                band = token
+        executor_caps.deauth_multi(
+            iface, self.executor._clean_bssid(bssid), stations,
+            band=band, reason=flags.get("--reason", 7),
+            channel=flags.get("--channel", 0), duration=flags.get("--duration", 0.0),
+        )
+
     def do_adapter(self, arg):
         """Query adapter info.
 Usage: adapter info <iface> [--json] [--capabilities]"""

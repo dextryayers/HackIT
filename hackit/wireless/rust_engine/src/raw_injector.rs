@@ -31,15 +31,6 @@ mod linux {
                 return Err(io::Error::last_os_error());
             }
 
-            let sock_addr = libc::sockaddr_ll {
-                sll_family: libc::AF_PACKET as u16,
-                sll_protocol: (libc::ETH_P_ALL as u16).to_be(),
-                sll_ifindex: 0,
-                sll_hatype: 0,
-                sll_pkttype: 0,
-                sll_halen: 0,
-                sll_addr: [0u8; 8],
-            };
 
             let if_cstr = std::ffi::CString::new(iface).map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Invalid interface name"))?;
             let ifindex = unsafe { libc::if_nametoindex(if_cstr.as_ptr()) };
@@ -114,9 +105,6 @@ mod linux {
         }
     }
 
-    fn ifreq_for(name: &str) -> libc::ifreq {
-        unsafe { mem::zeroed::<libc::ifreq>() }
-    }
 }
 
 #[cfg(target_os = "linux")]

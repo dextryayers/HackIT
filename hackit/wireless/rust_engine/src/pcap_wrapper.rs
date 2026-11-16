@@ -56,6 +56,7 @@ pub fn open_capture(name: &str) -> Result<PcapSession, String> {
 }
 
 pub fn set_filter(session: &mut PcapSession, filter_expr: &str) -> bool {
+    let _ = filter_expr;
     match session {
         #[cfg(feature = "pcap")]
         PcapSession::Real(cap) => cap.filter(filter_expr, true).is_ok(),

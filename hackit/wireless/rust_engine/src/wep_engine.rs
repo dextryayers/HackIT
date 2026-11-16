@@ -75,7 +75,7 @@ fn is_fms_weak(iv: u32) -> bool {
 fn fms_key_byte_vote(iv_bytes: &[u8; 3], first_keystream: u8, key_byte_idx: usize) -> Vec<(u8, u32)> {
     let a = iv_bytes[0];
     let b = iv_bytes[1];
-    let c = iv_bytes[2];
+    let _c = iv_bytes[2];
     if b != 0xFF {
         return Vec::new();
     }
@@ -91,7 +91,7 @@ fn fms_key_byte_vote(iv_bytes: &[u8; 3], first_keystream: u8, key_byte_idx: usiz
     let i_val = steps as u8;
     let tmp_j = s.iter().take(steps).fold(0u8, |j, &s_i| j.wrapping_add(s_i));
     let s_i = s[i_val as usize];
-    let s_j = s[tmp_j as usize];
+    let _s_j = s[tmp_j as usize];
 
     for candidate in 0..=255u8 {
         let test_j = tmp_j.wrapping_add(s_i).wrapping_add(candidate);
