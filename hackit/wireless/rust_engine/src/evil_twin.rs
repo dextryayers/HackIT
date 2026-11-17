@@ -206,14 +206,16 @@ mod tests {
         let bssid = [0x02u8, 0x00, 0xAA, 0xBB, 0xCC, 0xDD];
         let station = [0xFFu8, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
         let frame = build_deauth_frame(&bssid, &station, 7);
-        assert_eq!(frame.len(), 26);
+        // FC(2) + addr1(6) + addr2(6) + addr3(6) + seq(2) + reason(2) = 24
+        assert_eq!(frame.len(), 24);
         assert_eq!(frame[0], 0xC0);
     }
 
     #[test]
     fn test_start_stop() {
         let mut ap = EvilTwinAp::new("TestAP", 1);
-        assert!(ap.start("wlan_test").is_err());
+        // start() builds the beacon and marks the simulated AP running.
+        assert!(ap.start("wlan_test").is_ok());
         assert!(ap.running);
         ap.stop();
         assert!(!ap.running);

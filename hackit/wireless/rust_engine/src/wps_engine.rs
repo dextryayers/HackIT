@@ -2,6 +2,15 @@ use std::fmt::Write;
 
 pub struct WpsPinGenerator;
 
+// WPS PIN check digit: alternating weights of 3 and 1 over the first 7 digits.
+fn wps_check_digit(digits7: &[u8]) -> u8 {
+    let sum: u32 = digits7.iter().enumerate().map(|(i, d)| {
+        let w = if i % 2 == 0 { 3 } else { 1 };
+        (*d as u32) * w
+    }).sum();
+    ((10 - (sum % 10)) % 10) as u8
+}
+
 impl WpsPinGenerator {
     pub fn compute_pin_from_bssid(bssid: &str) -> Option<String> {
         let parts: Vec<&str> = bssid.split(':').collect();
@@ -23,17 +32,7 @@ impl WpsPinGenerator {
             .chars()
             .map(|c| c.to_digit(10).unwrap() as u8)
             .collect();
-        let sum: u32 = digits.iter().enumerate().map(|(i, d)| {
-            let mut v = *d as u32;
-            if i % 2 == 0 {
-                v *= 2;
-                if v > 9 {
-                    v = v % 10 + 1;
-                }
-            }
-            v
-        }).sum();
-        let checksum = (sum * 9) % 10;
+        let checksum = wps_check_digit(&digits);
         Some(format!("{:07}{}", pin_base, checksum))
     }
 

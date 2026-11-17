@@ -155,13 +155,14 @@ class WpsCrypto:
 
     @staticmethod
     def pin_from_bssid(bssid: str) -> str:
-        """Convenience: default PIN derived from the router's BSSID (the
-        documented vendor default for many chipsets)."""
+        """Default PIN from the router's BSSID, matching the C++ core
+        (ComputePinFromMac) and the Rust wps_engine: first 5 bytes as a
+        big-endian integer, mod 10^7, plus the WPS check digit."""
         clean = bssid.replace(":", "").replace("-", "").lower()
-        if len(clean) < 12:
+        if len(clean) < 10:
             return ""
-        nic = int(clean[-6:], 16)
-        pin7 = f"{nic % 10000000:07d}"
+        first5 = int(clean[:10], 16)
+        pin7 = f"{first5 % 10000000:07d}"
         return pin7 + str(WpsCrypto.pin_checksum(pin7))
 
     @staticmethod
