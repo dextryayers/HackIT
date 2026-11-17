@@ -1102,7 +1102,10 @@ Usage: wps scan <iface> [--timeout <sec>] [--json] [--output <file>]
        wps pin <bssid> [--compute-all]
        wps bruteforce <iface> <bssid> [--start <pin>] [--end <pin>] [--delay <ms>]"""
         KNOWN = {"--json", "--compute-all", "--verbose"}
-        FLAG_VAL = {"--timeout": int, "--output": str, "--start": str, "--end": str, "--delay": int}
+        FLAG_VAL = {"--timeout": int, "--output": str, "--start": str, "--end": str, "--delay": int,
+                    "--pke": str, "--pkr": str, "--es1": str, "--es2": str,
+                    "--enrollee-mac": str, "--registrar-mac": str,
+                    "--enrollee-nonce": str, "--registrar-nonce": str}
         pos, flags = _parse_flags(arg.split(), KNOWN, FLAG_VAL)
         if not pos:
             UI.print_error("Usage: wps scan <iface> | wps pixie <iface> <bssid> | wps pin <bssid>")
@@ -1116,7 +1119,13 @@ Usage: wps scan <iface> [--timeout <sec>] [--json] [--output <file>]
             iface = pos[1] if len(pos) > 1 else _detect_iface()
             bssid = pos[2] if len(pos) > 2 else ""
             pin = pos[3] if len(pos) > 3 else flags.get("--start", "")
-            self.executor.do_wps_pixie(iface, bssid, pin, timeout=flags.get("--timeout", 120))
+            self.executor.do_wps_pixie(iface, bssid, pin, timeout=flags.get("--timeout", 120),
+                                       pke=flags.get("--pke"), pkr=flags.get("--pkr"),
+                                       es1=flags.get("--es1"), es2=flags.get("--es2"),
+                                       enrollee_mac=flags.get("--enrollee-mac"),
+                                       registrar_mac=flags.get("--registrar-mac"),
+                                       enrollee_nonce=flags.get("--enrollee-nonce"),
+                                       registrar_nonce=flags.get("--registrar-nonce"))
         elif sub == "pin":
             bssid = pos[1] if len(pos) > 1 else ""
             self.executor.do_wps_pin(bssid, all_pins="--compute-all" in flags)

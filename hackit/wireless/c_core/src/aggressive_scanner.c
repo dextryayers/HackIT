@@ -51,7 +51,9 @@ typedef struct {
 
 static ap_entry s_aps[256];
 static int s_ap_count = 0;
-static int s_channels[128];
+static int s_channels[SCAN_5GHZ_END - SCAN_5GHZ_START + 1
+                      + SCAN_2GHZ_END - SCAN_2GHZ_START + 1
+                      + SCAN_6GHZ_END - SCAN_6GHZ_START + 1 + 8];
 static int s_num_channels = 0;
 static int s_channels_scanned = 0;
 

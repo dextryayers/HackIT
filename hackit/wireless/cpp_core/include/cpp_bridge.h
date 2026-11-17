@@ -37,10 +37,10 @@ const char* orchestrator_get_status(void);
 const char* orchestrator_get_results(const char* id);
 const char* orchestrator_multi_engine(const char* engines_json, const char* params_json);
 
-const char* craft_deauth(const char* bssid, const char* station, int reason);
-const char* craft_beacon(const char* ssid, const char* bssid, int channel);
-const char* craft_probe(const char* ssid, const char* client_mac);
-const char* craft_eapol(void);
+const char* craft_deauth(const char* bssid, const char* station, int reason) noexcept;
+const char* craft_beacon(const char* ssid, const char* bssid, int channel) noexcept;
+const char* craft_probe(const char* ssid, const char* client_mac) noexcept;
+const char* craft_eapol(void) noexcept;
 
 int monitor_start(const char* iface);
 int monitor_stop(void);

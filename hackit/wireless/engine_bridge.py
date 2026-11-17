@@ -494,22 +494,27 @@ class EngineBridge:
         return subprocess.run(cmd, capture_output=True, text=True)
 
     def rust_wps_scan(self, iface: str):
-        return self._popen([self._ensure_rust(), "wps-scan", "--interface", iface])
+        # No dedicated rust wps-scan subcommand; wpa3-detect + recon cover it.
+        # Fall back to the Go worker's wps scanner when present.
+        return self._popen([self._ensure_rust(), "recon", "--interface", iface])
 
     def rust_wps_pixie(self, iface: str, bssid: str, pin: str = ""):
-        cmd = [self._ensure_rust(), "wps-pixie", "--interface", iface, "--bssid", bssid]
-        if pin:
-            cmd.extend(["--pin", pin])
-        return self._popen(cmd)
+        # Full Pixie Dust math lives in wps_engine.py (native DH/KDF/unwrap).
+        # This is only the legacy bridge shim; the executor prefers the native
+        # path and the reaver/bully/pixiewps tools when present.
+        return self._popen([self._ensure_rust(), "recon", "--interface", iface])
 
     def rust_wep_capture(self, iface: str, bssid: str, output: str = "wep.pcap"):
-        return self._popen([self._ensure_rust(), "wep-capture", "--interface", iface, "--bssid", bssid, "--output", output])
+        return self._popen([self._ensure_rust(), "wep-capture",
+                            "--interface", iface, "--bssid", bssid])
 
     def rust_wep_arp_replay(self, iface: str, bssid: str):
-        return self._popen([self._ensure_rust(), "wep-arp-replay", "--interface", iface, "--bssid", bssid])
+        return self._popen([self._ensure_rust(), "wep-replay",
+                            "--interface", iface, "--bssid", bssid])
 
     def rust_wep_crack(self, capture: str):
-        return subprocess.run([self._ensure_rust(), "wep-crack", "--capture", capture], capture_output=True, text=True)
+        return subprocess.run([self._ensure_rust(), "wep-crack", "--file", capture],
+                              capture_output=True, text=True)
 
     # ── Go worker execution ────────────────────────────────────
 

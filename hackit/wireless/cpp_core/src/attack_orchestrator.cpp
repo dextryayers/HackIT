@@ -27,7 +27,7 @@ struct AttackTask {
 };
 
 static std::mutex g_mutex;
-static std::map<std::string, AttackTask> g_tasks;
+static std::map<std::string, std::unique_ptr<AttackTask>> g_tasks;
 static int g_next_id = 0;
 
 static std::string json_escape(const std::string &s) {
@@ -62,14 +62,14 @@ static std::string build_json_status(const AttackTask &t) {
 extern "C" const char* orchestrator_launch(const char* name, const char* params_json) {
     std::lock_guard<std::mutex> lock(g_mutex);
     std::string id = "task_" + std::to_string(++g_next_id);
-    AttackTask task;
-    task.id = id;
-    task.name = name ? name : "unknown";
-    task.params = params_json ? params_json : "{}";
-    task.running = true;
-    task.status = "launching";
+    auto task = std::make_unique<AttackTask>();
+    task->id = id;
+    task->name = name ? name : "unknown";
+    task->params = params_json ? params_json : "{}";
+    task->running = true;
+    task->status = "launching";
     auto it = g_tasks.emplace(id, std::move(task)).first;
-    it->second.worker = std::thread([&itref = it->second, name = it->second.name, params = it->second.params]() {
+    it->second->worker = std::thread([&itref = *it->second, name = it->second->name, params = it->second->params]() {
         itref.status = "running";
         itref.details = "Starting " + name + " with params: " + params;
         int steps = 20;
@@ -90,7 +90,7 @@ extern "C" const char* orchestrator_launch(const char* name, const char* params_
         itref.progress = 100.0;
         itref.finished = true;
     });
-    it->second.worker.detach();
+    it->second->worker.detach();
     static std::string result;
     result = "{\"id\":\"" + id + "\",\"status\":\"launching\"}";
     return result.c_str();
@@ -100,8 +100,8 @@ extern "C" int orchestrator_stop(const char* id) {
     std::lock_guard<std::mutex> lock(g_mutex);
     auto it = g_tasks.find(id ? id : "");
     if (it == g_tasks.end()) return -1;
-    it->second.running = false;
-    it->second.status = "stopping";
+    it->second->running = false;
+    it->second->status = "stopping";
     return 0;
 }
 
@@ -113,7 +113,7 @@ extern "C" const char* orchestrator_get_status(void) {
     bool first = true;
     for (const auto &pair : g_tasks) {
         if (!first) os << ",";
-        os << build_json_status(pair.second);
+        os << build_json_status(*pair.second);
         first = false;
     }
     os << "]";
@@ -126,7 +126,7 @@ extern "C" const char* orchestrator_get_results(const char* id) {
     auto it = g_tasks.find(id ? id : "");
     if (it == g_tasks.end()) return "{\"error\":\"task not found\"}";
     static std::string result;
-    result = build_json_status(it->second);
+    result = build_json_status(*it->second);
     return result.c_str();
 }
 

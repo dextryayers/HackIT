@@ -709,7 +709,7 @@ int hackit_inject_frag_attack(const char* iface, const uint8_t* bssid,
 }
 
 int hackit_inject_caffe_latte(const char* iface, const uint8_t* bssid,
-                              const uint8_t* client_mac) {
+                              const uint8_t* client_mac, int count) {
     if (!iface || !bssid || !client_mac) return -1;
 #ifdef HACKIT_HAS_PCAP
     pcap_t* cap_handle = open_pcap_for_capture_timeout(iface, 5000);
@@ -750,7 +750,8 @@ int hackit_inject_caffe_latte(const char* iface, const uint8_t* bssid,
     memset(&arp_pkt[rad_off + 4], 0xFF, 6);
 
     int injected = 0;
-    for (int i = 0; i < 20; i++) {
+    int loops = (count > 0) ? count : 20;
+    for (int i = 0; i < loops; i++) {
         if (pcap_inject(inj_handle, arp_pkt, arp_len) == arp_len)
             injected++;
         hackit_msleep(50);
