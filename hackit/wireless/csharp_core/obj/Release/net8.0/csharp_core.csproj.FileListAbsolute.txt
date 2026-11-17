@@ -1,0 +1,5 @@
+/home/aniipid/Coding/HackIT/hackit/wireless/csharp_core/obj/Release/net8.0/csharp_core.GeneratedMSBuildEditorConfig.editorconfig
+/home/aniipid/Coding/HackIT/hackit/wireless/csharp_core/obj/Release/net8.0/csharp_core.AssemblyInfoInputs.cache
+/home/aniipid/Coding/HackIT/hackit/wireless/csharp_core/obj/Release/net8.0/csharp_core.AssemblyInfo.cs
+/home/aniipid/Coding/HackIT/hackit/wireless/csharp_core/obj/Release/net8.0/csharp_core.csproj.CoreCompileInputs.cache
+/home/aniipid/Coding/HackIT/hackit/wireless/csharp_core/obj/Release/net8.0/csharp_core.sourcelink.json
