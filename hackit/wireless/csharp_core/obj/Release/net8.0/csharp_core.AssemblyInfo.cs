@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("HackITWirelessCore")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+55e40a287395f26e09e8f803358f13ecfcb31ac1")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+0d703d8b76d471ed03cbcac8f38f4ae11389d531")]
 [assembly: System.Reflection.AssemblyProductAttribute("HackITWirelessCore")]
 [assembly: System.Reflection.AssemblyTitleAttribute("HackITWirelessCore")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

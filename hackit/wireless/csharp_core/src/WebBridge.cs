@@ -143,7 +143,7 @@ namespace HackITWireless
                     return JsonSerializer.Serialize(new { error = "Invalid JSON" });
 
                 string type = data.GetValueOrDefault("type", default).GetString() ?? "";
-                string iface = data.GetValueOrDefault("interface", default).GetString() ?? DetectInterface();
+                string iface = data.GetValueOrDefault("interface", default).GetString() ?? Program.DetectInterface();
                 string bssid = data.GetValueOrDefault("bssid", default).GetString() ?? "FF:FF:FF:FF:FF:FF";
                 string station = data.GetValueOrDefault("station", default).GetString() ?? "";
                 int count = data.GetValueOrDefault("count", default).GetInt32();

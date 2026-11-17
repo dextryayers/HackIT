@@ -44,6 +44,7 @@ namespace HackITWireless
             }
         }
 
+#pragma warning disable CS1998 // synchronous scan by design
         static async Task<int> RunScan(string[] args)
         {
             var scanner = new WifiScanner();
@@ -108,7 +109,7 @@ namespace HackITWireless
             return 0;
         }
 
-        static string DetectInterface()
+        internal static string DetectInterface()
         {
             try
             {
@@ -124,8 +125,8 @@ namespace HackITWireless
                 {
                     if (line.Contains("Interface"))
                     {
-                        var parts = line.Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
-                        if (parts.Length > 0) return parts[parts.Length - 1];
+                        var parts = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+                        if (parts.Length > 0) return parts[parts.Length - 1] ?? "";
                     }
                 }
             }

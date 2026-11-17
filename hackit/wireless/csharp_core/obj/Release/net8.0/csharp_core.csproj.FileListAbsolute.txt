@@ -3,3 +3,13 @@
 /home/aniipid/Coding/HackIT/hackit/wireless/csharp_core/obj/Release/net8.0/csharp_core.AssemblyInfo.cs
 /home/aniipid/Coding/HackIT/hackit/wireless/csharp_core/obj/Release/net8.0/csharp_core.csproj.CoreCompileInputs.cache
 /home/aniipid/Coding/HackIT/hackit/wireless/csharp_core/obj/Release/net8.0/csharp_core.sourcelink.json
+/home/aniipid/Coding/HackIT/hackit/wireless/csharp_core/bin/Release/net8.0/HackITWirelessCore
+/home/aniipid/Coding/HackIT/hackit/wireless/csharp_core/bin/Release/net8.0/HackITWirelessCore.deps.json
+/home/aniipid/Coding/HackIT/hackit/wireless/csharp_core/bin/Release/net8.0/HackITWirelessCore.runtimeconfig.json
+/home/aniipid/Coding/HackIT/hackit/wireless/csharp_core/bin/Release/net8.0/HackITWirelessCore.dll
+/home/aniipid/Coding/HackIT/hackit/wireless/csharp_core/bin/Release/net8.0/HackITWirelessCore.pdb
+/home/aniipid/Coding/HackIT/hackit/wireless/csharp_core/obj/Release/net8.0/HackITWirelessCore.dll
+/home/aniipid/Coding/HackIT/hackit/wireless/csharp_core/obj/Release/net8.0/refint/HackITWirelessCore.dll
+/home/aniipid/Coding/HackIT/hackit/wireless/csharp_core/obj/Release/net8.0/HackITWirelessCore.pdb
+/home/aniipid/Coding/HackIT/hackit/wireless/csharp_core/obj/Release/net8.0/csharp_core.genruntimeconfig.cache
+/home/aniipid/Coding/HackIT/hackit/wireless/csharp_core/obj/Release/net8.0/ref/HackITWirelessCore.dll
