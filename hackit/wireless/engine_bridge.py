@@ -528,6 +528,28 @@ class EngineBridge:
             cmd.append(ssid)
         return self._go_run(*cmd)
 
+    def go_deauth(self, iface: str, bssid: str, station: str = "",
+                  count: int = 0, reason: int = 0, hop: bool = False,
+                  hop_delay: int = 100):
+        """Spawn the Go deauth engine. Returns a Popen handle; the caller
+        can .terminate() it or read its stderr stream for rate updates."""
+        cmd = ["deauth", iface, bssid]
+        if station:
+            cmd.append(station)
+        cmd += ["--count", str(count), "--reason", str(reason)]
+        if hop:
+            cmd.append("--hop")
+            cmd += ["--hop-delay", str(hop_delay)]
+        return self._go_run(*cmd)
+
+    def go_beacon_flood(self, iface: str, ssid: str = "", count: int = 100, channel: int = 6):
+        cmd = ["packet-gen", iface, "beacon", ssid or "HackIT_WiFi"]
+        return self._go_run(*cmd)
+
+    def go_eviltwin(self, iface: str, ssid: str, bssid: str, channel: int = 6,
+                    version: str = "v1"):
+        return self._go_run("eviltwin", version, iface, ssid, bssid, str(channel))
+
     def go_session(self):
         return self._go_run("session")
 

