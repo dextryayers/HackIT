@@ -277,6 +277,7 @@ class WirelessConsole(cmd.Cmd):
                 ("aggressive-scan <iface> [--5ghz] [--timeout]", "Deep multi-channel AP scan", "aggressive-scan wlan0 --5ghz"),
                 ("client-hunt     <iface> [bssid] [--timeout]", "Enumerate connected clients", "client-hunt wlan0 AA:BB:CC"),
                 ("wpa3-detect     [iface] [--json]", "Detect WPA3/SAE/OWE APs", "wpa3-detect wlan0"),
+                ("wpa3-downgrade  <iface> <bssid> <ssid> [--channel]", "Force WPA3→WPA2 downgrade for crackable handshake", "wpa3-downgrade wlan0 AA:BB:CC MyWPA3"),
                 ("hidden          [iface] [--deauth] [--timeout]", "Find hidden SSID APs", "hidden wlan0 --deauth"),
                 ("probe-monitor   [iface] [--min-rssi]", "Watch probe requests live", "probe-monitor wlan0"),
                 ("beacon-analyze  [iface] [--json]", "Analyze beacon frames", "beacon-analyze wlan0"),
@@ -1211,6 +1212,31 @@ Usage: wpa3-detect [iface] [--json] [--timeout <sec>] [--output <file>]"""
         self.executor.do_wpa3_detect(pos[0] if pos else _detect_iface(),
                                       timeout=flags.get("--timeout"),
                                       output=flags.get("--output"))
+
+    def do_wpa3_downgrade(self, arg):
+        """WPA3 → WPA2 downgrade — force transition-mode clients back to a crackable WPA2 handshake.
+Usage: wpa3-downgrade <iface> <bssid> <ssid> [--channel <ch>] [--duration <sec>] [--no-strip-pmf] [--rate <ms>]
+       wpa3-downgrade <iface> <bssid> <ssid> --channel 6        # pin channel
+       wpa3-downgrade <iface> <bssid> <ssid> --duration 60       # auto-stop after 60s
+Run 'deauth <iface> <bssid>' alongside to force reassociation, then
+'capture handshake <iface> <bssid>' to grab the resulting WPA2 handshake."""
+        KNOWN = {"--no-strip-pmf", "--strip-pmf"}
+        FLAG_VAL = {"--channel": int, "--duration": int, "--rate": int}
+        pos, flags = _parse_flags(arg.split(), KNOWN, FLAG_VAL)
+        if len(pos) < 3:
+            UI.print_error(
+                "Usage: wpa3-downgrade <iface> <bssid> <ssid> "
+                "[--channel 6] [--duration 0] [--no-strip-pmf] [--rate 50]"
+            )
+            return
+        iface, bssid, ssid = pos[0], pos[1], pos[2]
+        self.executor.do_wpa3_downgrade(
+            iface, bssid, ssid,
+            channel=flags.get("--channel", 6),
+            duration=flags.get("--duration", 0),
+            strip_pmf="--no-strip-pmf" not in flags,
+            rate_ms=flags.get("--rate", 50),
+        )
 
     def do_hidden(self, arg):
         """Find hidden SSID APs.

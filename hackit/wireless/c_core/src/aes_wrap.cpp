@@ -1,22 +1,59 @@
-// AES-128/192/256 + RFC 3394 key wrap/unwrap. See aes_wrap.h.
-// S-box + T-tables are computed rather than baked so the table is correct by
-// construction and the file stays small.
+// AES-128/192/256 (ECB block op) + RFC 3394 key wrap/unwrap.
+//
+// Straightforward S-box implementation — byte-wise SubBytes/ShiftRows/
+// MixColumns. Slower than a T-table build but correct by construction and
+// small. WPS Pixie Dust only needs a handful of block ops per attempt, so
+// throughput is a non-issue.
+//
+// Verified against FIPS-197 C.1 (AES-128) and C.3 (AES-256) test vectors.
 
 #include "aes_wrap.h"
 
 namespace {
 
-uint8_t g_sbox[256];
-uint8_t g_inv_sbox[256];
-uint32_t g_te0[256], g_te1[256], g_te2[256], g_te3[256];
-uint32_t g_td0[256], g_td1[256], g_td2[256], g_td3[256];
-bool g_tables_ready = false;
+static const uint8_t g_sbox[256] = {
+    0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
+    0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0,
+    0xb7, 0xfd, 0x93, 0x26, 0x36, 0x3f, 0xf7, 0xcc, 0x34, 0xa5, 0xe5, 0xf1, 0x71, 0xd8, 0x31, 0x15,
+    0x04, 0xc7, 0x23, 0xc3, 0x18, 0x96, 0x05, 0x9a, 0x07, 0x12, 0x80, 0xe2, 0xeb, 0x27, 0xb2, 0x75,
+    0x09, 0x83, 0x2c, 0x1a, 0x1b, 0x6e, 0x5a, 0xa0, 0x52, 0x3b, 0xd6, 0xb3, 0x29, 0xe3, 0x2f, 0x84,
+    0x53, 0xd1, 0x00, 0xed, 0x20, 0xfc, 0xb1, 0x5b, 0x6a, 0xcb, 0xbe, 0x39, 0x4a, 0x4c, 0x58, 0xcf,
+    0xd0, 0xef, 0xaa, 0xfb, 0x43, 0x4d, 0x33, 0x85, 0x45, 0xf9, 0x02, 0x7f, 0x50, 0x3c, 0x9f, 0xa8,
+    0x51, 0xa3, 0x40, 0x8f, 0x92, 0x9d, 0x38, 0xf5, 0xbc, 0xb6, 0xda, 0x21, 0x10, 0xff, 0xf3, 0xd2,
+    0xcd, 0x0c, 0x13, 0xec, 0x5f, 0x97, 0x44, 0x17, 0xc4, 0xa7, 0x7e, 0x3d, 0x64, 0x5d, 0x19, 0x73,
+    0x60, 0x81, 0x4f, 0xdc, 0x22, 0x2a, 0x90, 0x88, 0x46, 0xee, 0xb8, 0x14, 0xde, 0x5e, 0x0b, 0xdb,
+    0xe0, 0x32, 0x3a, 0x0a, 0x49, 0x06, 0x24, 0x5c, 0xc2, 0xd3, 0xac, 0x62, 0x91, 0x95, 0xe4, 0x79,
+    0xe7, 0xc8, 0x37, 0x6d, 0x8d, 0xd5, 0x4e, 0xa9, 0x6c, 0x56, 0xf4, 0xea, 0x65, 0x7a, 0xae, 0x08,
+    0xba, 0x78, 0x25, 0x2e, 0x1c, 0xa6, 0xb4, 0xc6, 0xe8, 0xdd, 0x74, 0x1f, 0x4b, 0xbd, 0x8b, 0x8a,
+    0x70, 0x3e, 0xb5, 0x66, 0x48, 0x03, 0xf6, 0x0e, 0x61, 0x35, 0x57, 0xb9, 0x86, 0xc1, 0x1d, 0x9e,
+    0xe1, 0xf8, 0x98, 0x11, 0x69, 0xd9, 0x8e, 0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf,
+    0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16,
+};
+
+static const uint8_t g_inv_sbox[256] = {
+    0x52, 0x09, 0x6a, 0xd5, 0x30, 0x36, 0xa5, 0x38, 0xbf, 0x40, 0xa3, 0x9e, 0x81, 0xf3, 0xd7, 0xfb,
+    0x7c, 0xe3, 0x39, 0x82, 0x9b, 0x2f, 0xff, 0x87, 0x34, 0x8e, 0x43, 0x44, 0xc4, 0xde, 0xe9, 0xcb,
+    0x54, 0x7b, 0x94, 0x32, 0xa6, 0xc2, 0x23, 0x3d, 0xee, 0x4c, 0x95, 0x0b, 0x42, 0xfa, 0xc3, 0x4e,
+    0x08, 0x2e, 0xa1, 0x66, 0x28, 0xd9, 0x24, 0xb2, 0x76, 0x5b, 0xa2, 0x49, 0x6d, 0x8b, 0xd1, 0x25,
+    0x72, 0xf8, 0xf6, 0x64, 0x86, 0x68, 0x98, 0x16, 0xd4, 0xa4, 0x5c, 0xcc, 0x5d, 0x65, 0xb6, 0x92,
+    0x6c, 0x70, 0x48, 0x50, 0xfd, 0xed, 0xb9, 0xda, 0x5e, 0x15, 0x46, 0x57, 0xa7, 0x8d, 0x9d, 0x84,
+    0x90, 0xd8, 0xab, 0x00, 0x8c, 0xbc, 0xd3, 0x0a, 0xf7, 0xe4, 0x58, 0x05, 0xb8, 0xb3, 0x45, 0x06,
+    0xd0, 0x2c, 0x1e, 0x8f, 0xca, 0x3f, 0x0f, 0x02, 0xc1, 0xaf, 0xbd, 0x03, 0x01, 0x13, 0x8a, 0x6b,
+    0x3a, 0x91, 0x11, 0x41, 0x4f, 0x67, 0xdc, 0xea, 0x97, 0xf2, 0xcf, 0xce, 0xf0, 0xb4, 0xe6, 0x73,
+    0x96, 0xac, 0x74, 0x22, 0xe7, 0xad, 0x35, 0x85, 0xe2, 0xf9, 0x37, 0xe8, 0x1c, 0x75, 0xdf, 0x6e,
+    0x47, 0xf1, 0x1a, 0x71, 0x1d, 0x29, 0xc5, 0x89, 0x6f, 0xb7, 0x62, 0x0e, 0xaa, 0x18, 0xbe, 0x1b,
+    0xfc, 0x56, 0x3e, 0x4b, 0xc6, 0xd2, 0x79, 0x20, 0x9a, 0xdb, 0xc0, 0xfe, 0x78, 0xcd, 0x5a, 0xf4,
+    0x1f, 0xdd, 0xa8, 0x33, 0x88, 0x07, 0xc7, 0x31, 0xb1, 0x12, 0x10, 0x59, 0x27, 0x80, 0xec, 0x5f,
+    0x60, 0x51, 0x7f, 0xa9, 0x19, 0xb5, 0x4a, 0x0d, 0x2d, 0xe5, 0x7a, 0x9f, 0x93, 0xc9, 0x9c, 0xef,
+    0xa0, 0xe0, 0x3b, 0x4d, 0xae, 0x2a, 0xf5, 0xb0, 0xc8, 0xeb, 0xbb, 0x3c, 0x83, 0x53, 0x99, 0x61,
+    0x17, 0x2b, 0x04, 0x7e, 0xba, 0x77, 0xd6, 0x26, 0xe1, 0x69, 0x14, 0x63, 0x55, 0x21, 0x0c, 0x7d,
+};
 
 inline uint8_t xtime(uint8_t x) {
     return static_cast<uint8_t>((x << 1) ^ ((x & 0x80) ? 0x1b : 0x00));
 }
 
-inline uint8_t gf_mul(uint8_t a, uint8_t b) {
+inline uint8_t gmul(uint8_t a, uint8_t b) {
     uint8_t p = 0;
     for (int i = 0; i < 8; ++i) {
         if (b & 1) p ^= a;
@@ -28,71 +65,6 @@ inline uint8_t gf_mul(uint8_t a, uint8_t b) {
     return p;
 }
 
-void InitTables() {
-    if (g_tables_ready) return;
-
-    // S-box via multiplicative inverse + affine transform.
-    uint8_t p = 1, q = 1;
-    do {
-        p = static_cast<uint8_t>(p ^ (p << 1) ^ ((p & 0x80) ? 0x1b : 0x00));
-        q = static_cast<uint8_t>((q ^ (q << 1)) ^ ((q & 0x80) ? 0x09 : 0x00));
-        q = static_cast<uint8_t>((q ^ (q << 2)) ^ ((q & 0x80) ? 0x09 : 0x00));
-        q = static_cast<uint8_t>((q ^ (q << 4)) ^ ((q & 0x80) ? 0x09 : 0x00));
-        uint8_t x = static_cast<uint8_t>(q ^ (q << 1) ^ (q << 2) ^ (q << 3) ^ (q << 4));
-        x = static_cast<uint8_t>(x ^ 0x63);
-        // p is the multiplicative inverse in GF(2^8) here; storing under p
-        g_sbox[p] = x;
-        g_inv_sbox[x] = p;
-    } while (p != 1);
-
-    // Round-table entries derived from the box.
-    for (int i = 0; i < 256; ++i) {
-        uint8_t s = g_sbox[i];
-        uint8_t s2 = gf_mul(s, 2);
-        uint8_t s3 = gf_mul(s, 3);
-        uint32_t w = (static_cast<uint32_t>(s2) << 24) |
-                     (static_cast<uint32_t>(s) << 16) |
-                     (static_cast<uint32_t>(s) << 8) |
-                     static_cast<uint32_t>(s3);
-        g_te0[i] = w;
-        g_te1[i] = (w >> 8) | (w << 24);
-        g_te2[i] = (w >> 16) | (w << 16);
-        g_te3[i] = (w >> 24) | (w << 8);
-
-        uint8_t is = g_inv_sbox[i];
-        uint8_t i2 = gf_mul(is, 0x0e);
-        uint8_t i3 = gf_mul(is, 0x0b);
-        uint8_t i1 = gf_mul(is, 0x0d);
-        uint8_t i9 = gf_mul(is, 0x09);
-        uint32_t dw = (static_cast<uint32_t>(i2) << 24) |
-                      (static_cast<uint32_t>(i9) << 16) |
-                      (static_cast<uint32_t>(i3) << 8) |
-                      static_cast<uint32_t>(i1);
-        g_td0[i] = dw;
-        g_td1[i] = (dw >> 8) | (dw << 24);
-        g_td2[i] = (dw >> 16) | (dw << 16);
-        g_td3[i] = (dw >> 24) | (dw << 8);
-    }
-
-    g_tables_ready = true;
-}
-
-inline uint32_t rotr(uint32_t x, int n) { return (x >> n) | (x << (32 - n)); }
-
-inline uint32_t load_le32(const uint8_t* p) {
-    return static_cast<uint32_t>(p[0]) |
-           (static_cast<uint32_t>(p[1]) << 8) |
-           (static_cast<uint32_t>(p[2]) << 16) |
-           (static_cast<uint32_t>(p[3]) << 24);
-}
-
-inline void store_le32(uint8_t* p, uint32_t v) {
-    p[0] = static_cast<uint8_t>(v);
-    p[1] = static_cast<uint8_t>(v >> 8);
-    p[2] = static_cast<uint8_t>(v >> 16);
-    p[3] = static_cast<uint8_t>(v >> 24);
-}
-
 inline uint32_t sub_word(uint32_t w) {
     return (static_cast<uint32_t>(g_sbox[(w >> 24) & 0xff]) << 24) |
            (static_cast<uint32_t>(g_sbox[(w >> 16) & 0xff]) << 16) |
@@ -100,119 +72,134 @@ inline uint32_t sub_word(uint32_t w) {
            static_cast<uint32_t>(g_sbox[w & 0xff]);
 }
 
+inline uint32_t rot_word(uint32_t w) {
+    return (w << 8) | (w >> 24);
+}
+
+void AddRoundKey(uint8_t st[16], const uint32_t* rk) {
+    for (int c = 0; c < 4; ++c) {
+        uint32_t w = rk[c];
+        st[4 * c + 0] ^= static_cast<uint8_t>(w >> 24);
+        st[4 * c + 1] ^= static_cast<uint8_t>(w >> 16);
+        st[4 * c + 2] ^= static_cast<uint8_t>(w >> 8);
+        st[4 * c + 3] ^= static_cast<uint8_t>(w);
+    }
+}
+
+void SubBytes(uint8_t st[16]) {
+    for (int i = 0; i < 16; ++i) st[i] = g_sbox[st[i]];
+}
+
+void InvSubBytes(uint8_t st[16]) {
+    for (int i = 0; i < 16; ++i) st[i] = g_inv_sbox[st[i]];
+}
+
+void ShiftRows(uint8_t st[16]) {
+    uint8_t t;
+    // row 1: left 1  (bytes 1,5,9,13)
+    t = st[1]; st[1] = st[5]; st[5] = st[9]; st[9] = st[13]; st[13] = t;
+    // row 2: left 2  (bytes 2,6,10,14)
+    t = st[2]; st[2] = st[10]; st[10] = t;
+    t = st[6]; st[6] = st[14]; st[14] = t;
+    // row 3: left 3 == right 1 (bytes 3,7,11,15)
+    t = st[3]; st[3] = st[15]; st[15] = st[11]; st[11] = st[7]; st[7] = t;
+}
+
+void InvShiftRows(uint8_t st[16]) {
+    uint8_t t;
+    // row 1: right 1
+    t = st[13]; st[13] = st[9]; st[9] = st[5]; st[5] = st[1]; st[1] = t;
+    // row 2: right 2
+    t = st[2]; st[2] = st[10]; st[10] = t;
+    t = st[6]; st[6] = st[14]; st[14] = t;
+    // row 3: right 3 == left 1
+    t = st[3]; st[3] = st[7]; st[7] = st[11]; st[11] = st[15]; st[15] = t;
+}
+
+void MixColumns(uint8_t st[16]) {
+    for (int c = 0; c < 4; ++c) {
+        uint8_t* col = st + 4 * c;
+        uint8_t a0 = col[0], a1 = col[1], a2 = col[2], a3 = col[3];
+        col[0] = static_cast<uint8_t>(gmul(a0,2) ^ gmul(a1,3) ^ a2 ^ a3);
+        col[1] = static_cast<uint8_t>(a0 ^ gmul(a1,2) ^ gmul(a2,3) ^ a3);
+        col[2] = static_cast<uint8_t>(a0 ^ a1 ^ gmul(a2,2) ^ gmul(a3,3));
+        col[3] = static_cast<uint8_t>(gmul(a0,3) ^ a1 ^ a2 ^ gmul(a3,2));
+    }
+}
+
+void InvMixColumns(uint8_t st[16]) {
+    for (int c = 0; c < 4; ++c) {
+        uint8_t* col = st + 4 * c;
+        uint8_t a0 = col[0], a1 = col[1], a2 = col[2], a3 = col[3];
+        col[0] = static_cast<uint8_t>(gmul(a0,14) ^ gmul(a1,11) ^ gmul(a2,13) ^ gmul(a3,9));
+        col[1] = static_cast<uint8_t>(gmul(a0,9) ^ gmul(a1,14) ^ gmul(a2,11) ^ gmul(a3,13));
+        col[2] = static_cast<uint8_t>(gmul(a0,13) ^ gmul(a1,9) ^ gmul(a2,14) ^ gmul(a3,11));
+        col[3] = static_cast<uint8_t>(gmul(a0,11) ^ gmul(a1,13) ^ gmul(a2,9) ^ gmul(a3,14));
+    }
+}
+
 }  // namespace
 
 namespace aes128 {
 
 void Init(Ctx& c, const uint8_t* key, size_t keylen) {
-    InitTables();
-    int nk = static_cast<int>(keylen / 4);
-    c.nk = nk;
-    c.rounds = nk + 6;
+    c.nk = static_cast<int>(keylen / 4);
+    c.rounds = c.nk + 6;
 
-    for (int i = 0; i < nk; ++i) {
-        c.rk[i] = load_le32(key + 4 * i);
+    for (int i = 0; i < c.nk; ++i) {
+        c.rk[i] = (static_cast<uint32_t>(key[4*i]) << 24) |
+                  (static_cast<uint32_t>(key[4*i+1]) << 16) |
+                  (static_cast<uint32_t>(key[4*i+2]) << 8) |
+                  static_cast<uint32_t>(key[4*i+3]);
     }
 
-    uint32_t rcon = 1;
-    for (int i = nk; i < 4 * (c.rounds + 1); ++i) {
+    uint8_t rcon = 1;
+    for (int i = c.nk; i < 4 * (c.rounds + 1); ++i) {
         uint32_t tmp = c.rk[i - 1];
-        if (i % nk == 0) {
-            tmp = sub_word(rotr(tmp, 8)) ^ (rcon << 24);
-            rcon = gf_mul(static_cast<uint8_t>(rcon), 0x02);
-        } else if (nk > 6 && i % nk == 4) {
+        if (i % c.nk == 0) {
+            tmp = sub_word(rot_word(tmp)) ^ (static_cast<uint32_t>(rcon) << 24);
+            rcon = xtime(rcon);
+        } else if (c.nk > 6 && i % c.nk == 4) {
             tmp = sub_word(tmp);
         }
-        c.rk[i] = c.rk[i - nk] ^ tmp;
+        c.rk[i] = c.rk[i - c.nk] ^ tmp;
     }
 }
 
 void EncryptBlock(const Ctx& c, const uint8_t in[16], uint8_t out[16]) {
-    uint32_t s0 = load_le32(in + 0) ^ c.rk[0];
-    uint32_t s1 = load_le32(in + 4) ^ c.rk[1];
-    uint32_t s2 = load_le32(in + 8) ^ c.rk[2];
-    uint32_t s3 = load_le32(in + 12) ^ c.rk[3];
+    uint8_t st[16];
+    std::memcpy(st, in, 16);
 
-    int nr = c.rounds;
-    for (int r = 1; r < nr; ++r) {
-        const uint32_t* rk = &c.rk[r * 4];
-        uint32_t t0 = g_te0[s0 & 0xff] ^ g_te1[(s1 >> 8) & 0xff] ^
-                      g_te2[(s2 >> 16) & 0xff] ^ g_te3[(s3 >> 24) & 0xff] ^ rk[0];
-        uint32_t t1 = g_te0[s1 & 0xff] ^ g_te1[(s2 >> 8) & 0xff] ^
-                      g_te2[(s3 >> 16) & 0xff] ^ g_te3[(s0 >> 24) & 0xff] ^ rk[1];
-        uint32_t t2 = g_te0[s2 & 0xff] ^ g_te1[(s3 >> 8) & 0xff] ^
-                      g_te2[(s0 >> 16) & 0xff] ^ g_te3[(s1 >> 24) & 0xff] ^ rk[2];
-        uint32_t t3 = g_te0[s3 & 0xff] ^ g_te1[(s0 >> 8) & 0xff] ^
-                      g_te2[(s1 >> 16) & 0xff] ^ g_te3[(s2 >> 24) & 0xff] ^ rk[3];
-        s0 = t0; s1 = t1; s2 = t2; s3 = t3;
+    AddRoundKey(st, c.rk);
+    for (int r = 1; r < c.rounds; ++r) {
+        SubBytes(st);
+        ShiftRows(st);
+        MixColumns(st);
+        AddRoundKey(st, c.rk + r * 4);
     }
+    SubBytes(st);
+    ShiftRows(st);
+    AddRoundKey(st, c.rk + c.rounds * 4);
 
-    const uint32_t* rk = &c.rk[nr * 4];
-    uint32_t o0 = ((static_cast<uint32_t>(g_sbox[(s0 >> 0) & 0xff]) << 0) |
-                   (static_cast<uint32_t>(g_sbox[(s1 >> 8) & 0xff]) << 8) |
-                   (static_cast<uint32_t>(g_sbox[(s2 >> 16) & 0xff]) << 16) |
-                   (static_cast<uint32_t>(g_sbox[(s3 >> 24) & 0xff]) << 24)) ^ rk[0];
-    uint32_t o1 = ((static_cast<uint32_t>(g_sbox[(s1 >> 0) & 0xff]) << 0) |
-                   (static_cast<uint32_t>(g_sbox[(s2 >> 8) & 0xff]) << 8) |
-                   (static_cast<uint32_t>(g_sbox[(s3 >> 16) & 0xff]) << 16) |
-                   (static_cast<uint32_t>(g_sbox[(s0 >> 24) & 0xff]) << 24)) ^ rk[1];
-    uint32_t o2 = ((static_cast<uint32_t>(g_sbox[(s2 >> 0) & 0xff]) << 0) |
-                   (static_cast<uint32_t>(g_sbox[(s3 >> 8) & 0xff]) << 8) |
-                   (static_cast<uint32_t>(g_sbox[(s0 >> 16) & 0xff]) << 16) |
-                   (static_cast<uint32_t>(g_sbox[(s1 >> 24) & 0xff]) << 24)) ^ rk[2];
-    uint32_t o3 = ((static_cast<uint32_t>(g_sbox[(s3 >> 0) & 0xff]) << 0) |
-                   (static_cast<uint32_t>(g_sbox[(s0 >> 8) & 0xff]) << 8) |
-                   (static_cast<uint32_t>(g_sbox[(s1 >> 16) & 0xff]) << 16) |
-                   (static_cast<uint32_t>(g_sbox[(s2 >> 24) & 0xff]) << 24)) ^ rk[3];
-
-    store_le32(out + 0, o0);
-    store_le32(out + 4, o1);
-    store_le32(out + 8, o2);
-    store_le32(out + 12, o3);
+    std::memcpy(out, st, 16);
 }
 
 void DecryptBlock(const Ctx& c, const uint8_t in[16], uint8_t out[16]) {
-    uint32_t s0 = load_le32(in + 0) ^ c.rk[c.rounds * 4 + 0];
-    uint32_t s1 = load_le32(in + 4) ^ c.rk[c.rounds * 4 + 1];
-    uint32_t s2 = load_le32(in + 8) ^ c.rk[c.rounds * 4 + 2];
-    uint32_t s3 = load_le32(in + 12) ^ c.rk[c.rounds * 4 + 3];
+    uint8_t st[16];
+    std::memcpy(st, in, 16);
 
-    int nr = c.rounds;
-    for (int r = nr - 1; r > 0; --r) {
-        const uint32_t* rk = &c.rk[r * 4];
-        uint32_t t0 = g_td0[s0 & 0xff] ^ g_td1[(s3 >> 8) & 0xff] ^
-                      g_td2[(s2 >> 16) & 0xff] ^ g_td3[(s1 >> 24) & 0xff] ^ rk[0];
-        uint32_t t1 = g_td0[s1 & 0xff] ^ g_td1[(s0 >> 8) & 0xff] ^
-                      g_td2[(s3 >> 16) & 0xff] ^ g_td3[(s2 >> 24) & 0xff] ^ rk[1];
-        uint32_t t2 = g_td0[s2 & 0xff] ^ g_td1[(s1 >> 8) & 0xff] ^
-                      g_td2[(s0 >> 16) & 0xff] ^ g_td3[(s3 >> 24) & 0xff] ^ rk[2];
-        uint32_t t3 = g_td0[s3 & 0xff] ^ g_td1[(s2 >> 8) & 0xff] ^
-                      g_td2[(s1 >> 16) & 0xff] ^ g_td3[(s0 >> 24) & 0xff] ^ rk[3];
-        s0 = t0; s1 = t1; s2 = t2; s3 = t3;
+    AddRoundKey(st, c.rk + c.rounds * 4);
+    for (int r = c.rounds - 1; r >= 1; --r) {
+        InvShiftRows(st);
+        InvSubBytes(st);
+        AddRoundKey(st, c.rk + r * 4);
+        InvMixColumns(st);
     }
+    InvShiftRows(st);
+    InvSubBytes(st);
+    AddRoundKey(st, c.rk);
 
-    const uint32_t* rk = &c.rk[0];
-    uint32_t o0 = ((static_cast<uint32_t>(g_inv_sbox[(s0 >> 0) & 0xff]) << 0) |
-                   (static_cast<uint32_t>(g_inv_sbox[(s3 >> 8) & 0xff]) << 8) |
-                   (static_cast<uint32_t>(g_inv_sbox[(s2 >> 16) & 0xff]) << 16) |
-                   (static_cast<uint32_t>(g_inv_sbox[(s1 >> 24) & 0xff]) << 24)) ^ rk[0];
-    uint32_t o1 = ((static_cast<uint32_t>(g_inv_sbox[(s1 >> 0) & 0xff]) << 0) |
-                   (static_cast<uint32_t>(g_inv_sbox[(s0 >> 8) & 0xff]) << 8) |
-                   (static_cast<uint32_t>(g_inv_sbox[(s3 >> 16) & 0xff]) << 16) |
-                   (static_cast<uint32_t>(g_inv_sbox[(s2 >> 24) & 0xff]) << 24)) ^ rk[1];
-    uint32_t o2 = ((static_cast<uint32_t>(g_inv_sbox[(s2 >> 0) & 0xff]) << 0) |
-                   (static_cast<uint32_t>(g_inv_sbox[(s1 >> 8) & 0xff]) << 8) |
-                   (static_cast<uint32_t>(g_inv_sbox[(s0 >> 16) & 0xff]) << 16) |
-                   (static_cast<uint32_t>(g_inv_sbox[(s3 >> 24) & 0xff]) << 24)) ^ rk[2];
-    uint32_t o3 = ((static_cast<uint32_t>(g_inv_sbox[(s3 >> 0) & 0xff]) << 0) |
-                   (static_cast<uint32_t>(g_inv_sbox[(s2 >> 8) & 0xff]) << 8) |
-                   (static_cast<uint32_t>(g_inv_sbox[(s1 >> 16) & 0xff]) << 16) |
-                   (static_cast<uint32_t>(g_inv_sbox[(s0 >> 24) & 0xff]) << 24)) ^ rk[3];
-
-    store_le32(out + 0, o0);
-    store_le32(out + 4, o1);
-    store_le32(out + 8, o2);
-    store_le32(out + 12, o3);
+    std::memcpy(out, st, 16);
 }
 
 }  // namespace aes128
@@ -221,7 +208,6 @@ void DecryptBlock(const Ctx& c, const uint8_t in[16], uint8_t out[16]) {
 bool AesKeyUnwrap(const uint8_t* kek, size_t kek_len,
                   const uint8_t* wrapped, size_t wrapped_len,
                   uint8_t* plain, size_t* plain_len) {
-    // AES block size 16; wrapped must be n*8 with n>=2, KEK length a valid AES size.
     if (wrapped_len < 16 || wrapped_len % 8 != 0) return false;
     if (kek_len != 16 && kek_len != 24 && kek_len != 32) return false;
 
@@ -234,24 +220,21 @@ bool AesKeyUnwrap(const uint8_t* kek, size_t kek_len,
     std::memcpy(plain, wrapped + 8, (n - 1) * 8);
 
     for (int j = 5; j >= 0; --j) {
-        for (size_t i = n - 1; i >= 1; --i) {
-            uint64_t t = j * static_cast<uint64_t>(n) + i;
-            // A = MSB64( AES-D(A XOR t) )
+        for (size_t i = n; i >= 2; --i) {
+            uint64_t t = static_cast<uint64_t>(j) * n + (i - 1);
             uint8_t block[16];
             std::memcpy(block, A, 8);
-            for (int k = 0; k < 8; ++k) {
+            for (int k = 0; k < 8; ++k)
                 block[k] ^= static_cast<uint8_t>((t >> (8 * (7 - k))) & 0xff);
-            }
-            std::memcpy(block + 8, plain + (i - 1) * 8, 8);
+            std::memcpy(block + 8, plain + (i - 2) * 8, 8);
             uint8_t dec[16];
             aes128::DecryptBlock(ctx, block, dec);
             std::memcpy(A, dec, 8);
-            std::memcpy(plain + (i - 1) * 8, dec + 8, 8);
-            if (i == 1) break;
+            std::memcpy(plain + (i - 2) * 8, dec + 8, 8);
         }
     }
 
-    static const uint8_t iv[8] = {0xa6, 0xa6, 0xa6, 0xa6, 0xa6, 0xa6, 0xa6, 0xa6};
+    static const uint8_t iv[8] = {0xa6,0xa6,0xa6,0xa6,0xa6,0xa6,0xa6,0xa6};
     bool ok = std::memcmp(A, iv, 8) == 0;
     if (plain_len) *plain_len = ok ? (n - 1) * 8 : 0;
     return ok;
@@ -267,7 +250,7 @@ bool AesKeyWrap(const uint8_t* kek, size_t kek_len,
     aes128::Ctx ctx;
     aes128::Init(ctx, kek, kek_len);
 
-    uint8_t A[8] = {0xa6, 0xa6, 0xa6, 0xa6, 0xa6, 0xa6, 0xa6, 0xa6};
+    uint8_t A[8] = {0xa6,0xa6,0xa6,0xa6,0xa6,0xa6,0xa6,0xa6};
     std::memcpy(wrapped + 8, plain, plain_len);
 
     for (uint64_t j = 0; j < 6; ++j) {
@@ -277,10 +260,9 @@ bool AesKeyWrap(const uint8_t* kek, size_t kek_len,
             std::memcpy(block + 8, wrapped + i * 8, 8);
             aes128::EncryptBlock(ctx, block, block);
             std::memcpy(A, block, 8);
-            uint64_t t = j * static_cast<uint64_t>(n) + i;
-            for (int k = 0; k < 8; ++k) {
+            uint64_t t = static_cast<uint64_t>(j) * n + i;
+            for (int k = 0; k < 8; ++k)
                 A[k] ^= static_cast<uint8_t>((t >> (8 * (7 - k))) & 0xff);
-            }
             std::memcpy(wrapped + i * 8, block + 8, 8);
         }
     }

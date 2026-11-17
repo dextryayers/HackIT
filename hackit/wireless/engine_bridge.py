@@ -113,6 +113,15 @@ class EngineBridge:
             _sig("hackit_wifi_restore_mac", [ctypes.c_char_p], ctypes.c_bool)
             _sig("hackit_wifi_set_txpower", [ctypes.c_char_p, ctypes.c_int], ctypes.c_bool)
             _sig("hackit_wifi_get_adapter_info", [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int], ctypes.c_bool)
+            # WPA3 -> WPA2 downgrade (in-process injector thread)
+            _sig("w3d_run", [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p,
+                             ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int], ctypes.c_int)
+            _sig("w3d_stop", [], None)
+            _sig("w3d_sent", [], ctypes.c_ulonglong)
+            _sig("w3d_errors", [], ctypes.c_ulonglong)
+            # WPS PIN / Pixie Dust (C++ crypto)
+            _sig("wps_compute_pin_from_mac", [ctypes.c_char_p], ctypes.c_char_p)
+            _sig("wps_validate_pin", [ctypes.c_char_p], ctypes.c_int)
             self._ctypes_lib = lib
             return lib
         except Exception:
@@ -636,6 +645,45 @@ class EngineBridge:
         if lib is None:
             raise EngineBuildError("C shared library not loaded.")
         return bool(lib.hackit_c_set_monitor_mode(iface.encode()))
+    # ── WPA3 -> WPA2 downgrade ─────────────────────────────────
+    def c_wpa3_downgrade(self, iface: str, bssid: str, ssid: str,
+                         channel: int = 6, duration: int = 0,
+                         strip_pmf: bool = True, rate_ms: int = 50) -> int:
+        """Start the in-process WPA3 downgrade injector thread. Returns 0 on
+        success, negative error (see w3d_run). Use c_downgrade_stats() for
+        counters and c_wpa3_downgrade_stop() to halt."""
+        lib = self.c_lib()
+        if lib is None:
+            raise EngineBuildError("C shared library not loaded.")
+        return int(lib.w3d_run(iface.encode(), bssid.encode(), ssid.encode(),
+                               int(channel), int(duration),
+                               1 if strip_pmf else 0, int(rate_ms)))
+
+    def c_wpa3_downgrade_stop(self) -> None:
+        lib = self.c_lib()
+        if lib is None:
+            return
+        lib.w3d_stop()
+
+    def c_downgrade_stats(self) -> dict:
+        lib = self.c_lib()
+        if lib is None:
+            return {"sent": 0, "errors": 0}
+        return {"sent": int(lib.w3d_sent()), "errors": int(lib.w3d_errors())}
+
+    # ── WPS PIN / Pixie Dust ───────────────────────────────────
+    def c_wps_pin_from_mac(self, bssid: str) -> str:
+        lib = self.c_lib()
+        if lib is None:
+            raise EngineBuildError("C shared library not loaded.")
+        out = lib.wps_compute_pin_from_mac(bssid.encode())
+        return out.decode() if out else ""
+
+    def c_wps_validate_pin(self, pin: str) -> bool:
+        lib = self.c_lib()
+        if lib is None:
+            raise EngineBuildError("C shared library not loaded.")
+        return bool(lib.wps_validate_pin(pin.encode()))
 
     def c_channels(self, iface: str) -> list:
         lib = self.c_lib()
