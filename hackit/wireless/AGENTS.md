@@ -6,12 +6,23 @@ Full evil twin attack suite: real AF_PACKET beacon injection + captive portal wi
 ## Build Status
 | Engine | Status |
 |--------|--------|
-| C/C++ `.so` + `.a` | ✅ 0 errors |
+| C/C++ `.so` + `.a` | ✅ 0 errors 0 warnings |
 | C static binary `eviltwin-inject` | ✅ 0 errors |
-| Rust `cargo check` | ✅ 0 errors |
+| Rust `cargo test` | ✅ 44 passed 0 failed |
 | C# `dotnet build` | ✅ 0 errors 0 warnings |
 | Go `go build` | ✅ 0 errors |
 | Python coordinator + captive portal | ✅ Imports OK |
+
+## Verified crypto (v2)
+| Primitive | Status |
+|-----------|--------|
+| AES-128/192/256 (FIPS-197) | ✅ block vectors |
+| RFC 3394 key wrap/unwrap | ✅ §4.1 vector |
+| WPA PBKDF2-SHA1 4096 | ✅ WPA ref vector (Rust+Go) |
+| WPS Pixie Dust (DH→KDF→unwrap) | ✅ native, Python+C++ verified |
+| WPS PIN derivation | ✅ Python/C++/Rust agree |
+| WEP FMS/PTW/Korek | ✅ real, unit-tested |
+| WPA3→WPA2 downgrade RSN IE | ✅ C++/Go/Rust/C# byte-identical |
 
 ## Files Created/Modified — Eviltwin Session
 
