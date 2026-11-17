@@ -602,20 +602,24 @@ Usage: handshake <iface> [--bssid MAC] [--ssid NAME] [--channel N] [--timeout S]
         argv = shlex.split(arg)
         pos, flags = _parse_flags(
             argv, {"--deauth"},
-            {"--bssid": str, "--ssid": str, "--channel": int, "--timeout": float, "--out": str},
+            {"--bssid": str, "--ssid": str, "--channel": int, "--timeout": float,
+             "--out": str, "--theme": str, "--rotate": float},
         )
         iface = pos[0] if pos else self.executor._default_iface()
         if not iface:
             UI.print_error("No interface given and none detected.")
             return
-        executor_native.handshake_capture(
+        # Route to the rich themed handshake capture in the main executor
+        # (routes EAPOL/PMKID events into a rotating live UI). executor_native
+        # remains for advanced users who import it directly.
+        self.executor.do_handshake_capture(
             iface,
             bssid=self.executor._clean_bssid(flags.get("--bssid", "")),
-            ssid=flags.get("--ssid", ""),
-            channel=flags.get("--channel", 0),
-            timeout=flags.get("--timeout", 30.0),
+            timeout=int(flags.get("--timeout", 30.0)),
             deauth="--deauth" in flags,
-            out=flags.get("--out", ""),
+            output=flags.get("--out", ""),
+            theme=flags.get("--theme"),
+            rotate=flags.get("--rotate", 8.0),
         )
 
     def do_pmkid(self, arg):
@@ -624,18 +628,20 @@ Usage: pmkid <iface> [--bssid MAC] [--channel N] [--timeout S] [--out FILE]"""
         from . import executor_native
         pos, flags = _parse_flags(
             arg.split(), set(),
-            {"--bssid": str, "--channel": int, "--timeout": float, "--out": str},
+            {"--bssid": str, "--channel": int, "--timeout": float, "--out": str,
+             "--theme": str, "--rotate": float},
         )
         iface = pos[0] if pos else self.executor._default_iface()
         if not iface:
             UI.print_error("No interface given and none detected.")
             return
-        executor_native.pmkid_capture(
+        self.executor.do_pmkid_capture(
             iface,
             bssid=self.executor._clean_bssid(flags.get("--bssid", "")),
-            channel=flags.get("--channel", 0),
-            timeout=flags.get("--timeout", 20.0),
-            out=flags.get("--out", ""),
+            timeout=int(flags.get("--timeout", 30.0)),
+            output=flags.get("--out", ""),
+            theme=flags.get("--theme"),
+            rotate=flags.get("--rotate", 8.0),
         )
 
     def do_crack_native(self, arg):
@@ -1275,60 +1281,81 @@ Usage: map [iface] [--timeout <sec>] [--json] [--output <file>] [--heatmap]"""
         """Deauth attack — kill WiFi with raw 802.11 deauth frames (infinite until Ctrl+C).
 Usage: deauth <iface> <bssid> [station] [--rate <n>] [--reason <code>] [--channel <ch>]
        deauth broadcast <iface> <bssid> [--channel <ch>]"""
-        KNOWN = set()
-        FLAG_VAL = {"--rate": int, "--reason": int, "--channel": int, "--output": str}
+        KNOWN = {"--hop", "--ffi", "2.4", "5", "both"}
+        FLAG_VAL = {"--rate": int, "--reason": int, "--channel": int, "--output": str,
+                    "--band": str, "--count": int, "--theme": str, "--rotate": float}
         pos, flags = _parse_flags(arg.split(), KNOWN, FLAG_VAL)
         reason = flags.get("--reason", 7)
         channel = flags.get("--channel", 0)
+        band = flags.get("--band", "both")
+        for tok in pos:
+            if tok in ("2.4", "5", "both"):
+                band = tok
+        extra = dict(
+            band=band, hop="--hop" in flags or not channel,
+            count=flags.get("--count", 0), theme=flags.get("--theme"),
+            rotate=flags.get("--rotate", 6.0), ffi="--ffi" in flags,
+        )
         if len(pos) >= 1 and pos[0].lower() == "broadcast":
             iface = pos[1] if len(pos) > 1 else _detect_iface()
             bssid = pos[2] if len(pos) > 2 else ""
             self.executor.do_deauth(iface, bssid, "FF:FF:FF:FF:FF:FF",
                                     reason=reason, channel=channel,
-                                    output=flags.get("--output"))
+                                    output=flags.get("--output"), **extra)
         elif len(pos) >= 2:
             iface = pos[0]
             bssid = pos[1]
             station = pos[2] if len(pos) > 2 else "FF:FF:FF:FF:FF:FF"
             self.executor.do_deauth(iface, bssid, station,
                                     reason=reason, channel=channel,
-                                    output=flags.get("--output"))
+                                    output=flags.get("--output"), **extra)
         else:
-            UI.print_error("Usage: deauth <iface> <bssid> [station] [--reason 7] [--channel <ch>]")
+            UI.print_error(
+                "Usage: deauth <iface> <bssid> [station] [--reason 7] [--channel <ch>] "
+                "[--hop] [--band 2.4|5|both] [--count N] [--theme NAME] [--rotate SEC]"
+            )
 
     def do_beacon_flood(self, arg):
         """Flood fake beacons.
 Usage: beacon-flood <iface> [--ssid <name>] [--count <n>] [--channel <ch>]
        beacon-flood <iface> [--wpa2] [--wpa3] [--file <ssids.txt>] [--output <file>]"""
-        KNOWN = {"--wpa2", "--wpa3", "--verbose"}
+        KNOWN = {"--wpa2", "--wpa3", "--verbose", "--hop"}
         FLAG_VAL = {"--ssid": str, "--count": int, "--channel": int, "--file": str,
-                    "--output": str, "--interval": int}
+                    "--output": str, "--interval": int, "--theme": str, "--rotate": float,
+                    "--rounds": int}
         pos, flags = _parse_flags(arg.split(), KNOWN, FLAG_VAL)
         if not pos:
-            UI.print_error("Usage: beacon-flood <iface> [--ssid <name>] [--count 500] [--wpa2]")
+            UI.print_error("Usage: beacon-flood <iface> [--ssid <name>] [--count 500] [--file ssids.txt]")
             return
         iface = pos[0]
         ssid = flags.get("--ssid", "")
         count = flags.get("--count", 100)
-        channel = flags.get("--channel", 0)
+        channel = flags.get("--channel", 1)
         caps = []
         if "--wpa2" in flags: caps.append("wpa2")
         if "--wpa3" in flags: caps.append("wpa3")
+        ssids = []
         if flags.get("--file"):
             import pathlib
-            ssids = pathlib.Path(flags["--file"]).read_text().splitlines()
+            ssids = [sname.strip() for sname in pathlib.Path(flags["--file"]).read_text().splitlines() if sname.strip()]
+        if ssids:
             self.executor.do_beacon_flood_multi(iface, ssids, count, caps=caps,
                                                  channel=channel,
                                                  interval=flags.get("--interval", 100))
         else:
-            self.executor.do_beacon_flood(iface, ssid, count, channel=channel,
-                                          caps=caps, output=flags.get("--output"))
+            self.executor.do_beacon_flood(
+                iface, ssid, count, channel=channel, caps=caps,
+                output=flags.get("--output"),
+                rounds=flags.get("--rounds", 1),
+                theme=flags.get("--theme"), rotate=flags.get("--rotate", 5.0),
+            )
 
     def do_probe_flood(self, arg):
         """Probe request flood.
 Usage: probe-flood <iface> [--count <n>] [--ssids <file>] [--interval <ms>] [--random-mac]"""
         KNOWN = {"--random-mac"}
-        FLAG_VAL = {"--count": int, "--ssids": str, "--interval": int}
+        FLAG_VAL = {"--count": int, "--ssids": str, "--interval": int,
+                    "--theme": str, "--rotate": float, "--channel": int}
         pos, flags = _parse_flags(arg.split(), KNOWN, FLAG_VAL)
         if not pos:
             UI.print_error("Usage: probe-flood <iface> [--count 1000] [--ssids ssids.txt]")
@@ -1342,15 +1369,20 @@ Usage: probe-flood <iface> [--count <n>] [--ssids <file>] [--interval <ms>] [--r
             self.executor.do_probe_flood_ssids(iface, ssids, count,
                                                 random_mac="--random-mac" in flags)
         else:
-            self.executor.do_probe_flood(iface, count, interval=flags.get("--interval", 50),
-                                          random_mac="--random-mac" in flags)
+            self.executor.do_probe_flood(
+                iface, count, interval=flags.get("--interval", 50),
+                random_mac="--random-mac" in flags,
+                theme=flags.get("--theme"), rotate=flags.get("--rotate", 5.0),
+                channel=flags.get("--channel"), ssids=[],
+            )
 
     def do_eviltwin(self, arg):
         """Clone SSID rogue AP.
 Usage: eviltwin <iface> <ssid> [--channel <ch>] [--sum <n>] [--captive]
        eviltwin <iface> <ssid> [--output <file>] [--bssid <mac>] [--dhcp-range <cidr>]"""
         KNOWN = {"--wpa2", "--wpa3", "--captive", "--verbose"}
-        FLAG_VAL = {"--channel": int, "--sum": int, "--output": str, "--bssid": str, "--dhcp-range": str}
+        FLAG_VAL = {"--channel": int, "--sum": int, "--output": str, "--bssid": str,
+                    "--dhcp-range": str, "--theme": str, "--rotate": float}
         pos, flags = _parse_flags(arg.split(), KNOWN, FLAG_VAL)
         if len(pos) < 2:
             UI.print_error("Usage: eviltwin <iface> <ssid> [--channel 6] [--sum 3] [--captive]")
@@ -1365,7 +1397,9 @@ Usage: eviltwin <iface> <ssid> [--channel <ch>] [--sum <n>] [--captive]
         self.executor.do_eviltwin(iface, ssid, channel, num_fake=num_fake, caps=caps,
                                    captive="--captive" in flags,
                                    bssid=flags.get("--bssid"),
-                                   dhcp_range=flags.get("--dhcp-range"))
+                                   dhcp_range=flags.get("--dhcp-range"),
+                                   theme=flags.get("--theme"),
+                                   rotate=flags.get("--rotate", 6.0))
 
     def do_rogue(self, arg):
         """Start rogue AP.

