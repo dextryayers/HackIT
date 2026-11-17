@@ -2363,18 +2363,109 @@ class HackITWirelessExecutor:
         UI.print_info(f"Exporting report for session '{session}' in {fmt} format...")
         out = BASE / "reports" / f"report_{session}.{fmt}"
         out.parent.mkdir(exist_ok=True)
+
+        # Pull scan data from session file + live telemetry
+        session_file = BASE / "go_workers" / "sessions.json"
+        sessions_data = []
+        if session_file.exists():
+            try:
+                raw = json.loads(session_file.read_text())
+                sessions_data = raw if isinstance(raw, list) else raw.get("sessions", [])
+            except Exception:
+                pass
+
+        target_sessions = [s for s in sessions_data if s.get("id", "").startswith(session) or s.get("ssid", "") == session]
+        if not target_sessions and sessions_data:
+            target_sessions = sessions_data
+
+        telemetry = get_realtime_telemetry()
+        adapters = HackITWirelessExecutor.detect_wireless_adapters()
+
+        scan_ap_count = len(target_sessions)
+        scan_clients = sum(s.get("client_count", 0) for s in target_sessions)
+        hidden_ssids = [s for s in target_sessions if not s.get("ssid") or s.get("ssid") == "<length:  0>"]
+        open_networks = [s for s in target_sessions if s.get("encryption", "").lower() in ("opn", "open", "none", "")]
+        wpa3_networks = [s for s in target_sessions if "wpa3" in s.get("encryption", "").lower() or "sae" in s.get("encryption", "").lower()]
+        wpa2_networks = [s for s in target_sessions if "wpa2" in s.get("encryption", "").lower() and "wpa3" not in s.get("encryption", "").lower()]
+        wep_networks = [s for s in target_sessions if "wep" in s.get("encryption", "").lower()]
+        weak_signal = [s for s in target_sessions if s.get("signal", 0) and int(s.get("signal", 0)) > -70]
+
+        findings = []
+        for net in open_networks:
+            findings.append(("CRITICAL", f"Open network: {net.get('ssid', net.get('bssid', '?'))}", "No encryption, traffic sniffable"))
+        for net in wep_networks:
+            findings.append(("CRITICAL", f"WEP: {net.get('ssid', '?')}", "WEP crackable in <5min via aircrack-ng"))
+        for net in weak_signal:
+            findings.append(("MEDIUM", f"Weak signal: {net.get('ssid', '?')} ({net.get('signal')} dBm)", "Possible rogue AP or far client"))
+        for net in hidden_ssids:
+            findings.append(("LOW", f"Hidden SSID: {net.get('bssid', '?')}", "Hidden network, brute-force SSID via mdk4"))
+        if not findings:
+            findings.append(("INFO", "No critical findings from last scan", "Run 'scan' or 'aggressive_scan' first"))
+
+        if fmt == "json":
+            report_data = {
+                "session": session,
+                "generated": dt.datetime.now().isoformat(),
+                "telemetry": telemetry,
+                "adapters": adapters,
+                "summary": {
+                    "total_aps": scan_ap_count,
+                    "total_clients": scan_clients,
+                    "open": len(open_networks),
+                    "wep": len(wep_networks),
+                    "wpa2": len(wpa2_networks),
+                    "wpa3": len(wpa3_networks),
+                    "hidden": len(hidden_ssids),
+                },
+                "findings": [{"severity": s, "title": t, "detail": d} for s, t, d in findings],
+                "networks": target_sessions,
+            }
+            out.write_text(json.dumps(report_data, indent=2))
+            UI.print_success(f"Report saved: {out}")
+            return
+
+        summary_lines = [
+            f"- **APs scanned:** {scan_ap_count}",
+            f"- **Clients detected:** {scan_clients}",
+            f"- **Open networks:** {len(open_networks)}",
+            f"- **WEP networks:** {len(wep_networks)}",
+            f"- **WPA2 networks:** {len(wpa2_networks)}",
+            f"- **WPA3/SAE networks:** {len(wpa3_networks)}",
+            f"- **Hidden SSIDs:** {len(hidden_ssids)}",
+            f"- **Adapter:** {telemetry.get('iface', 'N/A')} ({telemetry.get('mac', 'N/A')})",
+            f"- **Location:** {telemetry.get('location', 'N/A')}",
+        ]
+        findings_lines = [f"- **[{s}]** {t} — {d}" for s, t, d in findings]
+        recommendations = []
+        if open_networks:
+            recommendations.append("- Deploy WPA3-Personal on all open networks; disable guest SSID broadcast outside business hours")
+        if wep_networks:
+            recommendations.append("- Immediate migration off WEP — deprecated since 2001, crackable in minutes")
+        if wpa2_networks:
+            recommendations.append("- Migrate WPA2-PSK to WPA3-SAE where hardware supports it")
+        if hidden_ssids:
+            recommendations.append("- Hidden SSID is security-through-obscurity; disable SSID hiding, use WPA3")
+        if not recommendations:
+            recommendations.append("- Continue monitoring; run periodic 'aggressive_scan' to track new APs")
+
         report = f"""# HackIT Wireless Audit Report
 **Session:** {session}
 **Date:** {dt.datetime.now().isoformat()}
+**Adapter:** {telemetry.get('iface', 'N/A')} ({telemetry.get('mac', 'N/A')})
 
 ## Summary
-- TODO: Fill with scan data
+{chr(10).join(summary_lines)}
 
 ## Findings
-- TODO: Document vulnerabilities
+{chr(10).join(findings_lines)}
 
 ## Recommendations
-- TODO: Add recommendations
+{chr(10).join(recommendations)}
+
+## Networks Detected
+| BSSID | SSID | Channel | Signal | Encryption |
+|-------|------|---------|--------|------------|
+{chr(10).join(f"| {s.get('bssid', '?')} | {s.get('ssid', '?')} | {s.get('channel', '?')} | {s.get('signal', '?')} | {s.get('encryption', '?')} |" for s in target_sessions[:50])}
 """
         out.write_text(report)
         UI.print_success(f"Report saved: {out}")

