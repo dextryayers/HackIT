@@ -23,3 +23,13 @@ void hackit_pcap_cache_cleanup(void);
 int  hackit_pcap_cache_inject(const char* iface, const uint8_t* frame, int len, int timeout_ms);
 
 #endif // HACKIT_PACKET_INJECTOR_H
+
+/* Management / EAPOL / TKIP injectors (added for mdk4 parity) */
+int hackit_inject_assoc_flood(const char* iface, const uint8_t* bssid, int count);
+int hackit_inject_disassoc_flood(const char* iface, const uint8_t* bssid, int count, uint16_t reason);
+int hackit_inject_eapol_start_flood(const char* iface, const uint8_t* bssid, int count);
+int hackit_inject_eapol_logoff_flood(const char* iface, const uint8_t* bssid, int count);
+int hackit_inject_tkip_mic(const char* iface, const uint8_t* bssid, const uint8_t* station, int count);
+int hackit_inject_chopchop_attack(const char* iface, const uint8_t* bssid, const uint8_t* station, uint8_t* out_pkt, int* out_len);
+int hackit_inject_frag_attack(const char* iface, const uint8_t* bssid, const uint8_t* station, int frag_size);
+int hackit_inject_caffe_latte(const char* iface, const uint8_t* bssid, const uint8_t* station, int count);
