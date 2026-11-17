@@ -208,53 +208,55 @@ void DecryptBlock(const Ctx& c, const uint8_t in[16], uint8_t out[16]) {
 bool AesKeyUnwrap(const uint8_t* kek, size_t kek_len,
                   const uint8_t* wrapped, size_t wrapped_len,
                   uint8_t* plain, size_t* plain_len) {
-    if (wrapped_len < 16 || wrapped_len % 8 != 0) return false;
+    if (wrapped_len < 24 || wrapped_len % 8 != 0) return false;
     if (kek_len != 16 && kek_len != 24 && kek_len != 32) return false;
 
-    size_t n = wrapped_len / 8;
+    // n = number of 64-bit plaintext blocks = (wrapped_len / 8) - 1.
+    size_t n = (wrapped_len / 8) - 1;
     aes128::Ctx ctx;
     aes128::Init(ctx, kek, kek_len);
 
     uint8_t A[8];
     std::memcpy(A, wrapped, 8);
-    std::memcpy(plain, wrapped + 8, (n - 1) * 8);
+    std::memcpy(plain, wrapped + 8, n * 8);
 
     for (int j = 5; j >= 0; --j) {
-        for (size_t i = n; i >= 2; --i) {
-            uint64_t t = static_cast<uint64_t>(j) * n + (i - 1);
+        for (size_t i = n; i >= 1; --i) {
+            uint64_t t = static_cast<uint64_t>(j) * n + i;
             uint8_t block[16];
             std::memcpy(block, A, 8);
             for (int k = 0; k < 8; ++k)
                 block[k] ^= static_cast<uint8_t>((t >> (8 * (7 - k))) & 0xff);
-            std::memcpy(block + 8, plain + (i - 2) * 8, 8);
+            std::memcpy(block + 8, plain + (i - 1) * 8, 8);
             uint8_t dec[16];
             aes128::DecryptBlock(ctx, block, dec);
             std::memcpy(A, dec, 8);
-            std::memcpy(plain + (i - 2) * 8, dec + 8, 8);
+            std::memcpy(plain + (i - 1) * 8, dec + 8, 8);
         }
     }
 
     static const uint8_t iv[8] = {0xa6,0xa6,0xa6,0xa6,0xa6,0xa6,0xa6,0xa6};
     bool ok = std::memcmp(A, iv, 8) == 0;
-    if (plain_len) *plain_len = ok ? (n - 1) * 8 : 0;
+    if (plain_len) *plain_len = ok ? n * 8 : 0;
     return ok;
 }
 
 bool AesKeyWrap(const uint8_t* kek, size_t kek_len,
                 const uint8_t* plain, size_t plain_len,
                 uint8_t* wrapped, size_t* wrapped_len) {
-    if (plain_len < 8 || plain_len % 8 != 0) return false;
+    if (plain_len < 16 || plain_len % 8 != 0) return false;
     if (kek_len != 16 && kek_len != 24 && kek_len != 32) return false;
 
-    size_t n = plain_len / 8 + 1;
+    // n = number of 64-bit plaintext blocks.
+    size_t n = plain_len / 8;
     aes128::Ctx ctx;
     aes128::Init(ctx, kek, kek_len);
 
     uint8_t A[8] = {0xa6,0xa6,0xa6,0xa6,0xa6,0xa6,0xa6,0xa6};
-    std::memcpy(wrapped + 8, plain, plain_len);
+    std::memcpy(wrapped + 8, plain, n * 8);
 
     for (uint64_t j = 0; j < 6; ++j) {
-        for (size_t i = 1; i < n; ++i) {
+        for (size_t i = 1; i <= n; ++i) {
             uint8_t block[16];
             std::memcpy(block, A, 8);
             std::memcpy(block + 8, wrapped + i * 8, 8);
@@ -267,6 +269,6 @@ bool AesKeyWrap(const uint8_t* kek, size_t kek_len,
         }
     }
     std::memcpy(wrapped, A, 8);
-    if (wrapped_len) *wrapped_len = n * 8;
+    if (wrapped_len) *wrapped_len = (n + 1) * 8;
     return true;
 }

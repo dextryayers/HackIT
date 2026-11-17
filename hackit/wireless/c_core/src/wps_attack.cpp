@@ -209,4 +209,23 @@ WPS_API int wps_validate_pin(const char* pin) {
     return WpsAttack::ValidateWpsPin(pin ? std::string(pin) : "") ? 1 : 0;
 }
 
+// RFC 3394 AES key unwrap exposed to the Python WPS engine. Returns the number
+// of plaintext bytes written into `out` (0 on failure or bad sizes). `kek_len`
+// must be 16/24/32; `wrapped_len` must be a multiple of 8 and >= 16.
+WPS_API int wps_aes_unwrap(const uint8_t* kek, int kek_len,
+                           const uint8_t* wrapped, int wrapped_len,
+                           uint8_t* out, int out_cap) {
+    if (!kek || !wrapped || !out) return 0;
+    if (kek_len != 16 && kek_len != 24 && kek_len != 32) return 0;
+    if (wrapped_len < 16 || (wrapped_len % 8) != 0) return 0;
+    size_t plain_len = 0;
+    if (!AesKeyUnwrap(kek, static_cast<size_t>(kek_len),
+                      wrapped, static_cast<size_t>(wrapped_len),
+                      out, &plain_len)) {
+        return 0;
+    }
+    if (plain_len > static_cast<size_t>(out_cap)) return 0;
+    return static_cast<int>(plain_len);
+}
+
 }

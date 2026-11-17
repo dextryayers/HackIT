@@ -34,4 +34,9 @@ extern "C" {
     WPS_API const char* wps_compute_pin_from_mac(const char* bssid);
     WPS_API char** wps_generate_pin_candidates(const char* bssid, int* count);
     WPS_API int wps_validate_pin(const char* pin);
+    // RFC 3394 AES key unwrap for the Python Pixie Dust engine. Returns the
+    // number of plaintext bytes written to `out`, or 0 on failure.
+    WPS_API int wps_aes_unwrap(const uint8_t* kek, int kek_len,
+                               const uint8_t* wrapped, int wrapped_len,
+                               uint8_t* out, int out_cap);
 }

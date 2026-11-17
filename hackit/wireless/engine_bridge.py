@@ -122,6 +122,8 @@ class EngineBridge:
             # WPS PIN / Pixie Dust (C++ crypto)
             _sig("wps_compute_pin_from_mac", [ctypes.c_char_p], ctypes.c_char_p)
             _sig("wps_validate_pin", [ctypes.c_char_p], ctypes.c_int)
+            _sig("wps_aes_unwrap",
+                 [u8p, ctypes.c_int, u8p, ctypes.c_int, u8p, ctypes.c_int], ctypes.c_int)
             self._ctypes_lib = lib
             return lib
         except Exception:
@@ -695,6 +697,27 @@ class EngineBridge:
         if lib is None:
             raise EngineBuildError("C shared library not loaded.")
         return bool(lib.wps_validate_pin(pin.encode()))
+
+    def c_aes_unwrap(self, kek: bytes, wrapped: bytes):
+        """RFC 3394 AES key unwrap via the C++ core. Returns plaintext bytes,
+        or None if the integrity check fails or the sizes are invalid."""
+        lib = self.c_lib()
+        if lib is None:
+            return None
+        import ctypes
+        if len(kek) not in (16, 24, 32):
+            return None
+        if len(wrapped) < 16 or len(wrapped) % 8 != 0:
+            return None
+        kek_buf = (ctypes.c_uint8 * len(kek)).from_buffer_copy(kek)
+        wr_buf = (ctypes.c_uint8 * len(wrapped)).from_buffer_copy(wrapped)
+        out_cap = len(wrapped)
+        out_buf = (ctypes.c_uint8 * out_cap)()
+        n = lib.wps_aes_unwrap(kek_buf, len(kek), wr_buf, len(wrapped),
+                               out_buf, out_cap)
+        if n <= 0:
+            return None
+        return bytes(out_buf[:n])
 
     def c_channels(self, iface: str) -> list:
         lib = self.c_lib()
