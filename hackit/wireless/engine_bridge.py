@@ -14,8 +14,10 @@ class EngineBridge:
         self._go_bin: Optional[str] = None
         self._rust_bin: Optional[str] = None
         self._c_lib: Optional[str] = None
+        self._c_cli: Optional[str] = None
         self._cxx_lib: Optional[str] = None
         self._cs_bin: Optional[str] = None
+        self._ctypes_lib = None
         self._discover_engines()
 
     # ── Engine discovery ────────────────────────────────────────
@@ -24,8 +26,97 @@ class EngineBridge:
         self._go_bin = self._find_go_worker()
         self._rust_bin = self._find_rust_engine()
         self._c_lib = self._find_clib("libhackit_wireless_c")
+        self._c_cli = self._find_c_cli()
         self._cxx_lib = self._c_lib  # C++ compiled into same shared lib
         self._cs_bin = self._find_csharp()
+        self._ctypes_lib = None
+
+    def _find_c_cli(self) -> Optional[str]:
+        for d in [BASE / "c_core", BASE / "c_core/build"]:
+            for name in ("hackit-c", "hackit-c.exe"):
+                p = d / name
+                if p.exists():
+                    return str(p)
+        return None
+
+    # ── ctypes bindings for the C shared library ────────────────
+    def c_lib(self):
+        """Lazy-load the C shared library as a ctypes handle with declared signatures."""
+        if self._ctypes_lib is not None:
+            return self._ctypes_lib
+        if not self._c_lib or not self._c_lib.endswith(".so"):
+            return None
+        try:
+            import ctypes
+
+            class CWifiAdapter(ctypes.Structure):
+                _fields_ = [
+                    ("name", ctypes.c_char * 32),
+                    ("mac", ctypes.c_char * 18),
+                    ("driver", ctypes.c_char * 32),
+                    ("channel", ctypes.c_int),
+                    ("signal_dbm", ctypes.c_int),
+                    ("is_monitor", ctypes.c_bool),
+                    ("supports_2ghz", ctypes.c_bool),
+                    ("supports_5ghz", ctypes.c_bool),
+                    ("max_tx_power", ctypes.c_int),
+                ]
+
+            class CChannelInfo(ctypes.Structure):
+                _fields_ = [
+                    ("channel", ctypes.c_int),
+                    ("frequency_mhz", ctypes.c_int),
+                    ("band", ctypes.c_int),
+                    ("max_power_dbm", ctypes.c_int),
+                ]
+
+            lib = ctypes.CDLL(self._c_lib)
+            lib._CWifiAdapter = CWifiAdapter
+            lib._CChannelInfo = CChannelInfo
+
+            def _sig(name, argtypes, restype):
+                try:
+                    fn = getattr(lib, name)
+                    fn.argtypes = argtypes
+                    fn.restype = restype
+                except AttributeError:
+                    pass
+
+            u8p = ctypes.POINTER(ctypes.c_uint8)
+            _sig("hackit_c_detect_adapters", [ctypes.POINTER(CWifiAdapter), ctypes.c_int], ctypes.c_int)
+            _sig("hackit_c_get_supported_channels", [ctypes.c_char_p, ctypes.POINTER(CChannelInfo), ctypes.c_int], ctypes.c_int)
+            _sig("hackit_c_set_channel", [ctypes.c_char_p, ctypes.c_int], ctypes.c_bool)
+            _sig("hackit_c_set_monitor_mode", [ctypes.c_char_p], ctypes.c_bool)
+            _sig("hackit_c_set_managed_mode", [ctypes.c_char_p], ctypes.c_bool)
+            _sig("hackit_inject_deauth", [ctypes.c_char_p, u8p, u8p, ctypes.c_uint16], ctypes.c_bool)
+            _sig("hackit_inject_beacon", [ctypes.c_char_p, ctypes.c_char_p, u8p, ctypes.c_uint8], ctypes.c_bool)
+            _sig("hackit_inject_raw_frame", [ctypes.c_char_p, u8p, ctypes.c_int], ctypes.c_bool)
+            _sig("hackit_deauth_burst", [ctypes.c_char_p, u8p, u8p, ctypes.c_int, ctypes.c_int], ctypes.c_bool)
+            _sig("hackit_deauth_all_clients", [ctypes.c_char_p, u8p, ctypes.c_int], ctypes.c_bool)
+            _sig("hackit_deauth_targeted", [ctypes.c_char_p, u8p, u8p, ctypes.c_int], ctypes.c_bool)
+            _sig("hackit_beacon_flood", [ctypes.c_char_p, ctypes.c_char_p, u8p, ctypes.c_uint8, ctypes.c_int], ctypes.c_int)
+            _sig("hackit_beacon_flood_random", [ctypes.c_char_p, ctypes.c_int], ctypes.c_int)
+            _sig("hackit_wifi_change_mac", [ctypes.c_char_p, ctypes.c_char_p], ctypes.c_bool)
+            _sig("hackit_wifi_restore_mac", [ctypes.c_char_p], ctypes.c_bool)
+            _sig("hackit_wifi_set_txpower", [ctypes.c_char_p, ctypes.c_int], ctypes.c_bool)
+            _sig("hackit_wifi_get_adapter_info", [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int], ctypes.c_bool)
+            self._ctypes_lib = lib
+            return lib
+        except Exception:
+            return None
+
+    @staticmethod
+    def _mac_bytes(mac: Optional[str]):
+        import ctypes
+        if not mac:
+            return (ctypes.c_uint8 * 6)(*[0xFF] * 6)
+        parts = mac.replace("-", ":").split(":")
+        try:
+            if len(parts) >= 6 and all(parts[i].strip() for i in range(6)):
+                return (ctypes.c_uint8 * 6)(*[int(p, 16) & 0xFF for p in parts[:6]])
+        except ValueError:
+            pass
+        return (ctypes.c_uint8 * 6)(*[0xFF] * 6)
 
     def _find_go_worker(self) -> Optional[str]:
         candidates = [
@@ -448,15 +539,90 @@ class EngineBridge:
 
     # ── C/C++ native calls ─────────────────────────────────────
 
-    def c_deauth(self, iface: str, bssid: str, station: str):
-        if not self._c_lib:
-            raise EngineBuildError("C library not built.")
-        return self._popen([self._c_lib, "deauth", iface, bssid, station or "FF:FF:FF:FF:FF:FF"])
+    def c_deauth(self, iface: str, bssid: str, station: str = "", count: int = 0, reason: int = 7):
+        """Fire deauth frames. count=0 → open stream via the hackit-c CLI;
+        count>0 → finite burst via the FFI (returns a bool)."""
+        lib = self.c_lib()
+        if lib is not None and count > 0:
+            b = self._mac_bytes(bssid)
+            s = self._mac_bytes(station or "FF:FF:FF:FF:FF:FF")
+            return bool(lib.hackit_deauth_burst(iface.encode(), b, s, int(count), 5))
+        if self._c_cli:
+            st = station or "bcast"
+            return self._popen([self._c_cli, "deauth-v1", iface, bssid, st, str(reason)])
+        raise EngineBuildError("C core not built. Run 'build c' first.")
+
+    def c_deauth_burst(self, iface: str, bssid: str, station: str = "", count: int = 100, delay_ms: int = 5) -> bool:
+        lib = self.c_lib()
+        if lib is None:
+            raise EngineBuildError("C shared library not loaded.")
+        return bool(lib.hackit_deauth_burst(iface.encode(), self._mac_bytes(bssid),
+                                            self._mac_bytes(station or "FF:FF:FF:FF:FF:FF"),
+                                            int(count), int(delay_ms)))
+
+    def c_deauth_all(self, iface: str, bssid: str, count: int = 100) -> bool:
+        lib = self.c_lib()
+        if lib is None:
+            raise EngineBuildError("C shared library not loaded.")
+        return bool(lib.hackit_deauth_all_clients(iface.encode(), self._mac_bytes(bssid), int(count)))
+
+    def c_inject_deauth(self, iface: str, bssid: str, station: str = "", reason: int = 7) -> bool:
+        """One deauth frame through FFI — the primitive the executor loops
+        over with its own channel-hopping scheduler, so a single call site
+        can rotate channels and reason codes from Python."""
+        lib = self.c_lib()
+        if lib is None:
+            raise EngineBuildError("C shared library not loaded.")
+        return bool(lib.hackit_inject_deauth(iface.encode(), self._mac_bytes(bssid),
+                                             self._mac_bytes(station or "FF:FF:FF:FF:FF:FF"),
+                                             int(reason)))
+
+    def c_beacon_flood(self, iface: str, ssid: str, bssid: str = "", count: int = 100, channel: int = 6) -> int:
+        lib = self.c_lib()
+        if lib is None:
+            raise EngineBuildError("C shared library not loaded.")
+        b = self._mac_bytes(bssid) if bssid else None
+        return int(lib.hackit_beacon_flood(iface.encode(), ssid.encode(), b, int(channel), int(count)))
+
+    def c_beacon_flood_random(self, iface: str, count: int = 100) -> int:
+        lib = self.c_lib()
+        if lib is None:
+            raise EngineBuildError("C shared library not loaded.")
+        return int(lib.hackit_beacon_flood_random(iface.encode(), int(count)))
+
+    def c_set_channel(self, iface: str, channel: int) -> bool:
+        lib = self.c_lib()
+        if lib is None:
+            raise EngineBuildError("C shared library not loaded.")
+        return bool(lib.hackit_c_set_channel(iface.encode(), int(channel)))
+
+    def c_set_monitor(self, iface: str) -> bool:
+        lib = self.c_lib()
+        if lib is None:
+            raise EngineBuildError("C shared library not loaded.")
+        return bool(lib.hackit_c_set_monitor_mode(iface.encode()))
+
+    def c_channels(self, iface: str) -> list:
+        lib = self.c_lib()
+        if lib is None:
+            return []
+        Arr = lib._CChannelInfo * 128
+        arr = Arr()
+        n = lib.hackit_c_get_supported_channels(iface.encode(), arr, 128)
+        out = []
+        for i in range(max(0, n)):
+            out.append({
+                "channel": arr[i].channel,
+                "frequency_mhz": arr[i].frequency_mhz,
+                "band": "5GHz" if arr[i].band else "2.4GHz",
+                "max_power_dbm": arr[i].max_power_dbm,
+            })
+        return out
 
     def c_frame_inject(self, iface: str, frame_type: str, payload: str = ""):
-        if not self._c_lib:
-            raise EngineBuildError("C library not built.")
-        return self._popen([self._c_lib, "frame-inject", iface, frame_type, payload])
+        if not self._c_cli:
+            raise EngineBuildError("C CLI not built. Run 'build c' first.")
+        return self._popen([self._c_cli, "beacons", iface, payload or "HackIT_WiFi"])
 
     # ── C# execution (Windows) ─────────────────────────────────
 

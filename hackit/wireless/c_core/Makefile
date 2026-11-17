@@ -1,79 +1,95 @@
-CC = gcc
-CXX = g++
-CFLAGS = -std=gnu11 -O2 -fPIC -Iinclude -D_GNU_SOURCE -D_DEFAULT_SOURCE
-CXXFLAGS = -std=gnu++17 -O2 -fPIC -Iinclude -D_GNU_SOURCE -D_DEFAULT_SOURCE
-LDFLAGS = -shared
+# HackIT Wireless C/C++ Core — standalone build (no CMake required).
+#
+# Targets
+#   make            → build/libhackit_wireless_c.so + build/libhackit_wireless_c.a
+#                     + build/hackit-c (standalone CLI)
+#   make shared     → shared library only
+#   make static     → static library only
+#   make cli        → hackit-c standalone binary only
+#   make clean      → remove build objects
+#   make -j$(nproc)
+#
+# Dependency detection is automatic. If libpcap is missing, the tree builds
+# but frame injection will return false (callers fall back to native
+# AF_PACKET / raw sockets, which the engines already do).
 
-C_SOURCES = \
-	src/packet_capture.c \
-	src/wifi_stack.c \
-	src/raw_networking.c \
-	src/wireless_frame.c \
-	src/crypto_security.c \
-	src/adapter_detection.c \
-	src/interface_control.c \
-	src/packet_injector.c \
-	src/deauth_engine.c \
-	src/deauth_engine_v1.c \
-	src/deauth_engine_v2.c \
-	src/pmkid_harvest.c \
-	src/wpa3_sae.c \
-	src/beacon_flood.c \
-	src/eviltwin_v1.c \
-	src/eviltwin_v2.c \
-	src/eviltwin_v3.c \
-	src/client_probe.c \
-	src/channel_hopper.c \
-	src/banner_grabber.c \
-	src/oui_lookup.c \
-	src/web_bridge_impl.c
+CC      ?= gcc
+CXX     ?= g++
+AR      ?= ar
+BUILD   ?= build
 
-CXX_SOURCES = \
-	src/signal_processing.cpp \
-	src/frame_parser.cpp \
-	src/eapol_analyzer.cpp \
-	src/spectrum_scanner.cpp \
-	src/wps_attack.cpp \
-	src/wep_cracker.cpp \
-	src/packet_forge.cpp \
-	src/key_manager.cpp \
-	src/offensive_plus.cpp \
-	src/cpp_deauth_engine.cpp \
-	src/cpp_deauth_ultra.cpp \
-	src/eviltwin_cpp_v1.cpp \
-	src/eviltwin_cpp_v2.cpp \
-	src/eviltwin_cpp_v3.cpp
+CFLAGS_COMMON := -Wextra -Wno-unused-parameter -Wno-sign-compare \
+                 -D_DEFAULT_SOURCE -D_GNU_SOURCE -DHACKIT_BUILD_STATIC \
+                 -std=gnu11 -O2 -fPIC -Iinclude -Iinclude/nlohmann
+CXXFLAGS_COMMON := -Wextra -Wno-unused-parameter -Wno-sign-compare \
+                   -D_DEFAULT_SOURCE -D_GNU_SOURCE \
+                   -std=gnu++17 -O2 -fPIC -Iinclude -Iinclude/nlohmann
 
-C_OBJ = $(C_SOURCES:.c=.o)
-CXX_OBJ = $(CXX_SOURCES:.cpp=.o)
-OBJ = $(C_OBJ) $(CXX_OBJ)
+LDLIBS   := -lpthread -lm
 
-LIB_STATIC = libhackit_wireless_c.a
-LIB_SHARED = libhackit_wireless_c.so
+# libpcap detection
+PCAP_INC := $(wildcard /usr/include/pcap.h /usr/local/include/pcap.h)
+ifneq ($(PCAP_INC),)
+  CFLAGS_COMMON   += -DHACKIT_HAS_PCAP
+  CXXFLAGS_COMMON += -DHACKIT_HAS_PCAP
+  LDLIBS          += -lpcap
+endif
 
-.PHONY: all static shared clean
+# libnl-3 detection (optional; interface control uses iw fallback otherwise)
+NL3_INC := $(wildcard /usr/include/libnl3/netlink/netlink.h /usr/include/netlink/netlink.h)
+ifneq ($(NL3_INC),)
+  CFLAGS_COMMON   += -DHACKIT_HAS_NL3
+  CXXFLAGS_COMMON += -DHACKIT_HAS_NL3
+  ifneq ($(wildcard /usr/include/libnl3),)
+    CFLAGS_COMMON   += -I/usr/include/libnl3
+    CXXFLAGS_COMMON += -I/usr/include/libnl3
+  endif
+endif
 
-all: static shared
+C_SRCS   := $(wildcard src/*.c)
+CXX_SRCS := $(wildcard src/*.cpp)
+C_OBJS   := $(patsubst src/%.c,$(BUILD)/%.o,$(C_SRCS))
+CXX_OBJS := $(patsubst src/%.cpp,$(BUILD)/%.cpp.o,$(CXX_SRCS))
+ALL_OBJS := $(C_OBJS) $(CXX_OBJS)
 
-%.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
+LIB_SO    := $(BUILD)/libhackit_wireless_c.so
+LIB_A     := $(BUILD)/libhackit_wireless_c.a
+CLI_BIN   := $(BUILD)/hackit-c
+CLI_SRC   := cli/main.c
 
-%.o: %.cpp
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+.PHONY: all shared static cli clean dirs
 
-static: $(OBJ)
-	ar rcs $(LIB_STATIC) $(OBJ)
+all: dirs shared static cli
 
-shared: $(OBJ)
-	$(CXX) $(LDFLAGS) -o $(LIB_SHARED) $(OBJ)
+dirs:
+	@mkdir -p $(BUILD)
 
-eviltwin-inject: eviltwin_inject.c
-	$(CC) -std=gnu11 -O2 -static -pthread -o $@ $<
-	$(info [BUILD] eviltwin-inject ready)
+$(BUILD)/%.o: src/%.c | dirs
+	$(CC) $(CFLAGS_COMMON) -c $< -o $@
 
-deauth-inject: deauth_inject.c
-	$(CC) -std=gnu11 -O2 -static -o $@ $<
-	$(info [BUILD] deauth-inject ready)
+$(BUILD)/%.cpp.o: src/%.cpp | dirs
+	$(CXX) $(CXXFLAGS_COMMON) -c $< -o $@
+
+shared: $(LIB_SO)
+static: $(LIB_A)
+
+$(LIB_SO): $(ALL_OBJS) | dirs
+	$(CXX) -shared -Wl,-soname,libhackit_wireless_c.so -o $@ $(ALL_OBJS) $(LDLIBS)
+
+$(LIB_A): $(ALL_OBJS) | dirs
+	$(AR) rcs $@ $(ALL_OBJS)
+
+cli: $(CLI_BIN)
+
+$(CLI_BIN): $(ALL_OBJS) $(CLI_SRC) | dirs
+	$(CC) $(CFLAGS_COMMON) -o $@ $(CLI_SRC) $(LIB_A) $(LDLIBS)
 
 clean:
-	rm -f $(OBJ) $(LIB_STATIC) $(LIB_SHARED) eviltwin-inject deauth-inject
+	rm -rf $(BUILD)
+
+# Convenience: copy artifacts next to the python bridge so it finds them
+install: all
+	@mkdir -p ..
+	@cp -f $(LIB_SO) .. 2>/dev/null || true
+	@cp -f $(CLI_BIN) .. 2>/dev/null || true
+	@echo "Copied $(LIB_SO) and $(CLI_BIN) to parent dir"
