@@ -42,17 +42,14 @@ impl WpsPinGenerator {
             return false;
         }
         let digits: Vec<u8> = pin.chars().map(|c| c.to_digit(10).unwrap() as u8).collect();
-        let sum: u32 = digits.iter().enumerate().map(|(i, d)| {
-            let mut v = *d as u32;
-            if i % 2 == 0 {
-                v *= 2;
-                if v > 9 {
-                    v = v % 10 + 1;
-                }
-            }
-            v
+        // WPS PIN checksum: alternating weights of 3 and 1 over the first 7
+        // digits; the 8th digit is the check digit that makes the total ≡ 0 mod 10.
+        let sum: u32 = digits.iter().take(7).enumerate().map(|(i, d)| {
+            let w = if i % 2 == 0 { 3 } else { 1 };
+            (*d as u32) * w
         }).sum();
-        sum % 10 == 0
+        let check = (10 - (sum % 10)) % 10;
+        check as u8 == digits[7]
     }
 
     pub fn generate_candidates(bssid: &str) -> Vec<String> {

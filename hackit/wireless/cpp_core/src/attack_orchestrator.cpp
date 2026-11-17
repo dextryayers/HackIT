@@ -133,14 +133,14 @@ extern "C" const char* orchestrator_get_results(const char* id) {
 extern "C" const char* orchestrator_multi_engine(const char* engines_json, const char* params_json) {
     std::lock_guard<std::mutex> lock(g_mutex);
     std::string id = "multi_" + std::to_string(++g_next_id);
-    AttackTask task;
-    task.id = id;
-    task.name = "multi_engine";
-    task.params = engines_json ? engines_json : "[]";
-    task.running = true;
-    task.status = "coordinating";
+    auto task = std::make_unique<AttackTask>();
+    task->id = id;
+    task->name = "multi_engine";
+    task->params = engines_json ? engines_json : "[]";
+    task->running = true;
+    task->status = "coordinating";
     auto it = g_tasks.emplace(id, std::move(task)).first;
-    it->second.worker = std::thread([&itref = it->second, eng = it->second.params]() {
+    it->second->worker = std::thread([&itref = *it->second, eng = it->second->params]() {
         itref.status = "orchestrating";
         itref.details = "Coordinating engines: " + eng;
         std::this_thread::sleep_for(std::chrono::seconds(2));
@@ -151,7 +151,7 @@ extern "C" const char* orchestrator_multi_engine(const char* engines_json, const
         itref.details = "Multi-engine orchestration complete";
         itref.finished = true;
     });
-    it->second.worker.detach();
+    it->second->worker.detach();
     static std::string result;
     result = "{\"id\":\"" + id + "\",\"status\":\"coordinating\"}";
     return result.c_str();
