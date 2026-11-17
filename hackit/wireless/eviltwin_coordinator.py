@@ -29,24 +29,20 @@ class EviltwinCoordinator:
         self._monitor_mode = False
 
     def _enter_monitor_mode(self):
-        subprocess.run(["sudo", "ip", "link", "set", self.iface, "down"],
-                       capture_output=True, timeout=5)
-        subprocess.run(["sudo", "iw", "dev", self.iface, "set", "type", "monitor"],
-                       capture_output=True, timeout=5)
-        subprocess.run(["sudo", "ip", "link", "set", self.iface, "up"],
-                       capture_output=True, timeout=5)
+        from . import mode_helper
+        result = mode_helper.set_monitor(self.iface)
+        if not result.ok:
+            _console.print(f"[red]◈ {result.message}[/red]")
+            return
+        self._monitor_iface = getattr(result, "final_iface", self.iface) or self.iface
         self._monitor_mode = True
-        _console.print("[bold cyan]◈ Monitor mode active[/bold cyan]")
+        _console.print(f"[bold cyan]◈ Monitor mode active on {self._monitor_iface}[/bold cyan]")
 
     def _exit_monitor_mode(self):
         if not self._monitor_mode:
             return
-        subprocess.run(["sudo", "ip", "link", "set", self.iface, "down"],
-                       capture_output=True, timeout=5)
-        subprocess.run(["sudo", "iw", "dev", self.iface, "set", "type", "managed"],
-                       capture_output=True, timeout=5)
-        subprocess.run(["sudo", "ip", "link", "set", self.iface, "up"],
-                       capture_output=True, timeout=5)
+        from . import mode_helper
+        mode_helper.set_managed(getattr(self, "_monitor_iface", self.iface))
         self._monitor_mode = False
 
     def set_captive(self, enable: bool, dhcp_range: Optional[str] = None):
@@ -105,10 +101,15 @@ class EviltwinCoordinator:
         return None, None
 
     def _freq_to_channel(self, freq: int) -> int:
-        if freq < 2484: return (freq - 2412) // 5 + 1
-        if freq < 4500: return 14
-        if freq < 5845: return (freq - 5180) // 5 + 36
-        return (freq - 5845) // 5 + 149
+        if freq == 2484:
+            return 14
+        if 2400 <= freq < 2500:
+            return (freq - 2407) // 5
+        if 4900 <= freq < 5925:
+            return (freq - 5000) // 5
+        if 5925 <= freq <= 7125:
+            return (freq - 5950) // 5
+        return 0
 
     # ── Start all attacks ──────────────────────────────────────
     def start(self):
@@ -167,12 +168,13 @@ class EviltwinCoordinator:
 
     # ── Set channel / TX power ────────────────────────────────
     def _set_channel(self, iface: str, ch: int):
-        subprocess.run(["sudo", "iw", "dev", iface, "set", "channel", str(ch)],
-                        capture_output=True, timeout=5)
+        from . import mode_helper
+        mode_helper.set_channel(iface, ch)
 
     def _set_max_txpower(self):
-        subprocess.run(["sudo", "iw", "dev", self.iface, "set", "txpower", "fixed", "3000"],
-                        capture_output=True, timeout=5)
+        from . import mode_helper
+        iface = getattr(self, "_monitor_iface", self.iface)
+        mode_helper.set_txpower(iface, 20.0 if 1 <= self.channel <= 14 else 30.0, fixed=True)
 
     # ── iptables ──────────────────────────────────────────────
     def _setup_iptables(self):

