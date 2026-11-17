@@ -597,15 +597,28 @@ class HackITWirelessExecutor:
         engine = "cxx"
         proc = None
         if lib is None or not hasattr(lib, "w3d_run"):
-            # Fall back to the Go worker, which carries the same logic.
+            # Fall back to Go worker, then Rust engine — same wire format.
             try:
                 proc = self.bridge._go_run(
                     "wpa3-downgrade", iface, bssid, ssid,
                     "--channel", str(channel),
                     "--duration", str(duration),
+                    "--rate", str(rate_ms),
                 )
                 engine = "go"
             except EngineBuildError:
+                proc = None
+            if proc is None:
+                try:
+                    proc = self.bridge.rust_wpa3_downgrade(
+                        iface, bssid, ssid,
+                        channel=channel, duration=duration,
+                        strip_pmf=strip_pmf, rate=rate_ms,
+                    )
+                    engine = "rust"
+                except EngineBuildError:
+                    proc = None
+            if proc is None:
                 UI.print_error(
                     "No WPA3 downgrade engine available. Run 'build all' first."
                 )

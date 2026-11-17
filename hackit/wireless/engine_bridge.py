@@ -467,6 +467,17 @@ class EngineBridge:
     def rust_wpa3_detect(self, iface: str):
         return self._popen([self._ensure_rust(), "wpa3-detect", "--interface", iface])
 
+    def rust_wpa3_downgrade(self, iface: str, bssid: str, ssid: str,
+                            channel: int = 6, duration: int = 0,
+                            strip_pmf: bool = True, rate: int = 50):
+        cmd = [self._ensure_rust(), "wpa3-downgrade",
+               "--interface", iface, "--bssid", bssid, "--ssid", ssid,
+               "--channel", str(channel), "--duration", str(duration),
+               "--rate", str(rate)]
+        if not strip_pmf:
+            cmd.append("--no-strip-pmf")
+        return self._popen(cmd)
+
     def rust_probe_flood(self, iface: str, count: int = 100):
         return self._popen([self._ensure_rust(), "probe-flood", "--interface", iface, "--count", str(count)])
 
