@@ -761,29 +761,133 @@ class HackITWirelessExecutor:
             proc.terminate()
             UI.print_warning("Capture stopped.")
 
-    def do_handshake_capture(self, iface: str, bssid: str = "", timeout: int = 30, deauth: bool = False, output: str = "", **kwargs):
+    def do_handshake_capture(self, iface: str, bssid: str = "", timeout: int = 30,
+                             deauth: bool = False, output: str = "", **kwargs):
+        """Hunt for WPA/WPA2 4-way EAPOL frames with a rotating live capture UI."""
+        from . import themes as TH
         iface = iface or self._default_iface()
-        output = f"handshake_{bssid.replace(':','') if bssid else int(time.time())}.pcap"
+        ext = bssid.replace(":", "").lower() if bssid else str(int(time.time()))
+        output = output or f"handshake_{ext}.pcap"
+        theme_name = kwargs.get("theme")
+        rotate = float(kwargs.get("rotate") or 8.0)
+
+        TH.phase_banner("capture", f"iface={iface}  bssid={bssid or 'any'}  timeout={timeout}s  out={output}")
+
+        state = {
+            "ssid": "?", "bssid": bssid or "any",
+            "frames": 0, "eapols": 0, "pmkid": 0,
+            "pps": 0.0, "elapsed": 0.0, "events": [], "status": "hunting",
+            "stage_done": set(),
+        }
+
+        # Prefer rust handshake; fall back to C capture-hs
         try:
             proc = self.bridge.rust_handshake(iface, bssid, output, timeout)
-        except EngineBuildError as e:
-            UI.print_error(str(e))
-            return
-        UI.print_info(f"Hunting handshake on {iface} for {timeout}s → {output}")
-        try:
-            for line in proc.stdout:
-                line = line.strip()
-                if line:
-                    _console.print(f"  {line}")
-            proc.wait()
-            if os.path.exists(output):
-                UI.print_success(f"Handshake saved: {output}")
-            else:
-                UI.print_warning(f"No handshake captured in {timeout}s. Try closer range or deauth.")
-        except KeyboardInterrupt:
-            proc.terminate()
-            UI.print_warning("Handshake capture stopped.")
+        except EngineBuildError:
+            proc = None
 
+        started = time.time()
+        final_path = output
+        captured_eapol = 0
+        captured_pmkid = 0
+        stop = {"v": False}
+
+        try:
+            with TH.LiveOrchestra("capture", state, theme=theme_name,
+                                  rotate_every=rotate, refresh=10.0) as lo:
+                if proc is None:
+                    # C fallback
+                    cli = self.bridge._c_cli
+                    if cli:
+                        proc = self.bridge._popen([
+                            cli, "capture-hs", iface, bssid or "FF:FF:FF:FF:FF:FF",
+                            output, str(timeout), "1" if deauth else "0",
+                        ])
+                if proc is None:
+                    UI.print_error("No native engine available for handshake capture. Build with 'build'.")
+                    return
+
+                while proc.poll() is None:
+                    line = None
+                    try:
+                        if proc.stdout:
+                            line = proc.stdout.readline()
+                    except Exception:
+                        line = None
+                    t = time.time() - started
+                    state["elapsed"] = t
+                    if line:
+                        txt = line.strip()
+                        if txt:
+                            # Track EAPOL / PMKID events from the engine
+                            m = re.search(r"(?:EAPOL .* [Ss]tep|step) (\d)", txt)
+                            if m:
+                                step = int(m.group(1))
+                                if step and step - 1 not in state["stage_done"]:
+                                    state["stage_done"].add(step - 1)
+                                    state["eapols"] = max(state["eapols"], step)
+                                    captured_eapol = max(captured_eapol, step)
+                                    state["events"].append({
+                                        "t": t, "kind": f"EAPOL{step}",
+                                        "detail": txt[:60],
+                                    })
+                            if "PMKID" in txt or "pmkid" in txt.lower():
+                                captured_pmkid += 1
+                                state["pmkid"] = captured_pmkid
+                                state["events"].append({"t": t, "kind": "PMKID", "detail": txt[:60]})
+                            m = re.search(r"(?:frames|beacons)=?(\d+)", txt, re.I)
+                            if m:
+                                v = int(m.group(1))
+                                state["frames"] = max(state["frames"], v)
+                            if "deauth" in txt.lower() and "sent" in txt.lower():
+                                state["events"].append({"t": t, "kind": "deauth", "detail": txt[:60]})
+                            if "saved" in txt.lower() or "complete" in txt.lower():
+                                state["events"].append({"t": t, "kind": "done", "detail": txt[:60]})
+                    else:
+                        # No new line — still refresh elapsed & fps approximation
+                        time.sleep(0.05)
+                    if captured_eapol >= 4:
+                        state["status"] = "complete"
+                        proc.terminate()
+                        break
+                    state["pps"] = state["frames"] / max(0.001, t) if state["frames"] else 0.0
+                    lo.refresh()
+
+                try:
+                    proc.wait(timeout=3)
+                except Exception:
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+
+            elapsed = time.time() - started
+            exists = os.path.exists(final_path) and os.path.getsize(final_path) > 0
+            rows = [
+                ("output", final_path if exists else f"{final_path} (empty)"),
+                ("EAPOL steps", f"{state['eapols']}/4"),
+                ("PMKID", str(state["pmkid"]) if state["pmkid"] else "none"),
+                ("elapsed", f"{elapsed:.1f}s"),
+                ("status", "handshake captured" if (captured_eapol >= 4 or captured_pmkid) else "no handshake"),
+            ]
+            TH.summary_panel(rows, title="CAPTURE COMPLETE",
+                             accent="bright_green" if (state["eapols"] >= 2 or state["pmkid"]) else "bright_yellow")
+
+            if captured_eapol < 4 and not captured_pmkid:
+                UI.print_warning(
+                    "No complete handshake. Try: --deauth to force a reconnect, move closer to the AP, "
+                    "or use 'capture pmkid' for a PKMID attempt."
+                )
+            if exists:
+                UI.print_success(f"Capture file: {final_path}")
+        except KeyboardInterrupt:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            UI.print_warning("Handshake capture stopped by operator.")
+        except Exception as e:
+            UI.print_error(f"Capture error: {e}")
     def do_sessions(self, json_output: bool = False, **kwargs):
         patterns = [
             str(BASE / "handshakes" / "*.pcap"),
