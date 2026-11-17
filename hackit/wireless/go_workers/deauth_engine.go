@@ -161,6 +161,7 @@ func runDeauthEngine(opts deauthEngineOpts) error {
 	var sent uint64 = 0
 	var seq uint16 = 0
 	var chIdx int = 0
+	startTime := time.Now()
 	lastReport := time.Now()
 
 	for {
@@ -202,15 +203,21 @@ func runDeauthEngine(opts deauthEngineOpts) error {
 			seq = (seq + 1) & 0xFFF
 		}
 
-		if time.Since(lastReport) >= time.Second {
-			rate := float64(sent) / time.Since(lastReport).Seconds()
+		if time.Since(lastReport) >= 200*time.Millisecond {
+			elapsedNow := time.Since(startTime).Seconds()
+			rate := float64(sent) / elapsedNow
 			fmt.Fprintf(os.Stderr, "\r[GO-DEAUTH] sent=%d rate=%.0f p/s last_ch=%d reason=%d   ",
+				sent, rate, channels[chIdx%len(channels)], reason)
+			// Also emit a newline-delimited line on stdout so the Python
+			// executor's line-oriented parser sees the counters.
+			fmt.Fprintf(os.Stdout, "sent=%d rate=%.0f p/s last_ch=%d reason=%d\n",
 				sent, rate, channels[chIdx%len(channels)], reason)
 			lastReport = time.Now()
 		}
 
 		if opts.Count > 0 && sent >= uint64(opts.Count) {
 			fmt.Fprintf(os.Stderr, "\n[GO-DEAUTH] count reached: %d frames\n", sent)
+			fmt.Fprintf(os.Stdout, "sent=%d rate=0 p/s count_reached=1\n", sent)
 			return nil
 		}
 

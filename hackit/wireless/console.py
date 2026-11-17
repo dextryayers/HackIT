@@ -194,7 +194,11 @@ def clear_screen() -> None:
         if not sys.stdout.isatty():
             print()
             return
-        clear_screen()
+        # Clear the terminal without shelling out to `clear` — the TUI may be
+        # running under a terminal without a terminfo entry. ANSI escape is
+        # universally understood and cannot recurse.
+        sys.stdout.write("\033[2J\033[H")
+        sys.stdout.flush()
     except (OSError, ValueError):
         print()
 
@@ -493,7 +497,11 @@ Flags: --json | --watch | --interval <sec>"""
             clear_screen()
 
             # ── Tab header ──
-            tab_w = os.get_terminal_size().columns if hasattr(os, 'get_terminal_size') else 80
+            try:
+                tab_w = os.get_terminal_size().columns
+            except OSError:
+                # Piped output / no controlling TTY — fall back to a sane width.
+                tab_w = 80
             header = f"[bold white]⎇  WIRELESS ADAPTERS  [/bold white][dim]| {len(adapters)} device(s) found[/dim]"
             console.print(Panel(header, border_style="bright_cyan", width=min(tab_w, 90)))
 
@@ -1858,3 +1866,7 @@ Usage: run"""
 def start_wireless_console():
     c = WirelessConsole()
     c.start()
+
+
+if __name__ == "__main__":
+    start_wireless_console()

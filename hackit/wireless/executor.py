@@ -1441,21 +1441,31 @@ class HackITWirelessExecutor:
                     pass
 
                 if proc is not None:
-                    # Stream engine stderr; harvest numbers out of the lines.
+                    # Stream engine output (stderr is where go/rust engines
+                    # write their progress) and harvest frame/rate counters.
                     ch_idx = 0
                     ch_list = [1, 6, 11, 36, 40, 44, 48, 149, 153, 157, 161]
                     last_tick = time.time()
                     broken = False
+                    # Some engines write to stderr (go/rust), others to stdout.
+                    # Poll both with a short timeout so neither pipe can deadlock.
+                    out_stream = proc.stdout
+                    err_stream = proc.stderr
                     while not stop_flag["stop"]:
-                        try:
-                            line = proc.stdout.readline() if proc.stdout else ""
-                        except Exception:
-                            broken = True
-                            break
+                        line = None
+                        for s in (out_stream, err_stream):
+                            if s is None:
+                                continue
+                            try:
+                                line = s.readline()
+                            except Exception:
+                                line = None
+                            if line:
+                                break
                         if line:
                             txt = line.strip()
                             if txt:
-                                # Try to parse `sent=N rate=R` style counters
+                                # Progress lines look like: sent=123 rate=456 p/s
                                 m = re.search(r"sent=(\d+)", txt)
                                 if m:
                                     state["frames"] = int(m.group(1))
@@ -1465,17 +1475,39 @@ class HackITWirelessExecutor:
                                         state["pps"] = float(r.group(1))
                                     except ValueError:
                                         pass
+                                # go/rust "sent X frames / complete" lines
+                                m = re.search(r"(\d+)\s*/\s*\d+\s*frames", txt, re.I)
+                                if m and not state["frames"]:
+                                    state["frames"] = int(m.group(1))
+                                m = re.search(r"burst complete:\s*(\d+)/\d+", txt, re.I)
+                                if m:
+                                    state["frames"] = int(m.group(1))
                             state["elapsed"] = time.time() - started
-                            state["pps"] = state["frames"] / max(0.001, state["elapsed"]) if not state["pps"] else state["pps"]
+                            if not state["pps"]:
+                                state["pps"] = state["frames"] / max(0.001, state["elapsed"])
                             if hop:
                                 state["channel"] = ch_list[ch_idx % len(ch_list)]
                                 ch_idx += 1
                         elif proc.poll() is not None:
+                            # Flush whatever's still buffered before giving up.
+                            for s in (out_stream, err_stream):
+                                if s is None:
+                                    continue
+                                try:
+                                    tail = s.read()
+                                except Exception:
+                                    tail = ""
+                                if tail:
+                                    m = re.search(r"sent=(\d+)", tail)
+                                    if m:
+                                        state["frames"] = int(m.group(1))
+                                    m = re.search(r"burst complete:\s*(\d+)/\d+", tail, re.I)
+                                    if m:
+                                        state["frames"] = int(m.group(1))
                             break
                         elif time.time() - last_tick >= 0.1:
-                            # If we cannot read new lines (buffered engine),
-                            # move the counter ourselves so the UI is honest
-                            # about elapsed time, not frames.
+                            # No new line but engine still running. Keep the UI
+                            # honest about elapsed time (and hop channels).
                             state["elapsed"] = time.time() - started
                             if hop:
                                 state["channel"] = ch_list[ch_idx % len(ch_list)]
