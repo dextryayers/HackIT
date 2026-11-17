@@ -18,6 +18,7 @@ namespace HackITWireless
                 Console.Error.WriteLine("  beacon <ssid> <count> <interface>");
                 Console.Error.WriteLine("  handshake <bssid> <timeout> <interface> [output]");
                 Console.Error.WriteLine("  wps <bssid> <interface> [method]");
+                Console.Error.WriteLine("  wpa3-downgrade <bssid> <ssid> [channel] [duration] [strip|keep] [iface]");
                 Console.Error.WriteLine("  capture <interface> [filter]");
                 Console.Error.WriteLine("  server <port>");
                 return 1;
@@ -32,6 +33,7 @@ namespace HackITWireless
                     "beacon" => await RunBeacon(args),
                     "handshake" => await RunHandshake(args),
                     "wps" => await RunWps(args),
+                    "wpa3-downgrade" => await RunWpa3Downgrade(args),
                     "capture" => await RunCapture(args),
                     "server" => RunServer(args),
                     _ => RunHelp()
@@ -88,12 +90,30 @@ namespace HackITWireless
 
         static async Task<int> RunWps(string[] args)
         {
-            if (args.Length < 1) { Console.Error.WriteLine("Usage: wps <bssid> [interface] [method]"); return 1; }
+            if (args.Length < 2) { Console.Error.WriteLine("Usage: wps <bssid> [interface] [method]"); return 1; }
             var engine = new AttackEngine();
             string bssid = args[1];
             string iface = args.Length > 2 ? args[2] : DetectInterface();
             string method = args.Length > 3 ? args[3] : "pixie";
             Console.WriteLine(await engine.WpsAttack(bssid, iface, method));
+            return 0;
+        }
+
+        static async Task<int> RunWpa3Downgrade(string[] args)
+        {
+            if (args.Length < 3)
+            {
+                Console.Error.WriteLine("Usage: wpa3-downgrade <bssid> <ssid> [channel] [duration] [strip|keep] [iface]");
+                return 1;
+            }
+            var engine = new AttackEngine();
+            string bssid = args[1];
+            string ssid = args[2];
+            int channel = args.Length > 3 ? int.Parse(args[3]) : 6;
+            int duration = args.Length > 4 ? int.Parse(args[4]) : 0;
+            bool stripPmf = args.Length > 5 ? !args[5].Equals("keep", StringComparison.OrdinalIgnoreCase) : true;
+            string iface = args.Length > 6 ? args[6] : DetectInterface();
+            Console.WriteLine(await engine.Wpa3Downgrade(bssid, ssid, channel, duration, stripPmf, iface));
             return 0;
         }
 

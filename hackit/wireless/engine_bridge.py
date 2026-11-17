@@ -766,16 +766,32 @@ class EngineBridge:
             if os.name != "nt":
                 return None
             raise EngineBuildError("C# binary not built.")
-        return self._popen([self._cs_bin] + list(args))
+        # On Linux/macOS the artifact is a managed .dll that needs the dotnet
+        # host. On Windows it's an apphost .exe and runs directly.
+        cmd = [self._cs_bin] + list(args)
+        if self._cs_bin.lower().endswith(".dll"):
+            dotnet = shutil.which("dotnet") or "/opt/dotnet/dotnet"
+            cmd = [dotnet, self._cs_bin] + list(args)
+        return self._popen(cmd)
 
     def cs_adapters(self):
-        return self.cs_run("adapters")
+        return self.cs_run("scan")
 
     def cs_handshake(self, iface: str, bssid: str):
-        return self.cs_run("handshake", iface, bssid)
+        # C# CLI: handshake <bssid> <timeout> [iface] [output]
+        return self.cs_run("handshake", bssid, "30", iface, "capture.pcap")
 
     def cs_deauth(self, iface: str, bssid: str, station: str):
-        return self.cs_run("deauth", iface, bssid, station)
+        # C# CLI: deauth <bssid> <station> [iface]
+        return self.cs_run("deauth", bssid, station or "FF:FF:FF:FF:FF:FF", iface)
+
+    def cs_wpa3_downgrade(self, iface: str, bssid: str, ssid: str,
+                          channel: int = 6, duration: int = 0,
+                          strip_pmf: bool = True):
+        # C# CLI: wpa3-downgrade <bssid> <ssid> [channel] [duration] [strip|keep] [iface]
+        return self.cs_run("wpa3-downgrade", bssid, ssid,
+                           str(channel), str(duration),
+                           "strip" if strip_pmf else "keep", iface)
 
     # ── Utility ────────────────────────────────────────────────
 

