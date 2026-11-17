@@ -134,13 +134,27 @@ static int inject_beacon_via_pcap(const char* iface, const char* ssid, const uin
 }
 
 int hackit_beacon_flood(const char* iface, const char* ssid, const uint8_t* bssid, uint8_t channel, int count) {
-    if (!iface || !ssid || !bssid)
+    if (!iface || !ssid)
         return -1;
-
     if (count <= 0) count = 10;
-
+    /* No pinned BSSID: derive a stable locally-administered MAC from the
+       SSID hash so every beacon in the run looks like the same AP. */
+    uint8_t local_bssid[6];
+    if (!bssid) {
+        unsigned h = 2166136261u;
+        for (const char* pp = ssid; *pp; pp++) {
+            h ^= (unsigned char)*pp;
+            h *= 16777619u;
+        }
+        local_bssid[0] = 0x02;
+        local_bssid[1] = (uint8_t)(h >> 8);
+        local_bssid[2] = (uint8_t)(h >> 16);
+        local_bssid[3] = (uint8_t)(h >> 24);
+        local_bssid[4] = (uint8_t)(h ^ 0x5A);
+        local_bssid[5] = (uint8_t)((h >> 4) ^ 0xA5);
+        bssid = local_bssid;
+    }
     int sent = 0;
-
     for (int i = 0; i < count; i++) {
         int ret = inject_beacon_via_pcap(iface, ssid, bssid, channel);
         if (ret > 0) {
@@ -148,15 +162,12 @@ int hackit_beacon_flood(const char* iface, const char* ssid, const uint8_t* bssi
         } else {
             fprintf(stderr, "[BEACON] Injection %d/%d failed\n", i + 1, count);
         }
-
         if (i < count - 1)
             HACKIT_SLEEP_MS(10);
     }
-
     printf("[BEACON] Flood complete: %d/%d beacons sent on '%s'\n", sent, count, iface);
     return sent;
 }
-
 int hackit_beacon_flood_random(const char* iface, int count) {
     if (!iface)
         return -1;

