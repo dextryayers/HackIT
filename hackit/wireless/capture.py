@@ -348,6 +348,10 @@ class CaptureSession:
         if not frame:
             return
 
+        # Count every frame the radio delivers; EAPOL parsing is a subset.
+        with self._lock:
+            self.packet_count += 1
+
         parsed = _parse_data_frame(frame)
         if not parsed:
             return
@@ -363,7 +367,6 @@ class CaptureSession:
         client_hex = parsed["client"].hex(":")
 
         with self._lock:
-            self.packet_count += 1
             # PMKID often rides in message 1 (association) from the AP.
             pmkid = _extract_pmkid(key.key_data)
             if pmkid:

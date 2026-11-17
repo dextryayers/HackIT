@@ -101,16 +101,23 @@ static int open_af_packet(const char *iface) {
 }
 
 static void set_channel(const char *iface, int ch) {
+    /* mac80211 drivers ignore the legacy SIOCSIWFREQ wext ioctl, so shell out
+       to `iw`. Fall back to wext only when iw reports failure. */
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "iw dev %s set channel %d >/dev/null 2>&1", iface, ch);
+    if (system(cmd) == 0)
+        return;
+
     struct iwreq wr;
-    memset(&wr,0,sizeof(wr));
-    strncpy(wr.ifr_ifrn.ifrn_name, iface, IFNAMSIZ-1);
-    int freq = ch <= 13 ? 2407 + ch*5 : 5000 + ch*5;
+    memset(&wr, 0, sizeof(wr));
+    strncpy(wr.ifr_ifrn.ifrn_name, iface, IFNAMSIZ - 1);
+    int freq = ch <= 13 ? 2407 + ch * 5 : (ch == 14 ? 2484 : 5000 + ch * 5);
     wr.u.freq.m = freq;
     wr.u.freq.e = 6;
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd < 0) { fprintf(stderr,"[EVIL] set_channel socket failed\n"); return; }
+    if (fd < 0) { fprintf(stderr, "[EVIL] set_channel socket failed\n"); return; }
     if (ioctl(fd, SIOCSIWFREQ, &wr) < 0)
-        fprintf(stderr,"[EVIL] set_channel ioctl failed: %s\n", strerror(errno));
+        fprintf(stderr, "[EVIL] set_channel ioctl failed: %s\n", strerror(errno));
     close(fd);
 }
 
@@ -452,6 +459,11 @@ int main(int argc, char **argv) {
             fprintf(stderr, "[EVIL] cloned real BSSID to fake AP\n");
         } else if (strcmp(argv[i], "--ssid-match") == 0 && i+1 < argc) {
             g_ssid_match = argv[++i];
+        } else if (strcmp(argv[i], "--txpower") == 0 && i+1 < argc) {
+            char cmd[128];
+            snprintf(cmd, sizeof(cmd), "iw dev %s set txpower fixed %s 2>/dev/null",
+                     g_iface, argv[++i]);
+            system(cmd);
         } else if (strncmp(argv[i], "--ssid", 6) == 0) {
             char *eq = strchr(argv[i], '=');
             char *val;

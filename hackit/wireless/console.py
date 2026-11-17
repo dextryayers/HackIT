@@ -595,6 +595,59 @@ Flags: --json | --watch | --interval <sec>"""
                 console.print()
                 UI.print_info("Watch stopped.")
 
+    def do_handshake(self, arg):
+        """Capture a WPA handshake natively with a live panel.
+Usage: handshake <iface> [--bssid MAC] [--ssid NAME] [--channel N] [--timeout S] [--deauth] [--out FILE]"""
+        from . import executor_native
+        argv = shlex.split(arg)
+        pos, flags = _parse_flags(
+            argv, {"--deauth"},
+            {"--bssid": str, "--ssid": str, "--channel": int, "--timeout": float, "--out": str},
+        )
+        iface = pos[0] if pos else self.executor._default_iface()
+        if not iface:
+            UI.print_error("No interface given and none detected.")
+            return
+        executor_native.handshake_capture(
+            iface,
+            bssid=self.executor._clean_bssid(flags.get("--bssid", "")),
+            ssid=flags.get("--ssid", ""),
+            channel=flags.get("--channel", 0),
+            timeout=flags.get("--timeout", 30.0),
+            deauth="--deauth" in flags,
+            out=flags.get("--out", ""),
+        )
+
+    def do_pmkid(self, arg):
+        """Passive PMKID capture.
+Usage: pmkid <iface> [--bssid MAC] [--channel N] [--timeout S] [--out FILE]"""
+        from . import executor_native
+        pos, flags = _parse_flags(
+            arg.split(), set(),
+            {"--bssid": str, "--channel": int, "--timeout": float, "--out": str},
+        )
+        iface = pos[0] if pos else self.executor._default_iface()
+        if not iface:
+            UI.print_error("No interface given and none detected.")
+            return
+        executor_native.pmkid_capture(
+            iface,
+            bssid=self.executor._clean_bssid(flags.get("--bssid", "")),
+            channel=flags.get("--channel", 0),
+            timeout=flags.get("--timeout", 20.0),
+            out=flags.get("--out", ""),
+        )
+
+    def do_crack_native(self, arg):
+        """Crack a 22000 hash with the Go worker + live progress.
+Usage: crack-native <hashfile> <wordlist> [--ssid NAME]"""
+        from . import executor_native
+        pos, flags = _parse_flags(arg.split(), set(), {"--ssid": str})
+        if len(pos) < 2:
+            UI.print_error("Syntax: crack-native <hashfile> <wordlist>")
+            return
+        executor_native.crack(pos[0], pos[1], flags.get("--ssid", ""))
+
     def do_caps(self, arg):
         """Show adapter capability probe (chipset, bands, monitor/inject support).
 Usage: caps [--json]"""
