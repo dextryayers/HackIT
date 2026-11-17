@@ -10,6 +10,15 @@
 #endif
 
 #define MAX_SCANNER_BANNER 2048
+#ifndef PORT_RANGE_STR_LEN
+#define PORT_RANGE_STR_LEN 4096
+#endif
+#ifndef SOCKET
+#define SOCKET int
+#endif
+#ifndef INVALID_SOCKET
+#define INVALID_SOCKET (-1)
+#endif
 #define MAX_SCANNER_PORTS 65536
 
 typedef enum { SCAN_STATE_OPEN, SCAN_STATE_CLOSED, SCAN_STATE_FILTERED } ScannerPortState;

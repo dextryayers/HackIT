@@ -205,6 +205,29 @@ int hackit_pcap_cache_inject(const char* iface, const uint8_t* frame, int len, i
     pcap_cache_release(h);
     return sent;
 }
+
+/* Legacy helpers kept so the flood/injection paths below link.
+   open_pcap_for_inject returns a cached live handle (caller must release,
+   NOT pcap_close); open_pcap_for_capture returns a fresh handle (caller closes). */
+static pcap_t* open_pcap_for_inject(const char* iface) {
+    if (!iface) return NULL;
+    if (!pcap_cache_inited) hackit_pcap_cache_init();
+    return pcap_cache_get(iface);
+}
+static void close_pcap_for_inject(pcap_t* h) {
+    if (h) pcap_cache_release(h);
+}
+static pcap_t* open_pcap_for_capture_timeout(const char* iface, int timeout_ms) {
+    if (!iface) return NULL;
+    char errbuf[PCAP_ERRBUF_SIZE];
+    pcap_t* h = pcap_open_live(iface, 65535, 1, timeout_ms > 0 ? timeout_ms : 100, errbuf);
+    if (!h) return NULL;
+    pcap_set_datalink(h, DLT_IEEE802_11_RADIO);
+    return h;
+}
+static pcap_t* open_pcap_for_capture(const char* iface) {
+    return open_pcap_for_capture_timeout(iface, 100);
+}
 #endif
 
 bool hackit_inject_raw_frame(const char* iface, const uint8_t* frame, int len) {
@@ -343,7 +366,7 @@ int hackit_inject_packet_replay(const char* iface, const uint8_t* packet, int pa
         if (delay_ms > 0 && i < count - 1)
             hackit_msleep((uint32_t)delay_ms);
     }
-    pcap_close(handle);
+    close_pcap_for_inject(handle);
     return sent;
 #else
     (void)count; (void)delay_ms;
@@ -387,7 +410,7 @@ int hackit_inject_auth_flood(const char* iface, const uint8_t* bssid, int count)
         else
             hackit_usleep(100);
     }
-    pcap_close(handle);
+    close_pcap_for_inject(handle);
     return sent;
 #else
     (void)count;
@@ -441,8 +464,8 @@ int hackit_inject_arp_reply(const char* iface, const uint8_t* bssid, const uint8
     int replayed = 0;
     if (pcap_inject(handle, frame, total) == total) replayed++;
 
-    pcap_t* cap_handle = open_pcap_for_capture(iface, 2000);
-    if (!cap_handle) { pcap_close(handle); return replayed; }
+    pcap_t* cap_handle = open_pcap_for_capture_timeout(iface, 2000);
+    if (!cap_handle) { close_pcap_for_inject(handle); return replayed; }
 
     struct bpf_program fp;
     char filter[128];
@@ -467,7 +490,7 @@ int hackit_inject_arp_reply(const char* iface, const uint8_t* bssid, const uint8
         }
     }
     pcap_close(cap_handle);
-    pcap_close(handle);
+    close_pcap_for_inject(handle);
     return replayed;
 #else
     (void)station; (void)src_ip; (void)dst_ip; (void)src_mac; (void)dst_mac;
@@ -481,7 +504,7 @@ int hackit_inject_chopchop_attack(const char* iface, const uint8_t* bssid,
                                   uint8_t* output_packet, int* output_len) {
     if (!iface || !bssid || !output_packet || !output_len) return -1;
 #ifdef HACKIT_HAS_PCAP
-    pcap_t* cap_handle = open_pcap_for_capture(iface, 3000);
+    pcap_t* cap_handle = open_pcap_for_capture_timeout(iface, 3000);
     if (!cap_handle) return -1;
 
     struct bpf_program fp;
@@ -580,7 +603,7 @@ int hackit_inject_chopchop_attack(const char* iface, const uint8_t* bssid,
     }
 
     *output_len = bytes_recovered;
-    pcap_close(inj_handle);
+    close_pcap_for_inject(inj_handle);
     pcap_close(cap_handle);
     return bytes_recovered;
 #else
@@ -595,7 +618,7 @@ int hackit_inject_frag_attack(const char* iface, const uint8_t* bssid,
     if (!iface || !bssid || !station) return -1;
     if (frag_size < 16 || frag_size > 256) frag_size = 64;
 #ifdef HACKIT_HAS_PCAP
-    pcap_t* cap_handle = open_pcap_for_capture(iface, 3000);
+    pcap_t* cap_handle = open_pcap_for_capture_timeout(iface, 3000);
     if (!cap_handle) return -1;
 
     struct bpf_program fp;
@@ -632,7 +655,7 @@ int hackit_inject_frag_attack(const char* iface, const uint8_t* bssid,
 
     int payload_start = rad_off + data_hdr;
     int payload_len = captured_len - payload_start - HACKIT_80211_WEP_ICV_LEN;
-    if (payload_len <= 0) { pcap_close(inj_handle); return -1; }
+    if (payload_len <= 0) { close_pcap_for_inject(inj_handle); return -1; }
 
     int frag_count = (payload_len + frag_size - 1) / frag_size;
     int total_prga = 0;
@@ -674,7 +697,7 @@ int hackit_inject_frag_attack(const char* iface, const uint8_t* bssid,
         }
         hackit_usleep(5000);
     }
-    pcap_close(inj_handle);
+    close_pcap_for_inject(inj_handle);
     if (total_prga > 0)
         fprintf(stderr, "[FRAG] Recovered %d bytes of PRGA data\n", total_prga);
     return total_prga;
@@ -689,7 +712,7 @@ int hackit_inject_caffe_latte(const char* iface, const uint8_t* bssid,
                               const uint8_t* client_mac) {
     if (!iface || !bssid || !client_mac) return -1;
 #ifdef HACKIT_HAS_PCAP
-    pcap_t* cap_handle = open_pcap_for_capture(iface, 5000);
+    pcap_t* cap_handle = open_pcap_for_capture_timeout(iface, 5000);
     if (!cap_handle) return -1;
 
     struct bpf_program fp;
@@ -733,7 +756,7 @@ int hackit_inject_caffe_latte(const char* iface, const uint8_t* bssid,
         hackit_msleep(50);
     }
 
-    pcap_t* listen_handle = open_pcap_for_capture(iface, 3000);
+    pcap_t* listen_handle = open_pcap_for_capture_timeout(iface, 3000);
     if (listen_handle) {
         int ivs_captured = 0;
         for (int i = 0; i < 50; i++) {
@@ -747,7 +770,7 @@ int hackit_inject_caffe_latte(const char* iface, const uint8_t* bssid,
         fprintf(stderr, "[LATTE] Captured %d new IVs\n", ivs_captured);
         pcap_close(listen_handle);
     }
-    pcap_close(inj_handle);
+    close_pcap_for_inject(inj_handle);
     return injected;
 #else
     (void)client_mac;

@@ -1,3 +1,6 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include "eviltwin_v1.h"
 #include <stdio.h>
 #include <stdlib.h>

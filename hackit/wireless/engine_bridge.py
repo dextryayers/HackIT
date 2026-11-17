@@ -60,13 +60,25 @@ class EngineBridge:
         return None
 
     def _find_csharp(self) -> Optional[str]:
-        for name in ["HackItWireless.exe", "HackItWireless.dll"]:
-            for sub in ["net6.0", "net8.0", "net9.0", ""]:
-                d = BASE / "hackitwireless-cs" / "bin" / "Release"
-                if sub: d = d / sub
-                p = d / name
-                if p.exists():
-                    return str(p)
+        # os.path.exists()/Path.exists() can return False for a file that
+        # os.scandir() clearly reports, depending on the filesystem. Use
+        # scandir as the source of truth and match names case-insensitively.
+        targets = {"hackitwirelesscore.dll", "hackitwirelesscore",
+                   "hackitwireless.dll", "hackitwireless.exe"}
+        search_dirs = [
+            BASE / "csharp_core" / "bin" / "Release",
+            BASE / "hackitwireless-cs" / "bin" / "Release",
+        ]
+        for root in search_dirs:
+            for candidate_dir in (root, root / "net8.0", root / "net9.0",
+                                  root / "net7.0", root / "net6.0"):
+                try:
+                    with os.scandir(str(candidate_dir)) as it:
+                        for entry in it:
+                            if entry.name.lower() in targets and entry.is_file():
+                                return entry.path
+                except OSError:
+                    continue
         return None
 
     def engine_health(self) -> dict:
@@ -240,22 +252,40 @@ class EngineBridge:
             cb("c_core", "No C toolchain found - skipped")
         return False
 
+    def _dotnet(self) -> Optional[str]:
+        found = shutil.which("dotnet")
+        if found:
+            return found
+        for cand in ("/opt/dotnet/dotnet", "/usr/share/dotnet/dotnet"):
+            if os.path.exists(cand):
+                return cand
+        return None
+
     def _build_csharp(self, cb) -> bool:
-        if not shutil.which("dotnet"):
+        dotnet = self._dotnet()
+        if not dotnet:
+            if cb:
+                cb("csharp", "dotnet SDK not installed - skipped")
             return False
-        cs_dir = BASE / "hackitwireless-cs"
+        cs_dir = BASE / "csharp_core"
+        if not cs_dir.exists():
+            cs_dir = BASE / "hackitwireless-cs"
         if cb:
             cb("csharp", "Building C# components...")
         try:
             subprocess.run(
-                ["dotnet", "build", "-c", "Release"],
+                [dotnet, "build", "-c", "Release"],
                 cwd=str(cs_dir), check=True, capture_output=True, text=True
             )
             self._discover_engines()
             return self._cs_bin is not None
         except subprocess.CalledProcessError as e:
             if cb:
-                cb("csharp", f"FAILED: {e.stderr[:200]}")
+                cb("csharp", f"FAILED: {(e.stderr or '')[:200]}")
+            return False
+        except OSError as e:
+            if cb:
+                cb("csharp", f"FAILED: {e}")
             return False
 
     # ── Rust engine execution ──────────────────────────────────

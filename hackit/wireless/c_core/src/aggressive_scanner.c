@@ -8,6 +8,7 @@
 #include <linux/if_packet.h>
 #include <linux/if_ether.h>
 #include <linux/if.h>
+#include <linux/wireless.h>
 #include <net/if.h>
 #include <arpa/inet.h>
 #include <time.h>
@@ -74,12 +75,7 @@ static int _raw_socket(const char* iface) {
 static int _set_channel(const char* iface, int ch) {
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) return -1;
-    struct iwreq {
-        char ifr_name[IFNAMSIZ];
-        union {
-            struct iw_freq { int m; short e; } freq;
-        } u;
-    } wrq;
+    struct iwreq wrq;
     memset(&wrq, 0, sizeof(wrq));
     strncpy(wrq.ifr_name, iface, IFNAMSIZ - 1);
     if (ch <= 14) {
