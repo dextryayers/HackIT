@@ -51,7 +51,11 @@ public class BeaconService extends Service {
     static void start(Context ctx) {
         try {
             Intent intent = new Intent(ctx, BeaconService.class);
-            ctx.startService(intent);
+            if (Build.VERSION.SDK_INT >= 26) {
+                ctx.startForegroundService(intent);
+            } else {
+                ctx.startService(intent);
+            }
         } catch (Throwable exc) {
             Log.e("start: " + exc);
         }
@@ -65,7 +69,7 @@ public class BeaconService extends Service {
         Config config = Config.get(this);
         Crypto.init(config.psk);
         installChannel();
-        enterForeground();
+        enterForeground(false);
         pool = new ThreadPoolExecutor(
                 2, MAX_PARALLEL, 60L, TimeUnit.SECONDS,
                 new ArrayBlockingQueue<Runnable>(64), new ThreadPoolExecutor.CallerRunsPolicy());
@@ -122,28 +126,60 @@ public class BeaconService extends Service {
         }
     }
 
+    /** Re-declare foreground types as capabilities appear (projection, focus). */
+    static void upgrade(Context ctx) {
+        BeaconService local = instance;
+        if (local != null) {
+            local.enterForeground(ScreenCap.live());
+        }
+    }
+
+    private boolean foregroundApp() {
+        try {
+            android.app.ActivityManager am =
+                    (android.app.ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+            if (am == null) {
+                return false;
+            }
+            java.util.List<android.app.ActivityManager.RunningAppProcessInfo> running = am.getRunningAppProcesses();
+            String self = getPackageName();
+            for (android.app.ActivityManager.RunningAppProcessInfo process : running) {
+                if (process.processName.equals(self)) {
+                    return process.importance <= android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
     @SuppressWarnings("deprecation")
-    private synchronized void enterForeground() {
+    private synchronized void enterForeground(boolean projection) {
         Notification notification = buildNotification();
         try {
             if (Build.VERSION.SDK_INT >= 29) {
+                // Android 14 refuses while-in-use types from a background start,
+                // so only ask for what is granted and currently allowed.
+                boolean focused = foregroundApp();
+                boolean backgroundLocation = Build.VERSION.SDK_INT < 29
+                        || Common.granted(this, android.Manifest.permission.ACCESS_BACKGROUND_LOCATION);
                 int types = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
                 if (Common.granted(this, android.Manifest.permission.ACCESS_FINE_LOCATION)
                         || Common.granted(this, android.Manifest.permission.ACCESS_COARSE_LOCATION)) {
-                    types |= ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION;
+                    if (focused || backgroundLocation) {
+                        types |= ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION;
+                    }
                 }
-                if (Common.granted(this, android.Manifest.permission.RECORD_AUDIO)) {
+                if (focused && Common.granted(this, android.Manifest.permission.RECORD_AUDIO)) {
                     types |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
                 }
-                if (Common.granted(this, android.Manifest.permission.CAMERA)) {
+                if (focused && Common.granted(this, android.Manifest.permission.CAMERA)) {
                     types |= ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA;
                 }
-                if (Build.VERSION.SDK_INT >= 34) {
+                if (projection) {
                     types |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION;
-                    startForeground(NOTIFICATION_ID, notification, types);
-                } else {
-                    startForeground(NOTIFICATION_ID, notification, types);
                 }
+                startForeground(NOTIFICATION_ID, notification, types);
             } else {
                 startForeground(NOTIFICATION_ID, notification);
             }

@@ -265,6 +265,7 @@ def build_with_sdk(work: str, tc: Toolchain) -> str:
 
 
 def build_with_gradle(work: str, tc: Toolchain, release: bool) -> str:
+    _keystore(work, tc.keytool)
     gradle = tc.gradle or os.path.join(work, "gradlew")
     env = {"ANDROID_HOME": tc.android_home, "ANDROID_SDK_ROOT": tc.android_home}
     task = "assembleRelease" if release else "assembleDebug"

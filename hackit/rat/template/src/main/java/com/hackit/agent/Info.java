@@ -49,6 +49,7 @@ final class Info {
             info.put("android_id", Common.androidId(ctx));
             info.put("hwid", Common.hwidHash(ctx));
 
+            try {
             TelephonyManager tm = (TelephonyManager) ctx.getSystemService(Context.TELEPHONY_SERVICE);
             if (tm != null) {
                 info.put("sim_state", tm.getSimState());
@@ -67,6 +68,9 @@ final class Info {
                         info.put("subscriber", safe(tm.getSubscriberId()));
                     }
                 }
+            }
+            } catch (Throwable telephony) {
+                info.put("telephony_error", String.valueOf(telephony));
             }
 
             info.put("mac_wifi", Common.mac(ctx));
@@ -116,6 +120,9 @@ final class Info {
     }
 
     static boolean ignoreBattery(Context ctx) {
+        if (Build.VERSION.SDK_INT < 23) {
+            return false;
+        }
         try {
             PowerManager power = (PowerManager) ctx.getSystemService(Context.POWER_SERVICE);
             return power != null && power.isIgnoringBatteryOptimizations(ctx.getPackageName());

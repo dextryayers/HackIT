@@ -192,7 +192,7 @@ async def upload(request: web.Request) -> web.Response:
     sid = request.match_info["sid"]
     if not store.get_session(sid):
         raise web.HTTPNotFound(text="unknown session")
-    name = os.path.basename(request.headers.get("X-Name", "") or "artifact.bin")
+    name = os.path.basename(request.headers.get("X-Name", "") or "artifact.bin")[:120]
     kind = (request.headers.get("X-Kind", "file") or "file")[:16]
     declared = request.content_length
     if declared is not None and declared > protocol.MAX_BODY:
@@ -278,7 +278,7 @@ async def api_task(request: web.Request) -> web.Response:
     try:
         payload = await request.json()
         task_id = store.queue_task(sid, str(payload.get("cmd")), payload.get("args") or [])
-    except (ValueError, protocol.ProtocolError) as exc:
+    except (ValueError, TypeError, protocol.ProtocolError) as exc:
         raise web.HTTPBadRequest(text=str(exc)) from exc
     request.app["hub"].wake(sid)
     return web.json_response({"ok": True, "id": task_id})
@@ -289,8 +289,11 @@ async def api_sleep(request: web.Request) -> web.Response:
     sid = request.match_info["sid"]
     if not store.get_session(sid):
         raise web.HTTPNotFound(text="unknown session")
-    payload = await request.json()
-    sleep_ms = max(0, int(payload.get("sleep_ms") or 0))
+    try:
+        payload = await request.json()
+        sleep_ms = max(0, int(payload.get("sleep_ms") or 0))
+    except (ValueError, TypeError) as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from exc
     store.touch(sid, sleep_ms=sleep_ms)
     return web.json_response({"ok": True, "sleep_ms": sleep_ms})
 

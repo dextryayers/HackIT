@@ -80,8 +80,11 @@ public class KeyMon extends AccessibilityService {
             } else if (type == AccessibilityEvent.TYPE_VIEW_FOCUSED) {
                 AccessibilityNodeInfo node = event.getSource();
                 if (node != null) {
-                    CharSequence hint = node.getHintText();
                     CharSequence text = node.getText();
+                    CharSequence hint = Build.VERSION.SDK_INT >= 26 ? node.getHintText() : null;
+                    if (hint == null && text == null) {
+                        hint = node.getContentDescription();
+                    }
                     String value = text != null ? text.toString() : hint == null ? "" : "[" + hint + "]";
                     if (!value.isEmpty()) {
                         push(source, value, true);

@@ -74,12 +74,20 @@ public class MainActivity extends Activity {
         addButton(column, "Ignore battery optimisation", new View.OnClickListener() {
             @Override
             public void onClick(View view) {
+                if (Build.VERSION.SDK_INT < 23) {
+                    ToastMsg.show(MainActivity.this, "not available on this version");
+                    return;
+                }
                 try {
                     Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
                     intent.setData(Uri.parse("package:" + getPackageName()));
                     startActivity(intent);
                 } catch (Throwable ignored) {
-                    startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+                    try {
+                        startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+                    } catch (Throwable second) {
+                        ToastMsg.show(MainActivity.this, "battery settings unavailable");
+                    }
                 }
             }
         });
@@ -158,9 +166,6 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 33 && !Common.granted(this, "android.permission.POST_NOTIFICATIONS")) {
             wanted.add("android.permission.POST_NOTIFICATIONS");
         }
-        if (Build.VERSION.SDK_INT >= 29) {
-            wanted.add(Manifest.permission.ACCESS_BACKGROUND_LOCATION);
-        }
         if (!wanted.isEmpty()) {
             requestPermissions(wanted.toArray(new String[0]), PERM_CODE);
         }
@@ -169,10 +174,26 @@ public class MainActivity extends Activity {
 
     @Override
     public void onRequestPermissionsResult(int code, String[] permissions, int[] results) {
-        if (code == PERM_CODE) {
-            refresh();
-            BeaconService.poke(this);
+        if (code != PERM_CODE) {
+            return;
         }
+        refresh();
+        BeaconService.poke(this);
+        BeaconService.upgrade(this);
+        // Android 11+ only offers "allow all the time" once foreground location
+        // is already granted, so background is asked on its own second pass.
+        if (Build.VERSION.SDK_INT >= 29
+                && Common.granted(this, Manifest.permission.ACCESS_FINE_LOCATION)
+                && !Common.granted(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION)) {
+            requestPermissions(new String[]{Manifest.permission.ACCESS_BACKGROUND_LOCATION}, PERM_CODE + 1);
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        BeaconService.start(this);
+        BeaconService.upgrade(this);
     }
 
     @Override

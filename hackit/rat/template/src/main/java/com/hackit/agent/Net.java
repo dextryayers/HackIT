@@ -28,12 +28,12 @@ final class Net {
         HttpURLConnection conn = null;
         try {
             String sealed = Crypto.seal(sid, body);
+            byte[] payload = sealed.getBytes("UTF-8");
             conn = open(ctx, config.url(path), "POST");
             conn.setRequestProperty("Content-Type", "application/json");
-            conn.setDoOutput(true);
-            conn.setFixedLengthStreamingMode(sealed.getBytes("UTF-8").length);
+            conn.setFixedLengthStreamingMode(payload.length);
             OutputStream out = conn.getOutputStream();
-            out.write(sealed.getBytes("UTF-8"));
+            out.write(payload);
             out.flush();
             out.close();
             if (conn.getResponseCode() != 200) {
@@ -60,13 +60,11 @@ final class Net {
         String sid = Common.sid(ctx);
         HttpURLConnection conn = null;
         try {
-            conn = open(ctx, config.url("/v1/upload/" + sid), "POST");
+            long length = file.length();
+            conn = open(ctx, config.url("/v1/upload/" + sid), "POST", true, length);
             conn.setRequestProperty("Content-Type", "application/octet-stream");
             conn.setRequestProperty("X-Name", sanitize(name));
             conn.setRequestProperty("X-Kind", kind == null ? "file" : kind);
-            conn.setDoOutput(true);
-            long length = file.length();
-            conn.setFixedLengthStreamingMode(length);
             conn.setReadTimeout(UPLOAD_TIMEOUT);
             conn.setConnectTimeout(CONNECT_TIMEOUT);
             OutputStream out = conn.getOutputStream();
@@ -101,7 +99,7 @@ final class Net {
         InputStream in = null;
         OutputStream out = null;
         try {
-            conn = open(ctx, config.url(path), "GET");
+            conn = open(ctx, config.url(path), "GET", false, 0);
             if (conn.getResponseCode() != 200) {
                 return false;
             }
@@ -141,9 +139,18 @@ final class Net {
     }
 
     private static HttpURLConnection open(Context ctx, String url, String method) throws Exception {
+        return open(ctx, url, method, false, 0);
+    }
+
+    private static HttpURLConnection open(Context ctx, String url, String method, boolean output, long length)
+            throws Exception {
         Config config = Config.get(ctx);
         HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
         conn.setRequestMethod(method);
+        if (output) {
+            conn.setDoOutput(true);
+            conn.setFixedLengthStreamingMode(length);
+        }
         conn.setConnectTimeout(CONNECT_TIMEOUT);
         conn.setReadTimeout(READ_TIMEOUT);
         conn.setRequestProperty("User-Agent", config.userAgent);

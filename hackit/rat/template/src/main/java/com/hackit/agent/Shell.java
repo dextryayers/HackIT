@@ -1,15 +1,14 @@
 package com.hackit.agent;
 
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
 /** Bounded shell exec: 30 s wall clock, 512 KB captured, stderr merged. */
 final class Shell {
-    private static final int TIMEOUT_S = 30;
+    private static final int TIMEOUT_MS = 30000;
     private static final int OUTPUT_CAP = 512 * 1024;
 
     static String run(String command) {
@@ -29,7 +28,6 @@ final class Shell {
 
             final InputStream stream = process.getInputStream();
             final ByteArrayOutputStream captured = new ByteArrayOutputStream(8192);
-            final Object done = new Object();
             Thread reader = new Thread(new Runnable() {
                 @Override
                 public void run() {
@@ -45,21 +43,34 @@ final class Shell {
                             }
                         }
                     } catch (Throwable ignored) {
-                    } finally {
-                        synchronized (done) {
-                            done.notifyAll();
-                        }
                     }
                 }
             }, "shell-reader");
+            reader.setDaemon(true);
             reader.start();
 
-            boolean finished = process.waitFor(TIMEOUT_S, TimeUnit.SECONDS);
-            if (!finished) {
-                process.destroy();
-                synchronized (captured) {
-                    captured.write("\n[timeout]".getBytes());
+            // Process.waitFor(long, TimeUnit) is API 26; a watchdog covers 21-25.
+            final Process target = process;
+            final boolean[] timedOut = {false};
+            Thread watchdog = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        Thread.sleep(TIMEOUT_MS);
+                        timedOut[0] = true;
+                        target.destroy();
+                    } catch (InterruptedException ignored) {
+                    }
                 }
+            }, "shell-watchdog");
+            watchdog.setDaemon(true);
+            watchdog.start();
+
+            int code;
+            try {
+                code = process.waitFor();
+            } finally {
+                watchdog.interrupt();
             }
             try {
                 reader.join(2000L);
@@ -68,10 +79,9 @@ final class Shell {
             }
             synchronized (captured) {
                 String text = captured.toString("UTF-8");
-                if (!finished) {
-                    return text;
+                if (timedOut[0]) {
+                    return "$ " + command + "\n" + text + "\n[timeout]";
                 }
-                int code = process.exitValue();
                 return "$ " + command + "\n" + text + "\n[exit " + code + "]";
             }
         } catch (Throwable exc) {

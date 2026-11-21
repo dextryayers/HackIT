@@ -58,23 +58,19 @@ final class Config {
     private static Config load(Context ctx) {
         try {
             SharedPreferences prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-            String blob = prefs.getString(KEY, null);
-            JSONObject json;
-            if (blob != null) {
-                json = new JSONObject(blob);
-            } else {
-                AssetManager assets = ctx.getAssets();
-                InputStream in = assets.open("agent.json");
-                ByteArrayOutputStream out = new ByteArrayOutputStream(1024);
-                byte[] buf = new byte[4096];
-                int read;
-                while ((read = in.read(buf)) > 0) {
-                    out.write(buf, 0, read);
-                }
-                in.close();
-                json = new JSONObject(out.toString("UTF-8"));
-                prefs.edit().putString(KEY, json.toString()).apply();
+            // Always read the shipped asset: a reinstalled APK can point at a new
+            // host, and a pref copy would silently keep the old one.
+            AssetManager assets = ctx.getAssets();
+            InputStream in = assets.open("agent.json");
+            ByteArrayOutputStream out = new ByteArrayOutputStream(1024);
+            byte[] buf = new byte[4096];
+            int read;
+            while ((read = in.read(buf)) > 0) {
+                out.write(buf, 0, read);
             }
+            in.close();
+            JSONObject json = new JSONObject(out.toString("UTF-8"));
+            prefs.edit().putString(KEY, json.toString()).apply();
             Config config = new Config(json);
             config.sleepOverrideMs = prefs.getLong("sleep", 0L);
             return config;

