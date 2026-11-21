@@ -124,12 +124,9 @@ def discover(engine: str = "auto") -> Toolchain:
 
     ndk_root = os.path.join(home, "ndk")
     ndk = _latest(ndk_root) or ""
+    if not ndk:
+        print("  note        NDK absent — native channel disabled (sdkmanager 'ndk;27.2.12479018')")
     cmake = _which("cmake", [os.path.join(home, "cmake", "3.22.1", "bin")])
-    if engine == "sdk" and not ndk:
-        raise BuildError("NDK missing — `sdkmanager 'ndk;27.2.12479018'`")
-    if engine == "sdk" and not cmake:
-        raise BuildError("cmake missing — needed to build libhackit.so")
-
     return Toolchain(
         android_home=home,
         java=java,

@@ -685,9 +685,13 @@ def make_app(hub: Hub) -> web.Application:
 
 
 def load_psk(path: str) -> bytes:
-    """PSK is 32 raw bytes, hex or base64 encoded, mode 0600 enforced."""
+    """PSK is 32 raw bytes, hex or base64 encoded. Minted on first use."""
+    if not os.path.isfile(path):
+        return write_psk(path)
     with open(path, "rb") as handle:
         raw = handle.read().strip()
+    if not raw:
+        return write_psk(path)
     try:
         key = bytes.fromhex(raw.decode("ascii"))
     except (ValueError, UnicodeDecodeError):

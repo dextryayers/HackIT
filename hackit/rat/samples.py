@@ -1,8 +1,7 @@
 """Minimal valid carriers, embedded so `make file` works on a bare box.
 
-Each blob opens in its native viewer; the payload is appended (or packed, for
-docx/svg) by the injector. Sizes are 1 KB or less except the audio/video
-samples, which stay under 5 KB.
+Each blob opens in its native viewer/handler; the injector appends, packs or
+embeds the payload. Text formats stay text; html/js stay executable.
 """
 from __future__ import annotations
 
@@ -11,6 +10,54 @@ import os
 import tempfile
 
 SAMPLES = {
+    "s.apk": (
+        "UEsDBBQAAAAAADWedV0QL0+DFwAAABcAAAATAAAAQW5kcm9pZE1hbmlmZXN0LnhtbDxtYW5pZmVzdCBwYWNrYWdlPSJ4Ii8+UEsD"
+        "BBQAAAAAADWedV255PsxCAAAAAgAAAALAAAAY2xhc3Nlcy5kZXhkZXgKMDM1AFBLAQIUAxQAAAAAADWedV0QL0+DFwAAABcAAAAT"
+        "AAAAAAAAAAAAAACAAQAAAABBbmRyb2lkTWFuaWZlc3QueG1sUEsBAhQDFAAAAAAANZ51Xbnk+zEIAAAACAAAAAsAAAAAAAAAAAAA"
+        "AIABSAAAAGNsYXNzZXMuZGV4UEsFBgAAAAACAAIAegAAAHkAAAAAAA=="
+    ),
+    "s.bmp": (
+        "Qk32AAAAAAAAADYAAAAoAAAACAAAAAgAAAABABgAAAAAAMAAAADEDgAAxA4AAAAAAAAAAAAAMjwKMjwKMjwKMjwKMjwKMjwKMjwK"
+        "MjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwK"
+        "MjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwKMjwK"
+        "MjwKMjwKMjwKMjwKMjwKMjwKMjwK"
+    ),
+    "s.csv": (
+        "YSxiCjEsMgo="
+    ),
+    "s.epub": (
+        "UEsDBBQAAAAAADWedV1vYassFAAAABQAAAAIAAAAbWltZXR5cGVhcHBsaWNhdGlvbi9lcHViK3ppcFBLAwQUAAAAAAA1nnVdHgvX"
+        "yd0AAADdAAAAFgAAAE1FVEEtSU5GL2NvbnRhaW5lci54bWw8P3htbCB2ZXJzaW9uPSIxLjAiPz48Y29udGFpbmVyIHZlcnNpb249"
+        "IjEuMCIgeG1sbnM9InVybjpvYXNpczpuYW1lczp0YzpvcGVuZG9jdW1lbnQ6eG1sbnM6Y29udGFpbmVyIj48cm9vdGZpbGVzPjxy"
+        "b290ZmlsZSBmdWxsLXBhdGg9Ik9FQlBTL2NvbnRlbnQub3BmIiBtZWRpYS10eXBlPSJhcHBsaWNhdGlvbi9vZWJwcy1wYWNrYWdl"
+        "K3htbCIvPjwvcm9vdGZpbGVzPjwvY29udGFpbmVyPlBLAwQUAAAAAAA1nnVdOfSwf4wBAACMAQAAEQAAAE9FQlBTL2NvbnRlbnQu"
+        "b3BmPD94bWwgdmVyc2lvbj0iMS4wIj8+PHBhY2thZ2UgeG1sbnM9Imh0dHA6Ly93d3cuaWRwZi5vcmcvMjAwNy9vcGYiIHZlcnNp"
+        "b249IjMuMCIgdW5pcXVlLWlkZW50aWZpZXI9ImlkIj48bWV0YWRhdGEgeG1sbnM6ZGM9Imh0dHA6Ly9wdXJsLm9yZy9kYy9lbGVt"
+        "ZW50cy8xLjEvIj48ZGM6dGl0bGU+Y2FycmllcjwvZGM6dGl0bGU+PGRjOmlkZW50aWZpZXIgaWQ9ImlkIj54PC9kYzppZGVudGlm"
+        "aWVyPjxkYzpsYW5ndWFnZT5lbjwvZGM6bGFuZ3VhZ2U+PC9tZXRhZGF0YT48bWFuaWZlc3Q+PGl0ZW0gaWQ9InQiIGhyZWY9InQu"
+        "eGh0bWwiIG1lZGlhLXR5cGU9ImFwcGxpY2F0aW9uL3hodG1sK3htbCIvPjwvbWFuaWZlc3Q+PHNwaW5lPjxpdGVtcmVmIGlkcmVm"
+        "PSJ0Ii8+PC9zcGluZT48L3BhY2thZ2U+UEsDBBQAAAAAADWedV0WcwD8TQAAAE0AAAANAAAAT0VCUFMvdC54aHRtbDxodG1sIHht"
+        "bG5zPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hodG1sIj48Ym9keT48cD5jYXJyaWVyPC9wPjwvYm9keT48L2h0bWw+UEsBAhQD"
+        "FAAAAAAANZ51XW9hqywUAAAAFAAAAAgAAAAAAAAAAAAAAIABAAAAAG1pbWV0eXBlUEsBAhQDFAAAAAAANZ51XR4L18ndAAAA3QAA"
+        "ABYAAAAAAAAAAAAAAIABOgAAAE1FVEEtSU5GL2NvbnRhaW5lci54bWxQSwECFAMUAAAAAAA1nnVdOfSwf4wBAACMAQAAEQAAAAAA"
+        "AAAAAAAAgAFLAQAAT0VCUFMvY29udGVudC5vcGZQSwECFAMUAAAAAAA1nnVdFnMA/E0AAABNAAAADQAAAAAAAAAAAAAAgAEGAwAA"
+        "T0VCUFMvdC54aHRtbFBLBQYAAAAABAAEAPQAAAB+AwAAAAA="
+    ),
+    "s.gif": (
+        "R0lGODdheABQAIAAAAAAAAAAACwAAAAAeABQAEAInwABCBxIsKDBgwgTKlzIsKHDhxAjSpxIsaLFixgzatzIsaPHjyBDihxJsqTJ"
+        "kyhTqlzJsqXLlzBjypxJs6bNmzhz6tzJs6fPn0CDCh1KtKjRo0iTKl3KtKnTp1CjSp1KtarVq1izat3KtavXr2DDih1LtqzZs2jT"
+        "ql3Ltq3bt3Djyp1Lt67du3jz6t3Lt6/fv4ADCx5MuLDhw4gTK04YEAA7"
+    ),
+    "s.html": (
+        "PCFkb2N0eXBlIGh0bWw+PGh0bWw+PGJvZHk+PGgxPmNhcnJpZXI8L2gxPjwvYm9keT48L2h0bWw+"
+    ),
+    "s.ico": (
+        "AAABAAMAEBAAAAAAIABWAAAANgAAABgYAAAAACAAYQAAAIwAAAAgIAAAAAAgAGwAAADtAAAAiVBORw0KGgoAAAANSUhEUgAAABAA"
+        "AAAQCAYAAAAf8/9hAAAAHUlEQVR4nGM0vrjgPwMFgIkSzaMGjBowasBgMgAA9CUCwwkk/OYAAAAASUVORK5CYIKJUE5HDQoaCgAA"
+        "AA1JSERSAAAAGAAAABgIBgAAAOB3PfgAAAAoSURBVHicYzS+uOA/Aw0BEy0NH7Vg1IJRC0YtGLVg1IJRC0YtoB4AANdXAtOk3+0T"
+        "AAAAAElFTkSuQmCCiVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAM0lEQVR4nO3OQQEAMAjEsGOWZniWUDRk8EkN"
+        "NHX7/Sx2NucAAAAAAAAAAAAAAAAAAABJMpNjAuMWeGEtAAAAAElFTkSuQmCC"
+    ),
     "s.jpg": (
         "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYn"
         "KSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgo"
@@ -30,18 +77,11 @@ SAMPLES = {
         "AUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUU"
         "UAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAf/2Q=="
     ),
-    "s.png": (
-        "iVBORw0KGgoAAAANSUhEUgAAAPAAAACgCAIAAAC9uXYyAAABx0lEQVR4nO3SQQ3AIADAwDEVKEIE/oVggoSkuVPQR8fc64OK/3UA"
-        "3GRoUgxNiqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQp"
-        "hibF0KQYmhRDk2JoUgxNiqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQphibF0KQYmhRDk2Jo"
-        "UgxNiqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQphibF"
-        "0KQYmhRDk2JoUgxNiqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQphibF0KQYmhRDk2JoUgxN"
-        "iqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQphibF0KQY"
-        "mhRDk2JoUgxNiqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQphibF0KQca5MB+PmQ15kAAAAASUVORK5CYII="
+    "s.js": (
+        "Y29uc29sZS5sb2coImNhcnJpZXIiKTsK"
     ),
-    "s.webp": (
-        "UklGRoIAAABXRUJQVlA4IHYAAABQCwCdASrwAKAAPm02mUmkIyKhIEgAgA2JaW7hdrEbQBaW5a9FXCDIIaqk122i4QZBDVUmu20X"
-        "CDIIaqk122i4QZBDVUmu20XCDIIaqk122i4QZBDVUmu20XCDIIaqk122aAAA/v971f//sX7A/iWNAAAAAAAA"
+    "s.log": (
+        "MjAyNi0wMS0wMSBjYXJyaWVyCg=="
     ),
     "s.mp3": (
         "SUQzBAAAAAAAIlRTU0UAAAAOAAADTGF2ZjYxLjcuMTAzAAAAAAAAAAAAAAD/+0DAAAAAAAAAAAAAAAAAAAAAAABYaW5nAAAADwAA"
@@ -202,7 +242,28 @@ SAMPLES = {
         "IFIKL0lEIFs8MzVBMjEwMTg5NTgzREU4MTdERDNDQ0FBM0NEQ0QyOUM+PDM1QTIxMDE4OTU4M0RFODE3REQzQ0NBQTNDRENEMjlD"
         "Pl0KPj4Kc3RhcnR4cmVmCjI4MDQKJSVFT0YK"
     ),
-}
+    "s.png": (
+        "iVBORw0KGgoAAAANSUhEUgAAAPAAAACgCAIAAAC9uXYyAAABx0lEQVR4nO3SQQ3AIADAwDEVKEIE/oVggoSkuVPQR8fc64OK/3UA"
+        "3GRoUgxNiqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQp"
+        "hibF0KQYmhRDk2JoUgxNiqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQphibF0KQYmhRDk2Jo"
+        "UgxNiqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQphibF"
+        "0KQYmhRDk2JoUgxNiqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQphibF0KQYmhRDk2JoUgxN"
+        "iqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQphibF0KQY"
+        "mhRDk2JoUgxNiqFJMTQphibF0KQYmhRDk2JoUgxNiqFJMTQphibF0KQca5MB+PmQ15kAAAAASUVORK5CYII="
+    ),
+    "s.txt": (
+        "Y2Fycmllcgo="
+    ),
+    "s.webp": (
+        "UklGRoIAAABXRUJQVlA4IHYAAABQCwCdASrwAKAAPm02mUmkIyKhIEgAgA2JaW7hdrEbQBaW5a9FXCDIIaqk122i4QZBDVUmu20X"
+        "CDIIaqk122i4QZBDVUmu20XCDIIaqk122i4QZBDVUmu20XCDIIaqk122aAAA/v971f//sX7A/iWNAAAAAAAA"
+    ),
+    "s.zip": (
+        "UEsDBBQAAAAAADWedV2GphA2BQAAAAUAAAAJAAAAaGVsbG8udHh0aGVsbG9QSwECFAMUAAAAAAA1nnVdhqYQNgUAAAAFAAAACQAA"
+        "AAAAAAAAAAAAgAEAAAAAaGVsbG8udHh0UEsFBgAAAAABAAEANwAAACwAAAAAAA=="
+    ),}
+
+TEXTUAL = {"txt", "csv", "log", "html", "htm", "js"}
 
 MINIMAL_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120">'
@@ -211,16 +272,17 @@ MINIMAL_SVG = (
     "</svg>"
 )
 
-MINIMAL_DOCX = None  # built below
+
+_docx_cache: bytes | None = None
 
 
 def _docx_bytes() -> bytes:
     import io
     import zipfile
 
-    global MINIMAL_DOCX
-    if MINIMAL_DOCX is not None:
-        return MINIMAL_DOCX
+    global _docx_cache
+    if _docx_cache is not None:
+        return _docx_cache
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(
@@ -244,8 +306,8 @@ def _docx_bytes() -> bytes:
             '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
             "<w:body><w:p><w:r><w:t>carrier</w:t></w:r></w:p></w:body></w:document>",
         )
-    MINIMAL_DOCX = buffer.getvalue()
-    return MINIMAL_DOCX
+    _docx_cache = buffer.getvalue()
+    return _docx_cache
 
 
 def sample(ext: str, directory: str | None = None) -> str:
@@ -257,10 +319,9 @@ def sample(ext: str, directory: str | None = None) -> str:
         data = MINIMAL_SVG.encode()
     elif ext == "docx":
         data = _docx_bytes()
-    elif ext == "pdf":
-        data = base64.b64decode(SAMPLES["s.pdf"])
     else:
-        data = base64.b64decode(SAMPLES["s." + ext])
+        key = "s." + ext
+        data = base64.b64decode(SAMPLES[key])
     with open(path, "wb") as handle:
         handle.write(data)
     return path

