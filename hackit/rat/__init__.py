@@ -163,6 +163,17 @@ def mint(label):
     click.echo(json.dumps({label: key}))
 
 
+@rat.command()
+@click.option("--port", default=8443, show_default=True, type=int)
+@click.option("--provider", default="auto", type=click.Choice(["auto", "cloudflared", "ngrok", "ssh"]))
+def tunnel(port, provider):
+    """Expose the C2 on a public URL (needs cloudflared/ngrok/ssh)."""
+    from . import tunnel as tun
+
+    if tun.start(port, provider) is None:
+        raise SystemExit(_colored("  no tunnel binary — see hackit rat doctor output", RED))
+
+
 rat.add_command(control, name="console")
 rat.add_command(control, name="control")
 

@@ -290,6 +290,8 @@ class LiveUI:
                         if line and not self.handle(line):
                             return
                         continue
+                    if char == "q" and not buffer:
+                        raise KeyboardInterrupt
                     if char in ("\x7f", "\b"):
                         buffer = buffer[:-1]
                         continue
@@ -310,10 +312,10 @@ def _clip(text: str, width: int) -> str:
 
 
 def _pad(text: str, width: int) -> str:
-    return text + " " * max(0, width - len(_strip(text)))
+    return text + " " * max(0, width - _visible_len(text))
 
 
-def _strip(text: str) -> int:
+def _visible_len(text: str) -> int:
     total = 0
     index = 0
     while index < len(text):

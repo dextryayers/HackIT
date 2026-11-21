@@ -211,8 +211,6 @@ def test_make_config_validation():
 # ------------------------------------------------------------------ carriers
 
 def test_polyglot_roundtrip(tmp_path):
-    import pathlib
-
     from hackit.rat import polyglot, samples
 
     payload = tmp_path / "payload.apk"
@@ -319,7 +317,6 @@ def test_udp_native_channel(app, psk):
         aead = ChaCha20Poly1305(server.udp_key(psk))
         loop = asyncio.get_running_loop()
         transport, _ = await loop.create_datagram_endpoint(asyncio.DatagramProtocol, local_addr=("127.0.0.1", 0))
-        port = transport.get_extra_info("sockname")[1]
         runner = web.AppRunner(udp_app, access_log=None)
         await runner.setup()
         site = web.TCPSite(runner, "127.0.0.1", 0)

