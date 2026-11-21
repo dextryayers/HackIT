@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     battery     INTEGER,
     charging    INTEGER,
     online      INTEGER NOT NULL DEFAULT 1,
-    sleep_ms    INTEGER NOT NULL DEFAULT 0
+    sleep_ms    INTEGER NOT NULL DEFAULT 0,
+    kind        TEXT NOT NULL DEFAULT 'apk'
 );
 CREATE TABLE IF NOT EXISTS tasks (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -105,6 +106,11 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+MIGRATIONS = {
+    "sessions": {"kind": "TEXT NOT NULL DEFAULT 'apk'"},
+}
+
+
 def init() -> None:
     global _ready
     with _schema_lock:
@@ -113,6 +119,11 @@ def init() -> None:
         conn = _connect()
         try:
             conn.executescript(SCHEMA)
+            for table, columns in MIGRATIONS.items():
+                have = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+                for name, ddl in columns.items():
+                    if name not in have:
+                        conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
             conn.commit()
         finally:
             conn.close()
@@ -141,7 +152,7 @@ def _exec(sql: str, params: Iterable[Any] = ()) -> int:
 
 # ---------------------------------------------------------------- sessions
 
-def register(sid: str, meta: Dict[str, Any], pub_ip: str) -> Dict[str, Any]:
+def register(sid: str, meta: Dict[str, Any], pub_ip: str, kind: str = "apk") -> Dict[str, Any]:
     """Insert or refresh a session. `meta` comes from the device, so every
     field is coerced; unknown keys are ignored rather than stored raw."""
     now = time.time()
@@ -149,17 +160,18 @@ def register(sid: str, meta: Dict[str, Any], pub_ip: str) -> Dict[str, Any]:
     sdk = int(meta.get("sdk") or 0) if str(meta.get("sdk") or "0").isdigit() else 0
     _exec(
         """INSERT INTO sessions (sid, label, model, android, sdk, abi, phone, owner,
-                                first_seen, last_seen, pub_ip, battery, charging, online)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+                                first_seen, last_seen, pub_ip, battery, charging, online, kind)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,?)
            ON CONFLICT(sid) DO UPDATE SET
              last_seen=excluded.last_seen, pub_ip=excluded.pub_ip,
-             battery=excluded.battery, charging=excluded.charging, online=1,
+             battery=CASE WHEN excluded.battery > 0 THEN excluded.battery ELSE sessions.battery END,
+             charging=excluded.charging, online=1,
              label=COALESCE(NULLIF(sessions.label,''), excluded.label)""",
         (
             sid, label, str(meta.get("model") or "")[:80], str(meta.get("android") or "")[:16],
             sdk, str(meta.get("abi") or "")[:24], str(meta.get("phone") or "")[:24],
             str(meta.get("owner") or "")[:80], now, now, pub_ip,
-            _int(meta.get("battery")), _int(meta.get("charging")),
+            _int(meta.get("battery")), _int(meta.get("charging")), kind[:16],
         ),
     )
     return get_session(sid) or {}

