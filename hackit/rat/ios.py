@@ -15,7 +15,6 @@ import base64
 import os
 import plistlib
 import uuid
-from typing import Dict
 
 # 1x1-ish placeholder icon (PNG) used by the WebClip.
 ICON = base64.b64decode(

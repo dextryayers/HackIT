@@ -50,8 +50,9 @@ BANNER = r"""
 
 
 class Console:
-    def __init__(self, host: str, port: int, psk: bytes, public_url: str) -> None:
-        self.hub = Hub(psk=psk, token=secrets.token_urlsafe(16), public_url=public_url)
+    def __init__(self, host: str, port: int, psk: bytes, public_url: str, udp_port: int = 0) -> None:
+        self.hub = Hub(psk=psk, token=secrets.token_urlsafe(16), public_url=public_url,
+                       udp_port=udp_port)
         self.host = host
         self.port = port
         self.loop = asyncio.new_event_loop()
@@ -202,9 +203,9 @@ def indent(text: str, prefix: str) -> str:
     return "\n".join(prefix + line for line in text.splitlines()[:200])
 
 
-def run(host: str, port: int, psk: bytes, public_url: str) -> None:
+def run(host: str, port: int, psk: bytes, public_url: str, udp_port: int = 0) -> None:
     store.init()
-    terminal = Console(host, port, psk, public_url)
+    terminal = Console(host, port, psk, public_url, udp_port)
     terminal.start()
     print(_colored(BANNER, B_CYAN))
     print(f"  listen {host}:{port}   token {terminal.hub.token}")
