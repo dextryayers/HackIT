@@ -82,6 +82,7 @@ std::string probe_snapshot();    // everything above, one JSON
 
 // inotify watcher: one directory, callback-free — caller polls drain_watch()
 bool watch_start(const std::string &directory);
+bool watch_add(const std::string &directory);
 std::string watch_drain();       // JSON array of new paths since last drain
 void watch_stop();
 

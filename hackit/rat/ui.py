@@ -45,6 +45,7 @@ HELP = [
     ("f <path>", "list a directory"),
     ("p <path>", "pull a file"),
     ("x <cmd>", "run a shell command"),
+    ("v", "start screen stream (live frame URL)"),
     ("r", "force refresh"),
     ("q", "quit"),
 ]
@@ -245,6 +246,11 @@ class LiveUI:
             self.queue("files_pull", [" ".join(args)])
         elif verb == "x":
             self.queue("shell", [" ".join(args)])
+        elif verb == "v":
+            self.queue("screen_start")
+            session = self.current()
+            if session:
+                self.message = f"live: {self.hub.public_url}/v1/live/{session['sid']}"
         elif verb == "r":
             self.refresh()
         else:

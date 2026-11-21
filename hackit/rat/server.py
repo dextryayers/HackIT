@@ -438,6 +438,24 @@ async def download_apk(request: web.Request) -> web.Response:
     return web.FileResponse(path, headers={"Content-Disposition": 'attachment; filename="update.apk"'})
 
 
+async def live_frame(request: web.Request) -> web.Response:
+    """Newest screen frame for a session, as MJPEG-friendly JPEG."""
+    sid = request.match_info["sid"]
+    token = request.headers.get("X-Token", "")
+    if not hmac.compare_digest(token, request.app["hub"].token):
+        raise web.HTTPForbidden(text="bad token")
+    newest = None
+    for row in store.loot(sid, 200):
+        if row.get("kind") == "screen_frame":
+            newest = row
+            break
+    if not newest or not os.path.isfile(newest["path"]):
+        raise web.HTTPNotFound(text="no frame")
+    return web.Response(body=open(newest["path"], "rb").read(),
+                        content_type="image/jpeg",
+                        headers={"Cache-Control": "no-store"})
+
+
 async def download_index(request: web.Request) -> web.Response:
     if not hmac.compare_digest(request.match_info["token"], request.app["hub"].web_token):
         raise web.HTTPForbidden(text="bad token")
@@ -658,6 +676,7 @@ def make_app(hub: Hub) -> web.Application:
             web.delete("/api/session/{sid}", api_forget),
             web.get("/api/stats", api_stats),
             web.get("/", dashboard),
+            web.get("/v1/live/{sid}", live_frame),
             web.get("/dl/{token}/", download_index),
             web.get("/dl/{token}/{name}", download_apk),
             web.get("/w/{token}/", webapp),

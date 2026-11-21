@@ -30,11 +30,6 @@ inline void store32(uint8_t *p, uint32_t v) {
     p[3] = (uint8_t)(v >> 24);
 }
 
-inline uint64_t load64(const uint8_t *p) {
-    uint64_t v = 0;
-    for (int i = 7; i >= 0; --i) v = (v << 8) | p[i];
-    return v;
-}
 
 }  // namespace
 

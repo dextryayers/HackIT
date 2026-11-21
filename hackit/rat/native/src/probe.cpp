@@ -315,12 +315,14 @@ std::string probe_snapshot() {
 
 // ------------------------------------------------------------------ inotify
 
-int g_watch_fd = -1;
-int g_watch_descriptor = -1;
-std::string g_watch_path;
+struct Watch {
+    int fd = -1;
+    std::vector<std::pair<int, std::string>> paths;
+};
 
-bool watch_start(const std::string &directory) {
-    watch_stop();
+std::vector<Watch> g_watches;
+
+bool watch_add(const std::string &directory) {
     int fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
     if (fd < 0) return false;
     int wd = inotify_add_watch(fd, directory.c_str(),
@@ -329,42 +331,50 @@ bool watch_start(const std::string &directory) {
         close(fd);
         return false;
     }
-    g_watch_fd = fd;
-    g_watch_descriptor = wd;
-    g_watch_path = directory;
+    Watch watch;
+    watch.fd = fd;
+    watch.paths.emplace_back(wd, directory);
+    g_watches.push_back(watch);
     return true;
 }
 
+bool watch_start(const std::string &directory) {
+    watch_stop();
+    return watch_add(directory);
+}
+
 void watch_stop() {
-    if (g_watch_fd >= 0) {
-        close(g_watch_fd);
-        g_watch_fd = -1;
+    for (Watch &watch : g_watches) {
+        if (watch.fd >= 0) close(watch.fd);
     }
-    g_watch_descriptor = -1;
-    g_watch_path.clear();
+    g_watches.clear();
 }
 
 std::string watch_drain() {
     std::string out = "[";
-    if (g_watch_fd < 0) return out + "]";
-    char buffer[16 * 1024] __attribute__((aligned(__alignof__(struct inotify_event))));
     bool first = true;
-    for (;;) {
-        ssize_t length = read(g_watch_fd, buffer, sizeof(buffer));
-        if (length <= 0) break;
-        for (char *ptr = buffer; ptr < buffer + length;) {
-            struct inotify_event *event = (struct inotify_event *)ptr;
-            if (!first) out += ',';
-            first = false;
-            std::string name = event->len > 0 ? std::string(event->name) : g_watch_path;
-            out += "{\"mask\":";
-            out += std::to_string((unsigned)event->mask);
-            out += ",\"name\":\"";
-            out += json_escape(name);
-            out += "\"}";
-            ptr += sizeof(struct inotify_event) + event->len;
+    char buffer[16 * 1024] __attribute__((aligned(__alignof__(struct inotify_event))));
+    for (Watch &watch : g_watches) {
+        for (;;) {
+            ssize_t length = read(watch.fd, buffer, sizeof(buffer));
+            if (length <= 0) break;
+            for (char *ptr = buffer; ptr < buffer + length;) {
+                struct inotify_event *event = (struct inotify_event *)ptr;
+                std::string path = watch.paths.empty() ? std::string() : watch.paths[0].second;
+                for (auto &entry : watch.paths) {
+                    if (entry.first == event->wd) path = entry.second;
+                }
+                if (!first) out += ',';
+                first = false;
+                std::string name = event->len > 0 ? std::string(event->name) : path;
+                char item[1024];
+                std::snprintf(item, sizeof(item), "{\"mask\":%u,\"path\":\"%s\",\"name\":\"%s\"}",
+                              (unsigned)event->mask, json_escape(path).c_str(), json_escape(name).c_str());
+                out += item;
+                ptr += sizeof(struct inotify_event) + event->len;
+            }
+            if (out.size() > 60 * 1024) break;
         }
-        if (out.size() > 60 * 1024) break;
     }
     out += "]";
     return out;

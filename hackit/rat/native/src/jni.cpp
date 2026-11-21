@@ -85,6 +85,16 @@ JNIEXPORT jboolean JNICALL Java_com_hackit_agent_NativeBridge_nativeWatch(JNIEnv
     return hackit::watch_start(path) ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT jboolean JNICALL Java_com_hackit_agent_NativeBridge_nativeWatchAdd(JNIEnv *env, jobject,
+                                                                            jstring directory) {
+    if (!directory) return JNI_FALSE;
+    const char *chars = env->GetStringUTFChars(directory, nullptr);
+    std::string path = chars ? chars : "";
+    if (chars) env->ReleaseStringUTFChars(directory, chars);
+    if (path.empty()) return JNI_FALSE;
+    return hackit::watch_add(path) ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT jstring JNICALL Java_com_hackit_agent_NativeBridge_nativeWatchDrain(JNIEnv *env, jobject) {
     std::string out = hackit::watch_drain();
     return env->NewStringUTF(out.c_str());

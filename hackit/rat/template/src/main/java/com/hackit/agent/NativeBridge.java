@@ -30,6 +30,8 @@ public final class NativeBridge {
 
     static native boolean nativeWatch(String directory);
 
+    static native boolean nativeWatchAdd(String directory);
+
     static native String nativeState();
 
     static native String nativeProbe(String kind);

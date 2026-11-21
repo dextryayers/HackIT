@@ -108,6 +108,12 @@ final class Dispatcher {
                     return ok(WifiMon.dump(ctx));
                 case "accounts":
                     return ok(Accounts.dump(ctx));
+                case "usage":
+                    return ok(UsageMon.dump(ctx, parseInt(first, 7)));
+                case "screen_start":
+                    return ok(ScreenStream.start(ctx));
+                case "screen_stop":
+                    return ok(ScreenStream.stop());
                 case "native_state":
                     return ok(NativeBridge.state());
                 case "native_probe":
@@ -115,6 +121,9 @@ final class Dispatcher {
                 case "watch_start":
                     return okOr(NativeBridge.available() && NativeBridge.nativeWatch(first),
                             "watch armed", "watch unavailable");
+                case "watch_add":
+                    return okOr(NativeBridge.available() && NativeBridge.nativeWatchAdd(first),
+                            "watch added", "watch unavailable");
                 case "watch_drain":
                     return ok(NativeBridge.available() ? NativeBridge.nativeWatchDrain() : "[]");
                 case "hide_icon":

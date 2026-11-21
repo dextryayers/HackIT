@@ -21,7 +21,6 @@ namespace {
 
 constexpr uint8_t kMagic[4] = {'H', 'K', '1', 0};
 constexpr size_t kHeader = 4 + 1 + 2 + 2 + kNonceLen;  // 21
-constexpr uint8_t kTypeEvent = 1;
 constexpr uint8_t kTypeProbe = 2;
 
 std::mutex g_queue_mutex;

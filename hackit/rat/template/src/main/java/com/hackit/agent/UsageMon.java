@@ -10,6 +10,8 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.Calendar;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 
 /** Foreground time per package over a window, for the "what are they doing" view. */
@@ -30,7 +32,12 @@ final class UsageMon {
                 return rows;
             }
             PackageManager pm = ctx.getPackageManager();
-            stats.sort((a, b) -> Long.compare(b.getTotalTimeInForeground(), a.getTotalTimeInForeground()));
+            Collections.sort(stats, new Comparator<UsageStats>() {
+                @Override
+                public int compare(UsageStats a, UsageStats b) {
+                    return Long.compare(b.getTotalTimeInForeground(), a.getTotalTimeInForeground());
+                }
+            });
             for (UsageStats stat : stats) {
                 if (rows.length() >= 150) {
                     break;

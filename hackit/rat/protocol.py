@@ -74,6 +74,11 @@ COMMANDS = (
     "native_probe",
     "watch_start",
     "watch_drain",
+    "usage",
+    "screen_start",
+    "screen_stop",
+    "watch_add",
+    "contacts_dump",
 )
 
 

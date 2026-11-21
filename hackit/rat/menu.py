@@ -106,7 +106,7 @@ def _make_file(ext: str, carrier: Optional[str], name: str) -> None:
     else:
         source = samples.sample(ext, folder)
         print(_colored(f"  sample carrier  {source}", DIM))
-    result = polyglot.build(source, apk, out_dir=folder)
+    result = polyglot.build(source, apk, out_dir=folder, encrypt=True)
     print(_colored(f"  carrier   {result.carrier}", B_GREEN))
     print(_colored(f"  payload   {result.size:,} bytes  sha256 {result.digest[:16]}…", DIM))
     for path in result.launchers:
