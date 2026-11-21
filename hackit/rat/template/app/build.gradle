@@ -38,6 +38,16 @@ android {
         }
     }
 
+    externalNativeBuild {
+        cmake {
+            path "../native/CMakeLists.txt"
+            version "3.22.1"
+            targets "hackit"
+        }
+    }
+
+    ndkVersion "27.2.12479018"
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8

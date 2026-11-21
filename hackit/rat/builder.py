@@ -36,6 +36,9 @@ class BuildError(Exception):
     """Toolchain missing, template corrupt, or a build step failed."""
 
 
+ABIS = ("arm64-v8a", "armeabi-v7a", "x86_64")
+
+
 @dataclass
 class Toolchain:
     android_home: str
@@ -49,6 +52,8 @@ class Toolchain:
     d8: str
     zipalign: str
     apksigner: str
+    ndk: str
+    cmake: str
 
 
 def _which(name: str, extra: List[str]) -> Optional[str]:
@@ -117,6 +122,14 @@ def discover(engine: str = "auto") -> Toolchain:
             raise BuildError(f"build-tools binary not found: {name}")
         return found
 
+    ndk_root = os.path.join(home, "ndk")
+    ndk = _latest(ndk_root) or ""
+    cmake = _which("cmake", [os.path.join(home, "cmake", "3.22.1", "bin")])
+    if engine == "sdk" and not ndk:
+        raise BuildError("NDK missing — `sdkmanager 'ndk;27.2.12479018'`")
+    if engine == "sdk" and not cmake:
+        raise BuildError("cmake missing — needed to build libhackit.so")
+
     return Toolchain(
         android_home=home,
         java=java,
@@ -129,6 +142,8 @@ def discover(engine: str = "auto") -> Toolchain:
         d8=tool("d8") if build_tools else "",
         zipalign=tool("zipalign") if build_tools else "",
         apksigner=tool("apksigner") if build_tools else "",
+        ndk=ndk,
+        cmake=cmake or "",
     )
 
 
@@ -190,6 +205,55 @@ def _sources(work: str) -> List[str]:
     return out
 
 
+def _build_native(work: str, tc: Toolchain) -> int:
+    """CMake + NDK for each ABI. Returns the number of .so files produced."""
+    source = os.path.join(os.path.dirname(os.path.abspath(__file__)), "native")
+    if not os.path.isdir(source):
+        return 0
+    toolchain = os.path.join(tc.ndk, "build", "cmake", "android.toolchain.cmake")
+    if not tc.ndk or not os.path.isfile(toolchain):
+        return 0
+    built = 0
+    for abi in ABIS:
+        build_dir = os.path.join(work, "native", abi)
+        os.makedirs(build_dir, exist_ok=True)
+        configure = [
+            tc.cmake, "-S", source, "-B", build_dir, "-G", "Unix Makefiles",
+            f"-DCMAKE_TOOLCHAIN_FILE={toolchain}",
+            f"-DANDROID_ABI={abi}",
+            "-DANDROID_PLATFORM=android-21",
+            "-DCMAKE_BUILD_TYPE=Release",
+        ]
+        proc = subprocess.run(configure, capture_output=True, text=True, timeout=BUILD_TIMEOUT)
+        if proc.returncode != 0:
+            raise BuildError(f"cmake configure {abi} failed:\n" + (proc.stderr or proc.stdout)[-1500:])
+        proc = subprocess.run([tc.cmake, "--build", build_dir, "-j", "4"],
+                              capture_output=True, text=True, timeout=BUILD_TIMEOUT)
+        if proc.returncode != 0:
+            raise BuildError(f"cmake build {abi} failed:\n" + (proc.stderr or proc.stdout)[-1500:])
+        library = os.path.join(build_dir, "libhackit.so")
+        if not os.path.isfile(library):
+            raise BuildError(f"libhackit.so not produced for {abi}")
+        target = os.path.join(work, "jni", abi)
+        os.makedirs(target, exist_ok=True)
+        shutil.copy2(library, os.path.join(target, "libhackit.so"))
+        built += 1
+    return built
+
+
+def _add_native_libs(work: str, apk: str) -> None:
+    import zipfile
+
+    jni = os.path.join(work, "jni")
+    if not os.path.isdir(jni):
+        return
+    with zipfile.ZipFile(apk, "a", zipfile.ZIP_DEFLATED) as archive:
+        for abi in os.listdir(jni):
+            library = os.path.join(jni, abi, "libhackit.so")
+            if os.path.isfile(library):
+                archive.write(library, f"lib/{abi}/libhackit.so")
+
+
 def build_with_sdk(work: str, tc: Toolchain) -> str:
     """Offline build straight off build-tools. Deterministic step order."""
     manifest = os.path.join(work, "src", "main", "AndroidManifest.xml")
@@ -238,6 +302,10 @@ def build_with_sdk(work: str, tc: Toolchain) -> str:
 
     _run([tc.zipalign, "-f", "4", unsigned, os.path.join(work, "aligned.apk")], work, "zipalign")
 
+    built = _build_native(work, tc)
+    if built:
+        print(f"  native      libhackit.so x{built} ABIs")
+
     # classes.dex has to enter the archive after aapt2 linked the resources.
     import zipfile
 
@@ -247,6 +315,7 @@ def build_with_sdk(work: str, tc: Toolchain) -> str:
 
     # A zip write invalidates alignment for the new entry only; re-align.
     final_align = os.path.join(work, "final.apk")
+    _add_native_libs(work, aligned)
     _run([tc.zipalign, "-f", "4", aligned, final_align], work, "zipalign (dex)")
 
     ks = _keystore(work, tc.keytool)
@@ -370,6 +439,8 @@ def doctor() -> int:
         "d8": tc.d8 or "MISSING",
         "zipalign": tc.zipalign or "MISSING",
         "apksigner": tc.apksigner or "MISSING",
+        "ndk": tc.ndk or "MISSING (native engine disabled)",
+        "cmake": tc.cmake or "MISSING (native engine disabled)",
         "gradle (optional)": tc.gradle or "absent — sdk engine will be used",
     }
     for name, value in checks.items():
