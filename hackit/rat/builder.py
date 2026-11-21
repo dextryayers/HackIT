@@ -22,7 +22,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional

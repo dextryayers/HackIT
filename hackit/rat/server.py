@@ -24,7 +24,7 @@ import os
 import secrets
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from aiohttp import web
 
@@ -96,7 +96,7 @@ async def _seal_reply(hub: Hub, sid: str, body: Dict[str, Any]) -> web.Response:
     return web.json_response(env)
 
 
-def _ingest_events(hub: Hub, sid: str, body: Dict[str, Any]) -> None:
+def _ingest_events(sid: str, body: Dict[str, Any]) -> None:
     """Event batches are drained from the beacon and sorted into typed tables."""
     batch = body.get("events") or []
     if not isinstance(batch, list):
@@ -119,7 +119,6 @@ def _ingest_events(hub: Hub, sid: str, body: Dict[str, Any]) -> None:
             store.add_event(sid, kind, data)
             continue
         store.add_event(sid, kind or "misc", data)
-    _ = hub
 
 
 def _ingest_results(hub: Hub, sid: str, body: Dict[str, Any]) -> None:
@@ -142,7 +141,7 @@ def _ingest_results(hub: Hub, sid: str, body: Dict[str, Any]) -> None:
         store.complete_task(task_id, sid, output, int(result.get("code") or 0))
 
 
-def _ingest_loot(hub: Hub, sid: str, body: Dict[str, Any]) -> None:
+def _ingest_loot(sid: str, body: Dict[str, Any]) -> None:
     """Devices may announce artifacts they already uploaded by token."""
     items = body.get("loot") or []
     if not isinstance(items, list):
@@ -155,7 +154,6 @@ def _ingest_loot(hub: Hub, sid: str, body: Dict[str, Any]) -> None:
             continue
         store.add_loot(sid, str(item.get("name") or os.path.basename(path)), path,
                        int(item.get("size") or 0), str(item.get("kind") or "file"))
-    _ = hub
 
 
 async def beacon(request: web.Request) -> web.Response:
@@ -176,8 +174,8 @@ async def beacon(request: web.Request) -> web.Response:
     store.touch(sid, meta, op, peer)
 
     _ingest_results(hub, sid, body)
-    _ingest_events(hub, sid, body)
-    _ingest_loot(hub, sid, body)
+    _ingest_events(sid, body)
+    _ingest_loot(sid, body)
 
     wanted = int(body.get("wanted") or hub.max_tasks)
     tasks = store.take_tasks(sid, max(1, min(wanted, hub.max_tasks)))
@@ -188,7 +186,6 @@ async def beacon(request: web.Request) -> web.Response:
 
 async def upload(request: web.Request) -> web.Response:
     """Raw artifact body; metadata rides in headers. Token is the file name."""
-    hub: Hub = request.app["hub"]
     sid = request.match_info["sid"]
     if not store.get_session(sid):
         raise web.HTTPNotFound(text="unknown session")

@@ -15,7 +15,7 @@ import secrets
 
 import click
 
-from hackit.ui import _colored, B_CYAN, B_GREEN, B_WHITE, B_YELLOW, DIM, GREEN, RED, YELLOW
+from hackit.ui import _colored, B_CYAN, B_GREEN, DIM, GREEN, RED
 
 from . import builder, console, protocol, server, store
 

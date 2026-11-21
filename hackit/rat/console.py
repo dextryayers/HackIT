@@ -14,9 +14,7 @@ import threading
 import time
 from typing import Dict, List, Optional
 
-import click
-
-from hackit.ui import _colored, B_CYAN, B_GREEN, B_MAGENTA, B_RED, B_WHITE, B_YELLOW, DIM, GREEN, RED, YELLOW
+from hackit.ui import _colored, B_CYAN, B_GREEN, B_MAGENTA, B_WHITE, DIM, GREEN, RED, YELLOW
 
 from . import protocol, store
 from .server import Hub, make_app
@@ -324,7 +322,3 @@ def console_upload(terminal: Console, local: str, remote: str) -> Optional[str]:
     return token
 
 
-def prompt_psk(path: str) -> bytes:
-    from .server import load_psk, write_psk
-
-    return load_psk(path) if os.path.exists(path) else write_psk(path)

