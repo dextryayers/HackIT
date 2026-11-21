@@ -10,6 +10,7 @@ import android.provider.Settings;
 import android.telephony.TelephonyManager;
 import android.util.Base64;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
@@ -184,6 +185,13 @@ final class Common {
         try {
             closeable.close();
         } catch (IOException ignored) {
+        }
+    }
+
+    /** org.json's JSONArray has no clear() below API 34. */
+    static void clear(JSONArray array) {
+        while (array.length() > 0) {
+            array.remove(0);
         }
     }
 

@@ -34,7 +34,7 @@ final class Dispatcher {
             for (int i = 0; i < LOOT.length(); i++) {
                 copy.put(LOOT.opt(i));
             }
-            LOOT.clear();
+            Common.clear(LOOT);
             return copy;
         }
     }

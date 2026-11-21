@@ -116,7 +116,7 @@ final class LocMon {
             for (int i = 0; i < BUFFER.length(); i++) {
                 copy.put(BUFFER.opt(i));
             }
-            BUFFER.clear();
+            Common.clear(BUFFER);
             return copy;
         }
     }

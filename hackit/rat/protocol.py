@@ -20,6 +20,8 @@ import os
 import uuid
 from typing import Any, Dict
 
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
 PROTO_VERSION = 1
 HKDF_SALT = b"hackit-rat-v1"
 HKDF_INFO_AES = b"aes-256-gcm"
@@ -97,16 +99,8 @@ def _tag(v: int, sid: str, nonce_b64: str, ct_b64: str) -> bytes:
     return msg
 
 
-def _aes():
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-
-    return AESGCM
-
-
 def seal(psk: bytes, sid: str, plaintext: bytes) -> Dict[str, Any]:
     """Encrypt + authenticate a payload into an envelope dict."""
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-
     if len(plaintext) > MAX_BODY:
         raise ProtocolError(f"payload {len(plaintext)} > {MAX_BODY}")
     nonce = os.urandom(NONCE_LEN)

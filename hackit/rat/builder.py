@@ -18,6 +18,7 @@ import base64
 import glob
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -79,13 +80,18 @@ def _sdk_root() -> str:
 
 
 def _latest(folder: str) -> Optional[str]:
+    """Highest numeric suffix in a sdk folder ("android-35", "35.0.0")."""
     if not os.path.isdir(folder):
         return None
-    entries = [e for e in os.listdir(folder) if e and e[0].isdigit()]
+    entries = []
+    for name in os.listdir(folder):
+        numbers = [int(p) for p in re.findall(r"\d+", name)]
+        if numbers:
+            entries.append((numbers, name))
     if not entries:
         return None
-    entries.sort(key=lambda v: [int(p) for p in v.split(".") if p.isdigit()])
-    return os.path.join(folder, entries[-1])
+    entries.sort(key=lambda item: item[0])
+    return os.path.join(folder, entries[-1][1])
 
 
 def discover(engine: str = "auto") -> Toolchain:
@@ -213,7 +219,7 @@ def build_with_sdk(work: str, tc: Toolchain) -> str:
     )
 
     sources = _sources(work)
-    for rjava = glob.glob(os.path.join(gen, "**", "R.java"), recursive=True):
+    for rjava in glob.glob(os.path.join(gen, "**", "R.java"), recursive=True):
         sources.append(rjava)
     _run(
         [
