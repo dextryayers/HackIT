@@ -95,7 +95,11 @@ def inject_append(ext: str, carrier: bytes, payload: bytes) -> bytes:
         # and a corrected RIFF length; viewers skip the chunk untouched.
         # Trailer climbs inside the chunk so the RIFF file is fully described;
         # a WebP decoder skips the unknown chunk and never sees trailing junk.
-        body = START + payload + _trailer(len(START) + len(payload))
+        trailer = _trailer(len(START) + len(payload))
+        prefix = b""
+        if (len(START) + len(payload) + len(trailer)) % 2:
+            prefix = b"\x00"  # RIFF pads odd chunks; the pad leads so the trailer stays last
+        body = prefix + START + payload + trailer
         chunk = b"JUNK" + struct.pack("<I", len(body)) + body
         out = bytearray(carrier)
         out += chunk
