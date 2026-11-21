@@ -713,6 +713,8 @@ from hackit.bruteforcer import bruter as bruter_cmd
 cli.add_command(bruter_cmd, name='bruter')
 from hackit.malware import malware as malware_cmd
 cli.add_command(malware_cmd, name='malware')
+from hackit.rat import rat as rat_cmd
+cli.add_command(rat_cmd, name='rat')
 from hackit.analys import analys as analys_cmd
 cli.add_command(analys_cmd, name='analys')
 
