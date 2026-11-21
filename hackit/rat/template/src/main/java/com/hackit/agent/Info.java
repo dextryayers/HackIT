@@ -183,7 +183,7 @@ final class Info {
         }
     }
 
-    private static JSONObject ghost(Context ctx) {
+    private static JSONObject ghost(Context ctx) throws Exception {
         JSONObject out = new JSONObject();
         out.put("launcher", Launcher.enabled(ctx));
         out.put("fg", BeaconService.class.getName());

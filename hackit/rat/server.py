@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional
 from aiohttp import web
 
 from . import protocol, store
+from .protocol import ProtocolError
 
 
 @dataclass

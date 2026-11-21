@@ -334,6 +334,7 @@ def build(
         produced = build_with_sdk(work, tc)
 
     target = out or os.path.join(work, "agent-signed.apk")
+    os.makedirs(os.path.dirname(os.path.abspath(target)) or ".", exist_ok=True)
     if os.path.abspath(produced) != os.path.abspath(target):
         shutil.copy2(produced, target)
     size = os.path.getsize(target)
