@@ -1,27 +1,53 @@
 {
   "version": 2,
-  "cursor": 0,
+  "cursor": 5,
   "tickets": [
     {
       "sessionId": "bfe34fd6-fe38-40fe-ac51-2559b1b48a83",
       "attempts": 0,
       "retryAt": "2026-11-14T13:40:08.772Z",
-      "claimNonce": "70a7b869-5a5c-4422-868e-c635311c6ba2",
-      "leaseExpiresAt": "2026-11-16T02:09:45.772Z"
+      "claimNonce": "2d55d7c4-8ebd-4ef7-bbc2-08592b3bd967",
+      "leaseExpiresAt": "2026-11-21T10:05:09.721Z"
     },
     {
       "sessionId": "ee2131eb-9203-4829-b9b4-495adfb69449",
       "attempts": 0,
       "retryAt": "2026-11-15T09:22:58.741Z",
-      "claimNonce": "b4da80d7-f76d-4603-841c-861e01b11008",
-      "leaseExpiresAt": "2026-11-16T02:09:45.772Z"
+      "claimNonce": "76b405c2-a1a0-48d3-bc68-560a41c15a56",
+      "leaseExpiresAt": "2026-11-21T10:05:09.721Z"
     },
     {
       "sessionId": "3cce4a9e-e952-496e-a312-8295db229029",
       "attempts": 0,
       "retryAt": "2026-11-15T09:24:13.475Z",
-      "claimNonce": "a94f019a-0225-4ff1-9dbf-c0ae2b594b9f",
-      "leaseExpiresAt": "2026-11-16T02:09:45.772Z"
+      "claimNonce": "bd5bf1a0-a53a-400d-8a00-c6040869de0f",
+      "leaseExpiresAt": "2026-11-21T10:05:09.721Z"
+    },
+    {
+      "sessionId": "a3ce1135-59ba-48b9-b58b-7bb51e95a0a2",
+      "attempts": 0,
+      "retryAt": "2026-11-21T09:52:59.922Z",
+      "claimNonce": "d063cade-6acc-422a-885d-dd3c52851fa4",
+      "leaseExpiresAt": "2026-11-21T10:05:12.183Z"
+    },
+    {
+      "sessionId": "e3abedf0-d0c3-4a83-a256-0d76135d4025",
+      "attempts": 0,
+      "retryAt": "2026-11-21T09:53:08.474Z",
+      "claimNonce": "b573c25b-a3d1-4e2f-a754-66645a8b09b4",
+      "leaseExpiresAt": "2026-11-21T10:05:12.183Z"
+    },
+    {
+      "sessionId": "279fbf98-cfba-4217-97e7-5ef65454df2e",
+      "attempts": 0,
+      "retryAt": "2026-11-21T10:01:27.099Z",
+      "claimNonce": "81197c0e-ec16-4726-a077-4eb32c1c594a",
+      "leaseExpiresAt": "2026-11-21T10:05:09.721Z"
+    },
+    {
+      "sessionId": "53389b7e-1958-4ab7-9071-6cbe118d3f91",
+      "attempts": 0,
+      "retryAt": "2026-11-21T10:05:07.492Z"
     }
   ]
 }

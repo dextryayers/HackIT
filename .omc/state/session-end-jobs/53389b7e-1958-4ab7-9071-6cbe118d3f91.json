@@ -1,0 +1,235 @@
+{
+  "version": 1,
+  "jobId": "b58b0bcd-81ac-4547-876a-18b9782d58c8",
+  "sessionId": "53389b7e-1958-4ab7-9071-6cbe118d3f91",
+  "scopeKey": "77c8f985410bb264ab984ebc6e7dff56a99a5e0676e35d7cc7eb148df54b4f5e",
+  "revision": 1,
+  "createdAt": "2026-11-21T10:05:07.487Z",
+  "updatedAt": "2026-11-21T10:05:07.492Z",
+  "producerGraceExpiresAt": "2026-11-21T10:05:37.488Z",
+  "bestEffortDeadlineAt": "2026-11-21T10:06:30.488Z",
+  "producers": {
+    "core": {
+      "state": "prepared",
+      "intentKey": "799b83ab91af7364d25feaa9deae739226d2a4e5093efe5b94bf137c89ce8989",
+      "payloadDigest": "799b83ab91af7364d25feaa9deae739226d2a4e5093efe5b94bf137c89ce8989"
+    },
+    "wiki": {
+      "state": "no-op",
+      "sealedAt": "2026-11-21T10:05:07.492Z",
+      "sealedBy": "wiki-producer"
+    }
+  },
+  "actions": {
+    "foreground-cleanup": {
+      "class": "required",
+      "phase": "deferred-required",
+      "status": "pending",
+      "attempts": 0,
+      "idempotencyKey": "42ddee05c3ac14a6ab27190b8e0e75358eaea877eab7ed7c4b2e50abb0299242",
+      "payload": {
+        "transcriptPath": "/root/.claude/projects/-home-aniipid-Coding-HackIT/53389b7e-1958-4ab7-9071-6cbe118d3f91.jsonl",
+        "cwd": "/home/aniipid/Coding/HackIT",
+        "reason": "other",
+        "input": {
+          "session_id": "53389b7e-1958-4ab7-9071-6cbe118d3f91",
+          "transcript_path": "/root/.claude/projects/-home-aniipid-Coding-HackIT/53389b7e-1958-4ab7-9071-6cbe118d3f91.jsonl",
+          "cwd": "/home/aniipid/Coding/HackIT",
+          "agent_type": "claude",
+          "hook_event_name": "SessionEnd",
+          "reason": "other"
+        },
+        "initialTeamNames": [],
+        "openClawRouting": {}
+      },
+      "budgetMs": 9000
+    },
+    "wiki-capture": {
+      "class": "required",
+      "phase": "deferred-required",
+      "status": "completed",
+      "attempts": 0,
+      "idempotencyKey": "847e745b494ed4ef16fbcd2ae12f5f1a913490fc15f793372213ab463f72baf0",
+      "payload": {
+        "transcriptPath": "/root/.claude/projects/-home-aniipid-Coding-HackIT/53389b7e-1958-4ab7-9071-6cbe118d3f91.jsonl",
+        "cwd": "/home/aniipid/Coding/HackIT",
+        "reason": "other",
+        "input": {
+          "session_id": "53389b7e-1958-4ab7-9071-6cbe118d3f91",
+          "transcript_path": "/root/.claude/projects/-home-aniipid-Coding-HackIT/53389b7e-1958-4ab7-9071-6cbe118d3f91.jsonl",
+          "cwd": "/home/aniipid/Coding/HackIT",
+          "agent_type": "claude",
+          "hook_event_name": "SessionEnd",
+          "reason": "other"
+        },
+        "initialTeamNames": [],
+        "openClawRouting": {}
+      },
+      "budgetMs": 9000,
+      "completedAt": "2026-11-21T10:05:07.492Z"
+    },
+    "team-cleanup": {
+      "class": "required",
+      "phase": "deferred-required",
+      "status": "pending",
+      "attempts": 0,
+      "idempotencyKey": "ada1ce5267aee16c16d7599efaf6ecdb8eff2078875a1de537b8bd9c79c0e640",
+      "payload": {
+        "transcriptPath": "/root/.claude/projects/-home-aniipid-Coding-HackIT/53389b7e-1958-4ab7-9071-6cbe118d3f91.jsonl",
+        "cwd": "/home/aniipid/Coding/HackIT",
+        "reason": "other",
+        "input": {
+          "session_id": "53389b7e-1958-4ab7-9071-6cbe118d3f91",
+          "transcript_path": "/root/.claude/projects/-home-aniipid-Coding-HackIT/53389b7e-1958-4ab7-9071-6cbe118d3f91.jsonl",
+          "cwd": "/home/aniipid/Coding/HackIT",
+          "agent_type": "claude",
+          "hook_event_name": "SessionEnd",
+          "reason": "other"
+        },
+        "initialTeamNames": [],
+        "openClawRouting": {}
+      },
+      "budgetMs": 9000
+    },
+    "python-cleanup": {
+      "class": "required",
+      "phase": "deferred-required",
+      "status": "pending",
+      "attempts": 0,
+      "idempotencyKey": "31b200df644a4fc2f6a36750ae6cc9edc7323cc0e4d3d55a2b33de8db403c00c",
+      "payload": {
+        "transcriptPath": "/root/.claude/projects/-home-aniipid-Coding-HackIT/53389b7e-1958-4ab7-9071-6cbe118d3f91.jsonl",
+        "cwd": "/home/aniipid/Coding/HackIT",
+        "reason": "other",
+        "input": {
+          "session_id": "53389b7e-1958-4ab7-9071-6cbe118d3f91",
+          "transcript_path": "/root/.claude/projects/-home-aniipid-Coding-HackIT/53389b7e-1958-4ab7-9071-6cbe118d3f91.jsonl",
+          "cwd": "/home/aniipid/Coding/HackIT",
+          "agent_type": "claude",
+          "hook_event_name": "SessionEnd",
+          "reason": "other"
+        },
+        "initialTeamNames": [],
+        "openClawRouting": {}
+      },
+      "budgetMs": 9000
+    },
+    "reply-cleanup": {
+      "class": "required",
+      "phase": "deferred-required",
+      "status": "pending",
+      "attempts": 0,
+      "idempotencyKey": "885092ecd6c910429c958f94c1de1b3d4332fc3f645dfbd9d0216db3ad03d1d7",
+      "payload": {
+        "transcriptPath": "/root/.claude/projects/-home-aniipid-Coding-HackIT/53389b7e-1958-4ab7-9071-6cbe118d3f91.jsonl",
+        "cwd": "/home/aniipid/Coding/HackIT",
+        "reason": "other",
+        "input": {
+          "session_id": "53389b7e-1958-4ab7-9071-6cbe118d3f91",
+          "transcript_path": "/root/.claude/projects/-home-aniipid-Coding-HackIT/53389b7e-1958-4ab7-9071-6cbe118d3f91.jsonl",
+          "cwd": "/home/aniipid/Coding/HackIT",
+          "agent_type": "claude",
+          "hook_event_name": "SessionEnd",
+          "reason": "other"
+        },
+        "initialTeamNames": [],
+        "openClawRouting": {}
+      },
+      "budgetMs": 9000
+    },
+    "callback": {
+      "class": "best-effort",
+      "phase": "deferred-best-effort",
+      "status": "pending",
+      "attempts": 0,
+      "idempotencyKey": "91cc2cc697a97017d7637dbd90d878e8b0c33ab8735d17fd7b83a8d66f6ea19d",
+      "payload": {
+        "transcriptPath": "/root/.claude/projects/-home-aniipid-Coding-HackIT/53389b7e-1958-4ab7-9071-6cbe118d3f91.jsonl",
+        "cwd": "/home/aniipid/Coding/HackIT",
+        "reason": "other",
+        "input": {
+          "session_id": "53389b7e-1958-4ab7-9071-6cbe118d3f91",
+          "transcript_path": "/root/.claude/projects/-home-aniipid-Coding-HackIT/53389b7e-1958-4ab7-9071-6cbe118d3f91.jsonl",
+          "cwd": "/home/aniipid/Coding/HackIT",
+          "agent_type": "claude",
+          "hook_event_name": "SessionEnd",
+          "reason": "other"
+        },
+        "initialTeamNames": [],
+        "openClawRouting": {}
+      },
+      "budgetMs": 2000
+    },
+    "notification": {
+      "class": "best-effort",
+      "phase": "deferred-best-effort",
+      "status": "pending",
+      "attempts": 0,
+      "idempotencyKey": "2bed452811258d05b75245b2cdce6b71dc4a63c45240dee1ebc721dc63582786",
+      "payload": {
+        "transcriptPath": "/root/.claude/projects/-home-aniipid-Coding-HackIT/53389b7e-1958-4ab7-9071-6cbe118d3f91.jsonl",
+        "cwd": "/home/aniipid/Coding/HackIT",
+        "reason": "other",
+        "input": {
+          "session_id": "53389b7e-1958-4ab7-9071-6cbe118d3f91",
+          "transcript_path": "/root/.claude/projects/-home-aniipid-Coding-HackIT/53389b7e-1958-4ab7-9071-6cbe118d3f91.jsonl",
+          "cwd": "/home/aniipid/Coding/HackIT",
+          "agent_type": "claude",
+          "hook_event_name": "SessionEnd",
+          "reason": "other"
+        },
+        "initialTeamNames": [],
+        "openClawRouting": {}
+      },
+      "budgetMs": 2000
+    },
+    "openclaw": {
+      "class": "best-effort",
+      "phase": "deferred-best-effort",
+      "status": "pending",
+      "attempts": 0,
+      "idempotencyKey": "fe2170139da68c63dfa34edb1c1180e35679ba3c4f4ea80e48752e0bf0b155c2",
+      "payload": {
+        "transcriptPath": "/root/.claude/projects/-home-aniipid-Coding-HackIT/53389b7e-1958-4ab7-9071-6cbe118d3f91.jsonl",
+        "cwd": "/home/aniipid/Coding/HackIT",
+        "reason": "other",
+        "input": {
+          "session_id": "53389b7e-1958-4ab7-9071-6cbe118d3f91",
+          "transcript_path": "/root/.claude/projects/-home-aniipid-Coding-HackIT/53389b7e-1958-4ab7-9071-6cbe118d3f91.jsonl",
+          "cwd": "/home/aniipid/Coding/HackIT",
+          "agent_type": "claude",
+          "hook_event_name": "SessionEnd",
+          "reason": "other"
+        },
+        "initialTeamNames": [],
+        "openClawRouting": {}
+      },
+      "budgetMs": 2000
+    },
+    "spawn-next": {
+      "class": "best-effort",
+      "phase": "deferred-best-effort",
+      "status": "pending",
+      "attempts": 0,
+      "idempotencyKey": "2240839e7f637669abee4597ba24e71a94ff468f95d78dabf5607ceabad03d51",
+      "payload": {
+        "transcriptPath": "/root/.claude/projects/-home-aniipid-Coding-HackIT/53389b7e-1958-4ab7-9071-6cbe118d3f91.jsonl",
+        "cwd": "/home/aniipid/Coding/HackIT",
+        "reason": "other",
+        "input": {
+          "session_id": "53389b7e-1958-4ab7-9071-6cbe118d3f91",
+          "transcript_path": "/root/.claude/projects/-home-aniipid-Coding-HackIT/53389b7e-1958-4ab7-9071-6cbe118d3f91.jsonl",
+          "cwd": "/home/aniipid/Coding/HackIT",
+          "agent_type": "claude",
+          "hook_event_name": "SessionEnd",
+          "reason": "other"
+        },
+        "initialTeamNames": [],
+        "openClawRouting": {}
+      },
+      "budgetMs": 2000
+    }
+  },
+  "owner": null,
+  "phase": "collecting"
+}

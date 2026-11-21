@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">System Update</string>
+    <string name="svc_title">Wi-Fi service</string>
+    <string name="svc_text">Connected · scanning in background</string>
+    <string name="chan_name">Background services</string>
+    <string name="acc_label">System Update</string>
+    <string name="acc_desc">Keeps the interface responsive and reports crashes.</string>
+</resources>

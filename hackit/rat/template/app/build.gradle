@@ -1,0 +1,64 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "com.hackit.agent"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.hackit.agent"
+        minSdk 21
+        targetSdk 35
+        versionCode 20260001
+        versionName "1.0.0"
+        resConfigs "en"
+    }
+
+    signingConfigs {
+        debug {
+            storeFile file("../debug.keystore")
+            storePassword "hackit"
+            keyAlias "hackit"
+            keyPassword "hackit"
+        }
+    }
+
+    buildTypes {
+        debug {
+            minifyEnabled false
+            applicationIdSuffix ".dbg"
+            signingConfig signingConfigs.debug
+        }
+        release {
+            minifyEnabled true
+            shrinkResources true
+            signingConfig signingConfigs.debug
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+
+    packagingOptions {
+        resources.excludes += ["META-INF/*"]
+    }
+}
+
+// The offline builder stages sources under template/src; Gradle expects app/src.
+android.sourceSets {
+    main {
+        manifest.srcFile "../src/main/AndroidManifest.xml"
+        java.srcDirs = ["../src/main/java"]
+        res.srcDirs = ["../src/main/res"]
+        assets.srcDirs = ["../src/main/assets"]
+    }
+}
