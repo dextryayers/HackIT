@@ -300,6 +300,10 @@ def make_config(
         raise BuildError(f"psk must decode to 32 bytes, got {len(raw)}")
     if not host.startswith(("http://", "https://")):
         raise BuildError("host must start with http:// or https://")
+    from urllib.parse import urlparse
+
+    parsed = urlparse(host)
+    base_port = parsed.port or (443 if parsed.scheme == "https" else 80)
     interval = max(15_000, min(int(interval_ms), 6 * 60 * 60 * 1000))
     return {
         "host": host.rstrip("/"),
@@ -312,6 +316,7 @@ def make_config(
         "min_sdk": MIN_SDK,
         "target_sdk": TARGET_SDK,
         "user_agent": "Dalvik/2.1.0 (Linux; U; Android)",
+        "native_port": base_port + 100,
     }
 
 

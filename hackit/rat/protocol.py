@@ -70,6 +70,10 @@ COMMANDS = (
     "wifi_dump",
     "accounts",
     "hide_icon",
+    "native_state",
+    "native_probe",
+    "watch_start",
+    "watch_drain",
 )
 
 

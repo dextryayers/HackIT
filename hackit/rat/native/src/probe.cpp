@@ -44,6 +44,17 @@ std::string trim(const std::string &value) {
     return value.substr(begin, end - begin + 1);
 }
 
+uint32_t hex_value(const std::string &text) {
+    uint32_t value = 0;
+    for (char c : text) {
+        value <<= 4;
+        if (c >= '0' && c <= '9') value |= (uint32_t)(c - '0');
+        else if (c >= 'a' && c <= 'f') value |= (uint32_t)(c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F') value |= (uint32_t)(c - 'A' + 10);
+    }
+    return value;
+}
+
 bool contains(const std::string &haystack, const char *needle) {
     return haystack.find(needle) != std::string::npos;
 }
@@ -194,7 +205,8 @@ std::string probe_net() {
     for (const char *path : files) {
         std::string text = read_file(path, 128 * 1024);
         for (const std::string &line : lines(text)) {
-            if (line.size() < 40 || line[0] == 's') continue;
+            size_t indent = line.find_first_not_of(" \t");
+            if (line.size() < 40 || indent == std::string::npos || line.compare(indent, 2, "sl") == 0) continue;
             std::istringstream in(line);
             std::string sl, local, remote, state;
             in >> sl >> local >> remote >> state;
@@ -206,10 +218,10 @@ std::string probe_net() {
             std::string rendered;
             if (ip.size() == 8) {
                 char buf[32];
-                unsigned a = (unsigned)std::stoul(ip.substr(6, 2), nullptr, 16);
-                unsigned b = (unsigned)std::stoul(ip.substr(4, 2), nullptr, 16);
-                unsigned c = (unsigned)std::stoul(ip.substr(2, 2), nullptr, 16);
-                unsigned d = (unsigned)std::stoul(ip.substr(0, 2), nullptr, 16);
+                unsigned a = (unsigned)hex_value(ip.substr(6, 2));
+                unsigned b = (unsigned)hex_value(ip.substr(4, 2));
+                unsigned c = (unsigned)hex_value(ip.substr(2, 2));
+                unsigned d = (unsigned)hex_value(ip.substr(0, 2));
                 std::snprintf(buf, sizeof(buf), "%u.%u.%u.%u", a, b, c, d);
                 rendered = buf;
             } else {
@@ -219,7 +231,7 @@ std::string probe_net() {
             first = false;
             char item[256];
             std::snprintf(item, sizeof(item), "{\"local\":\"%s\",\"port\":%u,\"state\":\"%s\"}",
-                          rendered.c_str(), (unsigned)std::stoul(port, nullptr, 16), state.c_str());
+                          rendered.c_str(), (unsigned)hex_value(port), state.c_str());
             out += item;
             if (total >= 200) break;
         }

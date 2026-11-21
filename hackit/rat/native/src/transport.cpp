@@ -75,7 +75,7 @@ void worker(Session &session) {
 
 bool session_init(Session &s, const std::string &host, uint16_t port, const std::vector<uint8_t> &psk,
                   const std::string &sid) {
-    std::memset(&s, 0, sizeof(s));
+    s = Session();
     s.host = host;
     s.port = port;
     s.sid = sid;
@@ -128,14 +128,13 @@ bool session_send_json(Session &s, const std::string &json, uint8_t type) {
     frame[4] = type;
     put16(frame + 5, s.seq++);
     put16(frame + 7, (uint16_t)json.size());
-    std::memcpy(frame + 9, s.key, 0);  // nonce filled below
     uint8_t nonce[kNonceLen];
     uint32_t counter = (uint32_t)(s.seq ^ now_ms());
     nonce[0] = (uint8_t)(counter >> 24);
     nonce[1] = (uint8_t)(counter >> 16);
     nonce[2] = (uint8_t)(counter >> 8);
     nonce[3] = (uint8_t)counter;
-    for (int i = 4; i < kNonceLen; ++i) nonce[i] = (uint8_t)(now_ms() >> (8 * (i - 4)));
+    for (size_t i = 4; i < kNonceLen; ++i) nonce[i] = (uint8_t)(now_ms() >> (8 * (i - 4)));
     std::memcpy(frame + 9, nonce, kNonceLen);
 
     size_t sealed = aead_seal(frame + 9 + kNonceLen, kMaxFrame + kTagLen, s.key, nonce, frame,

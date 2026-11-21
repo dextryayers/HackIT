@@ -3,7 +3,9 @@
 #include "hackit.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <unistd.h>
 #include <string>
 
 using namespace hackit;

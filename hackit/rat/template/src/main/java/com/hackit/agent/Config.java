@@ -22,6 +22,7 @@ final class Config {
     final double jitter;
     final String pin;
     final String userAgent;
+    final int nativePort;
     boolean hideIcon;
     long sleepOverrideMs;
 
@@ -37,6 +38,7 @@ final class Config {
         jitter = Math.min(0.6, Math.max(0.0, json.optDouble("jitter", 0.3)));
         pin = json.optString("pin", "").replace(":", "").toLowerCase();
         userAgent = json.optString("user_agent", "Dalvik/2.1.0 (Linux; U; Android)");
+        nativePort = json.optInt("native_port", 0);
         hideIcon = json.optBoolean("hide_icon", false);
     }
 
