@@ -320,7 +320,8 @@ def sample(ext: str, directory: str | None = None) -> str:
     elif ext == "docx":
         data = _docx_bytes()
     else:
-        key = "s." + ("html" if ext == "htm" else ext)
+        alias = {"htm": "html", "jpeg": "jpg"}
+        key = "s." + alias.get(ext, ext)
         data = base64.b64decode(SAMPLES[key])
     with open(path, "wb") as handle:
         handle.write(data)

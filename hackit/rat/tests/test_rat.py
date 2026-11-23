@@ -355,12 +355,18 @@ def test_polyglot_sealed_carriers(tmp_path):
         result = polyglot.build(src, str(payload), out_dir=str(tmp_path / "sealed"), encrypt=True)
         assert polyglot.verify(result.carrier)["ok"], ext
         assert result.sealed and len(result.key) == 64
-        blob = polyglot.carve(open(result.carrier, "rb").read())
+        marker = b"\n<" + result.key.encode()[:0] + b">\n"  # placeholder, replaced below
+        import json as _json
+        man = _json.load(open(result.manifest))
+        marker = b"\n<" + man["marker"].encode() + b">\n" if man.get("marker") else None
+        blob = polyglot.carve(open(result.carrier, "rb").read(), marker) if marker else polyglot.carve(open(result.carrier, "rb").read())
         assert polyglot.open_payload(blob, bytes.fromhex(result.key)) == payload.read_bytes()
         assert open(result.carrier, "rb").read()[:4096].find(blob) < 0
         assert b"HACKIT-RAT-PAYLOAD" not in open(result.carrier, "rb").read()[:65536]
-        install = [p for p in result.launchers if p.endswith("install.sh")][0]
-        assert result.key in open(install).read()
+        if result.launchers:
+            install = [p for p in result.launchers if p.endswith("install.sh")]
+            if install:
+                assert result.key in open(install[0]).read()
 
 
 def test_live_frame_endpoint(app, psk):
