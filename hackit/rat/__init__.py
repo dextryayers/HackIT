@@ -133,7 +133,7 @@ def setup() -> None:
     print(f"    unzip -q c.zip -d cmdline-tools && mv cmdline-tools/cmdline-tools cmdline-tools/latest && rm c.zip")
     print(f"    export ANDROID_HOME={sdk}")
     print(f"    yes | {sdk}/cmdline-tools/latest/bin/sdkmanager --licenses")
-    print(f"    {sdk}/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"")
+    print(f'    {sdk}/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"')
     print("")
     # cek sekarang
     found = 0

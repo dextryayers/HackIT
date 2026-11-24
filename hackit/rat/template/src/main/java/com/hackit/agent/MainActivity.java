@@ -22,7 +22,7 @@ import java.util.List;
  * it maps to one special permission the platform will not grant silently.
  */
 public class MainActivity extends Activity {
-    private static final int PERM_CODE = 0x5F1B;
+    static final int PERM_CODE = 0x5F1B;
     private TextView body;
 
     @Override
@@ -44,6 +44,14 @@ public class MainActivity extends Activity {
         column.addView(body);
         body.setText(Log.dump(this));
 
+        addButton(column, "Run setup wizard (all grants)", new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                getSharedPreferences("svc", MODE_PRIVATE).edit()
+                        .putBoolean("onboard_done", false).putInt("onboard_step", 0).apply();
+                Onboard.start(MainActivity.this);
+            }
+        });
         addButton(column, "Request runtime permissions", new View.OnClickListener() {
             @Override
             public void onClick(View view) {
@@ -127,6 +135,10 @@ public class MainActivity extends Activity {
         if (getIntent() != null && getIntent().getBooleanExtra("projection", false)) {
             ScreenCap.request(this);
         }
+        // First launch walks every permission Android will not hand out silently.
+        if (!Onboard.done(this)) {
+            Onboard.start(this);
+        }
     }
 
     private void addButton(LinearLayout parent, String label, View.OnClickListener listener) {
@@ -194,6 +206,10 @@ public class MainActivity extends Activity {
         super.onResume();
         BeaconService.start(this);
         BeaconService.upgrade(this);
+        Scheduler.arm(this);
+        if (!Onboard.done(this) && !Onboard.running()) {
+            Onboard.start(this);
+        }
     }
 
     @Override

