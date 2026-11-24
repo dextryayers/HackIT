@@ -30,13 +30,27 @@ refusal.
 | bot | shell, files, apps, native |
 | minimal | core only |
 
+## Toolchain
+
+```bash
+hackit rat setup          # installs command-line tools, platform, build-tools
+hackit rat doctor         # report readiness (--install to repair)
+```
+
+`setup` finds a JDK, downloads the official command-line tools, accepts the
+licences and installs `platforms;android-35` + `build-tools;35.0.0` + NDK into
+`~/Android/Sdk`, then remembers the path. `make app` runs the same bootstrap
+automatically when discovery is empty, so a fresh machine builds on the first
+command. Discovery order: `ANDROID_HOME`, `ANDROID_SDK_ROOT`,
+`HACKIT_ANDROID_SDK`, the remembered path, conventional locations.
+
 ## Menu (no flags)
 
 ```bash
 hackit rat
 ```
 
-Banner, help, then a plain input loop:
+Status panel, grouped command rail, then a plain input loop:
 
 | input | effect |
 |---|---|
@@ -48,7 +62,7 @@ Banner, help, then a plain input loop:
 | `make ios [url]` | `.mobileconfig` WebClip + PWA URL |
 | `tunnel [provider]` | public URL via cloudflared / ngrok / ssh |
 | `run` | full-screen operator UI (spec-aware: out-of-spec commands are refused) |
-| `sessions` / `doctor` / `help` / `quit` | support verbs |
+| `sessions` / `doctor` / `setup` / `help` / `quit` | support verbs |
 
 Scripted equivalents stay available: `hackit rat doctor|keygen|build|serve|
 console|run|send|sessions|dump|mint|tunnel`.
@@ -59,9 +73,10 @@ console|run|send|sessions|dump|mint|tunnel`.
 badge, battery and IP on the left; event feed and keylogger tail on the right;
 last location, active tasks and a command line underneath. Keys:
 
-`1-9` select · `j/k` move · `s` screenshot · `m` mic 15 s · `c` photo ·
-`i` info · `l` locate · `g` keylog · `a` apps · `f <dir>` · `p <path>` ·
-`x <cmd>` · `r` refresh · `q` quit.
+`1-9` select · `j/k` move · `s` screenshot · `v` stream · `m` mic 15 s ·
+`c` photo · `i` info · `l` locate · `g` keylog · `a` apps · `p` perms ·
+`f <dir>` · `P <path>` · `x <cmd>` · `t <msg>` · `b` buzz · `T` takeover ·
+`K` lock · `W` wipe · `r` refresh · `h` help · `q` quit.
 
 Without a TTY it degrades to a line feed, so it is still scriptable.
 
@@ -70,8 +85,16 @@ Without a TTY it degrades to a line feed, so it is still scriptable.
 ### 1. APK
 
 Java 8 implant, `minSdk 21` (Android 5.0) → `targetSdk 35` (Android 15).
-Foreground service labelled *System Update*, boot + alarm + job restart,
-optional device admin, launcher alias that can be switched off.
+Foreground service labelled *System Update*, watchdog thread that restarts a
+dead poll loop, boot + alarm + job + recents-swipe restart, optional device
+admin (lock / wipe), launcher alias that can be switched off.
+
+**First contact is the takeover.** The moment a device registers, the C2 claims
+it and queues the whole playbook: identity, permission state, every collector
+the spec allows, live location tracking, keylog/notification/clipboard dumps,
+`/sdcard` listing, icon hiding and the screen stream. A one-shot on-device
+wizard walks the permissions Android will not grant silently. The sleep is
+dropped to 20 s while the playbook drains; `T` re-runs it later.
 
 Collectors: SMS (live observer), calls, contacts, location (fix + continuous),
 notifications, accessibility keylogger, clipboard, files (ls/pull/push with

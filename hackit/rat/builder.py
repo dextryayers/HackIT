@@ -523,7 +523,7 @@ def doctor(bootstrap: bool = False) -> int:
     )
     problems = 0
     for name, value, required in checks:
-        missing = not value or value == "MISSING"
+        missing = not value or value == "MISSING" or str(value).startswith("absent")
         if missing and required:
             problems += 1
         mark = term.Good + "ok" + term.RESET if not missing else (

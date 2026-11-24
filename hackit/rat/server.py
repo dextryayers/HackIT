@@ -242,6 +242,7 @@ def udp_ingest(hub: Hub, sid: str, body: dict, peer: str) -> None:
     meta = body.get("meta") if isinstance(body.get("meta"), dict) else {}
     store.register(sid, meta, peer, kind="native")
     store.touch(sid, meta, op, peer)
+    auto_takeover(hub, sid)
     if op == "probe" or "data" in body and op != "event":
         store.add_event(sid, "probe", body.get("data") or body)
         return
@@ -305,19 +306,17 @@ async def beacon(request: web.Request) -> web.Response:
     op = str(body.get("op") or "")[:16]
     meta = body.get("meta") if isinstance(body.get("meta"), dict) else {}
 
-    fresh = False
     if op == protocol.OP_REGISTER:
-        fresh = store.get_session(sid) is None
         store.register(sid, meta, peer)
         store.add_event(sid, "register", {"peer": peer, "model": meta.get("model")})
     elif not store.get_session(sid):
         # A device that lost its DB row is re-registered transparently.
-        fresh = True
         store.register(sid, meta, peer)
         store.add_event(sid, "register", {"peer": peer, "reason": "unknown-sid"})
     store.touch(sid, meta, op, peer)
-    if fresh:
-        auto_takeover(hub, sid)
+    # Idempotent: claims once, so an upgraded device still gets its playbook on
+    # the next beacon while established sessions pay one UPDATE per poll.
+    auto_takeover(hub, sid)
 
     _ingest_results(hub, sid, body)
     _ingest_events(sid, body)

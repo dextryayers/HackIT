@@ -27,6 +27,7 @@ HELP = [
     ("poll", "show new events and task output for the selected device"),
     ("tail", "follow events until Ctrl-C"),
     ("shell <command>", "run a shell command on the device"),
+    ("lock / wipe", "lock the screen / factory reset"),
     ("lsfiles <path>", "list a directory"),
     ("pull <path>", "download a file"),
     ("push <local> <remote>", "upload a file to the device"),
@@ -301,6 +302,8 @@ def run(host: str, port: int, psk: bytes, public_url: str, udp_port: int = 0) ->
                     store.touch(sid, sleep_ms=int(args[0]))
                     terminal.hub.wake(sid)
                     print(_colored(f"  sleep {args[0]} ms", DIM))
+            elif verb in ("lock", "wipe"):
+                terminal.queue(verb)
             elif verb == "takeover":
                 sid = terminal.require()
                 if sid:

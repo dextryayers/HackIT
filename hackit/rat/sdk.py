@@ -288,12 +288,31 @@ def install(
     return root
 
 
+def missing_packages(root: str, with_ndk: bool = True) -> list[str]:
+    """Packages a build needs that this root does not have yet."""
+    missing: list[str] = []
+    if not any(os.path.isfile(os.path.join(root, "platforms", name, "android.jar"))
+               for name in _listing(os.path.join(root, "platforms"))):
+        missing.append(PLATFORM_PACKAGE)
+    if not _listing(os.path.join(root, "build-tools")):
+        missing.append(BUILD_TOOLS_PACKAGE)
+    adb = "adb.exe" if os.name == "nt" else "adb"
+    if not os.path.isfile(os.path.join(root, "platform-tools", adb)):
+        missing.append("platform-tools")
+    if with_ndk and not _listing(os.path.join(root, "ndk")):
+        missing.append(NDK_PACKAGE)
+    return missing
+
+
 def ensure(destination: Optional[str] = None, with_ndk: bool = True,
            echo: Callable[[str], None] = print) -> str:
-    """Return a usable SDK, installing one only when discovery comes up empty."""
+    """Return a complete SDK, installing only the pieces that are missing."""
     found = find()
     if found:
         os.environ.setdefault("ANDROID_HOME", found)
         os.environ.setdefault("ANDROID_SDK_ROOT", found)
-        return found
-    return install(destination, with_ndk=with_ndk, echo=echo)
+        if not missing_packages(found, with_ndk):
+            return found
+        echo(f"  repairing   {found}")
+        return install(destination=found, with_ndk=with_ndk, echo=echo)
+    return install(destination or None, with_ndk=with_ndk, echo=echo)

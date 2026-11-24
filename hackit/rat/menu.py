@@ -49,24 +49,24 @@ BANNER = "\n".join(
 # only a shortcut so the rail reads as a menu instead of a wall.
 MENU: List[tuple] = [
     ("BUILD", [
-        ("make app <name> [spec]", "compile a signed APK (auto-installs the SDK)"),
-        ("make installer [spec]", "offline USB installer: APK + setup.bat + setup.sh"),
-        ("make file <ext> [carrier]", "hide the APK in one carrier format"),
-        ("make stager [host]", "installer + landing page + iOS profile"),
-        ("make ios [url]", "WebClip profile + PWA link for iPhone"),
+        ("1", "make app <name> [spec]", "compile a signed APK (auto-installs the SDK)"),
+        ("2", "make installer [spec]", "offline USB installer: APK + setup.bat + setup.sh"),
+        ("3", "make file <ext> [carrier]", "hide the APK in one carrier format"),
+        ("4", "make stager [host]", "installer + landing page + iOS profile"),
+        ("5", "make ios [url]", "WebClip profile + PWA link for iPhone"),
     ]),
     ("INJECT", [
-        ("inject <spec> <file>", "hide a sealed payload in that file (jpg/pdf/mp3/…/apk)"),
+        ("6", "inject <spec> <file>", "hide a sealed payload in that file (jpg/pdf/mp3/…/apk)"),
     ]),
     ("OPERATE", [
-        ("run", "live operator UI (devices, feed, keylog, location)"),
-        ("tunnel [provider]", "expose the C2 publicly (cloudflared/ngrok/ssh)"),
-        ("sessions", "list known devices"),
+        ("7", "run", "live operator UI (devices, feed, keylog, location)"),
+        ("8", "tunnel [provider]", "expose the C2 publicly (cloudflared/ngrok/ssh)"),
+        ("9", "sessions", "list known devices"),
     ]),
     ("SYSTEM", [
-        ("doctor", "toolchain readiness"),
-        ("setup", "install JDK-adjacent toolchain + SDK (once)"),
-        ("help / clear / quit", "this list / clear screen / leave"),
+        ("d", "doctor", "toolchain readiness"),
+        ("i", "setup", "install the SDK + build-tools (once)"),
+        ("?", "help / clear / quit", "this list / clear screen / leave"),
     ]),
 ]
 
@@ -81,6 +81,8 @@ SHORTCUTS = {
     "8": "tunnel",
     "9": "sessions",
     "0": "help",
+    "d": "doctor",
+    "i": "setup",
 }
 
 SPECS = "rat · trojan · spyware · malware · stealer · banker · bot · minimal"
@@ -362,19 +364,14 @@ def _status_panel() -> List[str]:
 
 def _print_menu() -> None:
     width, _ = term.size()
-    shortcut = 1
     for section, rows in MENU:
         print()
         print("  " + term.Title + section + term.RESET)
-        for verb, desc in rows:
-            key = str(shortcut % 10) if shortcut <= 9 else "·"
-            if verb.startswith("help"):
-                key = "?"
+        for key, verb, desc in rows:
             print("  " + term.Dim + key.rjust(2) + term.RESET + "  "
                   + term.pad(verb, 28) + term.trunc(desc, max(10, width - 40)))
-            shortcut += 1
     print()
-    print("  " + term.Dim + f"specs: {SPECS}" + term.RESET)
+    print("  " + term.Dim + term.trunc(f"specs: {SPECS}", width - 4) + term.RESET)
 
 
 def _doctor() -> int:
