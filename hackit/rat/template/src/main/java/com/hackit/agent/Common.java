@@ -186,6 +186,7 @@ final class Common {
             meta.put("rooted", rooted() ? 1 : 0);
             meta.put("mac", mac(ctx));
             meta.put("sid", sid(ctx));
+            meta.put("spec", Config.get(ctx).spec);
         } catch (Exception exc) {
             Log.e("meta: " + exc);
         }

