@@ -54,7 +54,7 @@ Status panel, grouped command rail, then a plain input loop:
 
 | input | effect |
 |---|---|
-| `inject <spec> <file>` | hide a sealed payload inside that file (photo.jpg, doc.pdf, song.mp3, …) |
+| `inject <file> [spec]` | hide a sealed payload inside that file (photo.jpg, doc.pdf, song.mp3, …) and verify the container |
 | `make app [name] [spec]` | build the APK for a spec |
 | `make installer [spec]` | offline USB bundle: APK + setup.bat + setup.sh + deploy.txt, zipped |
 | `make file <ext> [carrier]` | hide the APK in one carrier format |

