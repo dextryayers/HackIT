@@ -240,8 +240,9 @@ def test_make_config_validation():
     config = builder.make_config("https://c2", key, "lbl", 1, True, "AA:BB")
     assert config["interval"] == 15000
     assert config["pin"] == "aabb"
-    with pytest.raises(builder.BuildError):
-        builder.make_config("c2.example", key, "x", 60000, False, "")
+    # Smart host: scheme-less hosts now resolve to the bench default port.
+    smart = builder.make_config("c2.example", key, "x", 60000, False, "")
+    assert smart["host"].startswith("http://c2.example:")
     with pytest.raises(builder.BuildError):
         builder.make_config("https://c2", base64.b64encode(b"short").decode(), "x", 60000, False, "")
 

@@ -13,7 +13,7 @@ import os
 import re
 from typing import List, Optional
 
-from hackit.ui import _colored, B_CYAN, B_GREEN, B_MAGENTA, B_WHITE, DIM, GREEN, RED
+from hackit.ui import _colored, B_CYAN, B_GREEN, B_MAGENTA, B_WHITE, DIM, GREEN
 
 from . import builder, ios, polyglot, samples, sdk, server, store, term, ui
 

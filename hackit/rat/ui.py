@@ -341,9 +341,9 @@ class LiveUI:
                 if session:
                     self.last_frame = f"{self.hub.public_url}/v1/live/{session['sid']}"
         elif key == "m":
-            self.queue("mic_rec", ["15"])
+            self.queue("mic_start")
         elif key == "c":
-            self.queue("cam_shot")
+            self.queue("cam_start")
         elif key == "i":
             self.queue("info")
         elif key == "p":

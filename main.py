@@ -12,4 +12,4 @@ if __name__ == '__main__':
     cli_entry()
 
 
-# opencode -s ses_e026e8651ffe1ymbpwTMhycOyD
+#  opencode -s ses_df4a64d27ffepXS3gZ0IIDqXcS
