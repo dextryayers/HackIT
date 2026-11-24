@@ -17,7 +17,7 @@ import click
 
 from hackit.ui import _colored, B_GREEN, DIM, GREEN, RED
 
-from . import builder, console, menu, protocol, server, store, ui
+from . import builder, console, menu, protocol, sdk, server, store, term, ui
 
 HOME = store.ROOT
 PSK_PATH = os.path.join(HOME, "psk.txt")
@@ -37,9 +37,12 @@ def rat(ctx):
 
 
 @rat.command()
-def doctor():
+@click.option("--install", is_flag=True, help="install a missing toolchain, then report")
+def doctor(install):
     """Check JDK / SDK / build-tools readiness without building."""
-    rc = builder.doctor()
+    print()
+    print("  " + term.Title + "TOOLCHAIN" + term.RESET)
+    rc = builder.doctor(bootstrap=install)
     raise SystemExit(rc)
 
 
@@ -119,39 +122,31 @@ def control(host, port, udp_port, public_url, psk_path):
 
 
 @rat.command()
-def setup() -> None:
-    """Install JDK, Android SDK, build-tools, NDK, CMake — sekali saja."""
-    import shutil, subprocess, sys
-    home = os.path.expanduser("~")
-    sdk = os.path.join(home, "Android", "Sdk")
-    print(f"  sdk root   {sdk}")
-    print("  pastikan java sudah terpasang: sudo apt-get install -y default-jdk-headless")
-    print("  atau lakukan manual:")
-    print(f"    mkdir -p {sdk}/cmdline-tools")
-    print(f"    cd {sdk}/cmdline-tools")
-    print(f"    curl -sSL -o c.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip")
-    print(f"    unzip -q c.zip -d cmdline-tools && mv cmdline-tools/cmdline-tools cmdline-tools/latest && rm c.zip")
-    print(f"    export ANDROID_HOME={sdk}")
-    print(f"    yes | {sdk}/cmdline-tools/latest/bin/sdkmanager --licenses")
-    print(f'    {sdk}/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"')
-    print("")
-    # cek sekarang
-    found = 0
-    for key in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
-        v = os.environ.get(key)
-        if v and os.path.isdir(v):
-            print(f"  {key}  {v}   OK"); found += 1
-    if found == 0:
-        print("  [i] belum ada ANDROID_HOME di environment; isi dulu baru build jalan")
-    # cek java
-    if shutil.which("java"):
-        print("  java       OK")
-    else:
-        print("  java       BELUM — sudo apt-get install -y default-jdk-headless")
-    if shutil.which("gradle"):
-        print("  gradle     OK (opsional)")
-    else:
-        print("  gradle     BELUM (opsional, sdk engine akan dipakai)")
+@click.option("--dest", default="", help="SDK root (default ~/Android/Sdk)")
+@click.option("--no-ndk", is_flag=True, help="skip the NDK (disables the native channel)")
+@click.option("--check", is_flag=True, help="report what is present, install nothing")
+def setup(dest: str, no_ndk: bool, check: bool) -> None:
+    """Install Java SDK deps: command-line tools, platform, build-tools, NDK."""
+    print()
+    print("  " + term.Title + "ANDROID TOOLCHAIN SETUP" + term.RESET)
+    found = sdk.find()
+    if check:
+        if found:
+            print("  " + term.Good + f"  [ok] {found}" + term.RESET)
+        else:
+            print("  " + term.Bad + "  [x] no Android SDK found" + term.RESET)
+        raise SystemExit(0 if found else 1)
+    if not sdk.java_bin("javac"):
+        print("  " + term.Bad + "  [x] JDK missing — install OpenJDK 17 first:" + term.RESET)
+        print("      sudo apt-get install -y openjdk-17-jdk-headless   (or brew install openjdk@17)")
+        raise SystemExit(1)
+    try:
+        root = sdk.ensure(dest or None, with_ndk=not no_ndk)
+    except sdk.SdkError as exc:
+        raise SystemExit("  " + term.Bad + f"[x] {exc}" + term.RESET)
+    print("  " + term.Good + f"[ok] toolchain ready at {root}" + term.RESET)
+    print("  " + term.Dim + "next: hackit rat keygen --host https://c2.example.com && "
+          "hackit rat build" + term.RESET)
 
 
 @rat.command()

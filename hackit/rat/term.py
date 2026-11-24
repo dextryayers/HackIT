@@ -36,6 +36,7 @@ class Style:
     muted = CSI + "2m"
     ink = CSI + "37m"
     bright = CSI + "97m"
+    white = CSI + "97m"
     good = CSI + "92m"
     warn = CSI + "93m"
     bad = CSI + "91m"
@@ -48,6 +49,7 @@ Title = Style.title
 Dim = Style.muted
 Ink = Style.ink
 Bright = Style.bright
+White = Style.white
 Good = Style.good
 Warn = Style.warn
 Bad = Style.bad
@@ -153,9 +155,9 @@ def horizontal(*panes: Sequence[str]) -> List[str]:
     out: List[str] = []
     for index in range(tallest):
         cells = []
-        for pane, width in zip(panes, widths):
+        for position, (pane, width) in enumerate(zip(panes, widths)):
             line = pane[index] if index < len(pane) else ""
-            cells.append(pad(line, width))
+            cells.append(pad(line, width) if position < len(panes) - 1 else line)
         out.append("".join(cells))
     return out
 

