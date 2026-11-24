@@ -136,7 +136,7 @@ def box(
     head = trunc(title, max(0, inner))
     top = _colored("┌", color) + " " * 0
     top += _colored(" " + head + " ", title_color)
-    top += _colored("─" * max(0, inner - vislen(head) - 1) + "┐", color)
+    top += _colored("─" * max(0, width - vislen(head) - 4) + "┐", color)
     out = [top]
     wanted = len(rows) if height is None else max(0, height)
     for index in range(wanted):

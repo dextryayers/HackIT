@@ -235,7 +235,7 @@ class LiveUI:
         self.width, self.height = term.size()
         lines = self._header()
         bottom = self.height >= 26
-        body_h = max(6, self.height - (13 if bottom else 4))
+        body_h = max(6, self.height - (15 if bottom else 6))
         if self.helping:
             rows: List[str] = []
             for group, text in HELP:
@@ -247,22 +247,23 @@ class LiveUI:
 
         if self.width >= 104:
             left = min(34, max(24, self.width // 4))
-            right = self.width - left - 1
+            right = self.width - left
             lines += term.horizontal(
                 self._devices(left, body_h),
                 self._feed(right, body_h),
             )
         else:
-            top = max(6, body_h // 3)
+            available = max(6, self.height - (17 if bottom else 8))
+            top = max(2, available // 3)
             lines += self._devices(self.width, top)
-            lines += self._feed(self.width, body_h - top)
+            lines += self._feed(self.width, available - top)
 
         lines.append(term.rule(self.width, "─", term.Dim))
         if bottom:
             half = self.width // 2
             lines += term.horizontal(
                 self._keys(half, 7),
-                self._status(self.width - half - 1, 7),
+                self._status(self.width - half, 7),
             )
         if self.flash:
             lines.append(term.Warn + " ► " + term.trunc(self.flash, self.width - 3) + term.RESET)
