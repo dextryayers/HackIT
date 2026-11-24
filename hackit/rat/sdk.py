@@ -108,6 +108,15 @@ def candidates() -> Iterator[str]:
         yield guess
 
 
+def first_root() -> Optional[str]:
+    """First existing directory any source names, complete or not."""
+    for path in candidates():
+        real = os.path.abspath(os.path.expanduser(path))
+        if os.path.isdir(real):
+            return real
+    return None
+
+
 def find() -> Optional[str]:
     seen: set[str] = set()
     for path in candidates():
@@ -307,7 +316,7 @@ def missing_packages(root: str, with_ndk: bool = True) -> list[str]:
 def ensure(destination: Optional[str] = None, with_ndk: bool = True,
            echo: Callable[[str], None] = print) -> str:
     """Return a complete SDK, installing only the pieces that are missing."""
-    found = find()
+    found = find() or first_root()
     if found:
         os.environ.setdefault("ANDROID_HOME", found)
         os.environ.setdefault("ANDROID_SDK_ROOT", found)

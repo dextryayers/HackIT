@@ -88,6 +88,7 @@ class Result:
     launchers: List[str] = field(default_factory=list)
     sealed: bool = False
     key: str = ""
+    start: bytes = b""
 
 
 # --------------------------------------------------------------------- crypto
@@ -504,7 +505,7 @@ def build(
             indent=2,
         )
     return Result(target, payload_path, offset, len(payload), sha, manifest, made,
-                  sealed=bool(key_hex), key=key_hex)
+                  sealed=bool(key_hex), key=key_hex, start=marker)
 
 
 # ------------------------------------------------------------------- verify

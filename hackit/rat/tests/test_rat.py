@@ -209,6 +209,20 @@ def test_upload_download(app, psk):
     run(scenario())
 
 
+def test_takeover_endpoint(app, psk):
+    async def scenario():
+        async with TestServer(app) as server_:
+            async with ClientSession() as http:
+                client = Client(http, str(server_.make_url("/")), psk, "sid-tk")
+                await client.beacon({"op": "register", "meta": {"spec": "rat"}})
+                store.complete_task(store.tasks("sid-tk", 200)[0]["id"], "sid-tk", "done")
+                response = await client.api("POST", "/api/takeover/sid-tk")
+                assert response.status == 200
+                assert (await response.json())["queued"] > 0
+
+    run(scenario())
+
+
 def test_unknown_session_reregisters(app, psk):
     async def scenario():
         async with TestServer(app) as server_:

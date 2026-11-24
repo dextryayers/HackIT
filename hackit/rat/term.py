@@ -24,8 +24,8 @@ RESET_ALL = RESET
 
 _ESCAPE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
-MIN_WIDTH = 60
-MIN_HEIGHT = 20
+MIN_WIDTH = 24
+MIN_HEIGHT = 12
 
 
 class Style:
@@ -57,14 +57,14 @@ Accent = Style.accent
 
 
 def size() -> tuple[int, int]:
-    """(columns, lines), clamped to a floor a box can survive."""
+    """(columns, lines) clamped only to the smallest layout that still draws."""
     cols, lines = shutil.get_terminal_size((100, 32))
     # Some CI runners report 0x0; fall back rather than build negative widths.
     if cols <= 0:
         cols = 100
     if lines <= 0:
         lines = 32
-    return max(MIN_WIDTH, min(cols, 220)), max(MIN_HEIGHT, min(lines, 80))
+    return max(MIN_WIDTH, min(cols, 240)), max(MIN_HEIGHT, min(lines, 90))
 
 
 def strip(text: str) -> str:

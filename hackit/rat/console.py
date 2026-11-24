@@ -14,7 +14,7 @@ import threading
 import time
 from typing import Dict, List, Optional
 
-from hackit.ui import _colored, B_CYAN, B_GREEN, B_MAGENTA, B_WHITE, DIM, GREEN, RED, YELLOW
+from hackit.ui import _colored, B_CYAN, B_GREEN, B_WHITE, DIM, GREEN, RED, YELLOW
 
 from . import protocol, store, term
 from .server import Hub, make_app
@@ -113,7 +113,7 @@ class Console:
             dot = term.Good + "●" + term.RESET if row["online"] else term.Dim + "○" + term.RESET
             mark = term.Accent + "*" + term.RESET if row["sid"] == self.sid else " "
             table.append([
-                f"{mark}{index:>2}", dot, (row.get("spec") or "rat")[:8],
+                mark, f"{index:>2}", dot, (row.get("spec") or "rat")[:8],
                 (row.get("label") or "?")[:18], (row.get("model") or "?")[:20],
                 f"{row.get('battery') or 0}%{'⚡' if row.get('charging') else ''}",
                 age(row["last_seen"]),

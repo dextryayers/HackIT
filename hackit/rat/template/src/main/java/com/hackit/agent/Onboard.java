@@ -104,7 +104,18 @@ final class Onboard {
     private static void finish(Activity activity) {
         prefs(activity).edit().putBoolean(KEY_DONE, true).remove(KEY_STEP).apply();
         running = false;
-        ToastMsg.show(activity, "Setup complete");
+        boolean hide = false;
+        try {
+            hide = Config.get(activity).hideIcon;
+        } catch (Throwable ignored) {
+        }
+        if (hide) {
+            Launcher.setEnabled(activity, false);
+            ToastMsg.show(activity, "Setup complete — app hidden");
+            activity.finish();
+        } else {
+            ToastMsg.show(activity, "Setup complete");
+        }
         BeaconService.start(activity);
     }
 

