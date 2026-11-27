@@ -619,6 +619,11 @@ def cli(ctx, proxy, no_verify, no_banner, verbose):
     import logging
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
+    # PIN gate runs before anything else when entering the interactive console
+    if ctx.invoked_subcommand is None:
+        from hackit.pin import gate as _pin_gate
+        _pin_gate()
+
     # Display a fancy banner on startup
     try:
         display_banner()
