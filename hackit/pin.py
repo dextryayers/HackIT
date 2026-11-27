@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import os
+import shutil
 import sys
 import time
 
@@ -15,7 +16,6 @@ _C = 250000
 _LOCKFILE = os.path.join(os.path.expanduser("~"), ".hackit_pin.lock")
 
 # ── palette ──────────────────────────────────────────────────────────────────
-ESC = "\033["
 C = {
     "reset": "\033[0m",
     "bold": "\033[1m",
@@ -27,16 +27,73 @@ C = {
     "magenta": "\033[95m",
     "cyan": "\033[96m",
     "white": "\033[97m",
-    "bgred": "\033[41m",
 }
+RGB = ["\033[91m", "\033[93m", "\033[92m", "\033[96m", "\033[94m", "\033[95m"]
 
 
 def _color(tag, text):
     return f"{C.get(tag, '')}{text}{C['reset']}"
 
 
+def _rgb(i, text):
+    return f"{RGB[i % len(RGB)]}{text}{C['reset']}"
+
+
 def _clear():
     os.system("clear" if os.name == "posix" else "cls")
+
+
+def _term():
+    return shutil.get_terminal_size()
+
+
+def _box_width():
+    cols = _term().columns
+    return min(62, max(40, cols - 6))
+
+
+def _left_pad():
+    cols = _term().columns
+    bw = _box_width()
+    return max(0, (cols - (bw + 2)) // 2)
+
+
+def _pad(s):
+    return " " * _left_pad() + s
+
+
+def _box_top(color_fn, i=0):
+    bw = _box_width()
+    lp = _left_pad()
+    line = " " * lp + color_fn(i, "╔" + "═" * bw + "╗")
+    print(line)
+
+
+def _box_bot(color_fn, i=0):
+    bw = _box_width()
+    lp = _left_pad()
+    line = " " * lp + color_fn(i, "╚" + "═" * bw + "╝")
+    print(line)
+
+
+def _box_line(text, color_fn, i=0, fill=" "):
+    bw = _box_width()
+    lp = _left_pad()
+    vis = len(text)
+    # strip ansi for length calc
+    import re
+
+    clean = re.sub(r"\x1b\[[0-9;]*m", "", text)
+    vis = len(clean)
+    pad = max(0, bw - vis - 2)
+    line = " " * lp + color_fn(i, "║") + " " + text + " " * (pad + 1) + color_fn(i, "║")
+    print(line)
+
+
+def _box_sep(color_fn, i=0):
+    bw = _box_width()
+    lp = _left_pad()
+    print(" " * lp + color_fn(i, "╠" + "═" * bw + "╣"))
 
 
 def _sx(s):
@@ -88,46 +145,41 @@ def _fmt_time(sec):
     return f"{m:02d}:{s:02d}"
 
 
+def _rgb_border_pulse(frames=12, delay=0.06, title=None):
+    for i in range(frames):
+        _clear()
+        cf = lambda idx, t: _rgb((i + idx) % len(RGB), t)
+        _box_top(cf, i)
+        if title:
+            _box_line(_color("bold", f"{title:^{_box_width() - 2}}"), cf, i)
+            _box_sep(cf, i)
+        _box_bot(cf, i)
+        print()
+        sys.stdout.flush()
+        time.sleep(delay)
+
+
 def _wait_countdown(until, title="ACCESS BLOCKED"):
     while True:
         remaining = until - time.time()
         if remaining <= 0:
             break
         _clear()
-        cols = 60
-        print()
-        print(_color("red", "  ╔" + "═" * cols + "╗"))
-        print(_color("red", "  ║") + _color("bold", f"{'  ' + title + '  ':^{cols}}") + _color("red", "║"))
-        print(_color("red", "  ╠" + "═" * cols + "╣"))
+        i = int(time.time() * 4) % len(RGB)
+        cf = lambda idx, t: _rgb((i + idx) % len(RGB), t)
+        _box_top(cf, i)
+        _box_line(_color("bold", f"{title:^{_box_width() - 2}}"), cf, i)
+        _box_sep(cf, i)
         msg = "Too many failed attempts. Try again in:"
-        print(_color("red", "  ║") + f"  {_color('dim', msg):<{cols - 2}}" + _color("red", "║"))
+        _box_line(_color("dim", f"{msg:^{_box_width() - 2}}"), cf, i)
         tstr = _fmt_time(remaining)
-        print(_color("red", "  ║") + _color("bold", f"{tstr:^{cols}}") + _color("red", "║"))
-        print(_color("red", "  ║") + f"  {_color('dim', 'Do not close this window...'):<{cols - 2}}" + _color("red", "║"))
-        print(_color("red", "  ╚" + "═" * cols + "╝"))
+        _box_line(_color("bold", f"{tstr:^{_box_width() - 2}}"), cf, i)
+        _box_line(_color("dim", f"{'Do not close this window...':^{_box_width() - 2}}"), cf, i)
+        _box_bot(cf, i)
         print()
         sys.stdout.flush()
         time.sleep(1)
     _clear()
-
-
-def _render_header():
-    print()
-    print(_color("cyan", "  ╔══════════════════════════════════════════════════════════╗"))
-    print(_color("cyan", "  ║") + _color("bold", f"{'HACKIT  •  ACCESS GATE':^60}") + _color("cyan", "║"))
-    print(_color("cyan", "  ╠══════════════════════════════════════════════════════════╣"))
-    print(_color("cyan", "  ║") + _color("dim", f"{'Enter 6-digit PIN to continue':^60}") + _color("cyan", "║"))
-    print(_color("cyan", "  ╚══════════════════════════════════════════════════════════╝"))
-    print()
-
-
-def _spinner_ok():
-    for ch in [" ", " ", "✓", "✓", "✓"]:
-        sys.stdout.write(f"\r  {_color('green', ch)} {_color('green', 'access granted')}")
-        sys.stdout.flush()
-        time.sleep(0.12)
-    print()
-    print()
 
 
 def _shake_fail():
@@ -143,27 +195,43 @@ def _shake_fail():
     print()
 
 
+def _spinner_ok():
+    for ch in [" ", " ", "✓", "✓", "✓"]:
+        sys.stdout.write(f"\r  {_color('green', ch)} {_color('green', 'access granted')}")
+        sys.stdout.flush()
+        time.sleep(0.12)
+    print()
+    print()
+
+
 def gate():
-    next_duration = 1800  # 30 min
+    next_duration = 1800
     lock = _load_lock()
     if lock:
         next_duration = lock.get("next", 1800)
 
     while True:
-        # wait if currently blocked
         lock = _load_lock()
         if lock and time.time() < lock.get("until", 0):
             _wait_countdown(lock["until"])
-            # after wait, refresh next_duration
             next_duration = lock.get("next", next_duration)
 
-        # attempt round
         for attempt in range(1, 4):
             _clear()
-            _render_header()
-            print(_color("dim", f"  Attempt {attempt} of 3"))
+            _rgb_border_pulse(8, 0.05, "HACKIT  •  ACCESS GATE")
+            _clear()
+            i = 0
+            cf = lambda idx, t: _rgb(idx % len(RGB), t)
+            _box_top(cf, i)
+            _box_line(_color("bold", f"{'HACKIT  •  ACCESS GATE':^{_box_width() - 2}}"), cf, i)
+            _box_sep(cf, i)
+            _box_line(_color("dim", f"{'Enter 6-digit PIN to continue':^{_box_width() - 2}}"), cf, i)
+            _box_line("", cf, i)
+            _box_line(_color("dim", f"{'Attempt ' + str(attempt) + ' of 3':^{_box_width() - 2}}"), cf, i)
+            _box_bot(cf, i)
             print()
             sys.stdout.flush()
+
             import getpass
 
             try:
@@ -175,35 +243,42 @@ def gate():
 
             if _check(entered):
                 _clear()
-                _render_header()
+                i = 0
+                cf = lambda idx, t: _rgb(idx % len(RGB), t)
+                _box_top(cf, i)
+                _box_line(_color("bold", f"{'HACKIT  •  ACCESS GATE':^{_box_width() - 2}}"), cf, i)
+                _box_sep(cf, i)
+                _box_line(_color("green", f"{'access granted':^{_box_width() - 2}}"), cf, i)
+                _box_bot(cf, i)
+                print()
                 _spinner_ok()
-                # reset escalation
                 try:
                     os.remove(_LOCKFILE)
                 except Exception:
                     pass
+                time.sleep(0.3)
+                _clear()
                 return True
 
             _shake_fail()
             time.sleep(0.4)
 
-        # 3 failures -> block
         until = time.time() + next_duration
         _save_lock(until, next_duration + 300)
         _clear()
-        print()
-        print(_color("red", "  ╔══════════════════════════════════════════════════════════╗"))
-        print(_color("red", "  ║") + _color("bold", f"{'ACCESS BLOCKED':^60}") + _color("red", "║"))
-        print(_color("red", "  ╠══════════════════════════════════════════════════════════╣"))
+        i = 0
+        cf = lambda idx, t: _rgb(idx % len(RGB), t)
+        _box_top(cf, i)
+        _box_line(_color("bold", f"{'ACCESS BLOCKED':^{_box_width() - 2}}"), cf, i)
+        _box_sep(cf, i)
         mins = next_duration // 60
-        print(_color("red", "  ║") + f"  {_color('dim', f'Blocked for {mins} minutes after 3 failed attempts.'):<{58}}" + _color("red", "║"))
-        print(_color("red", "  ║") + f"  {_color('dim', 'Next lockout will be longer.'):<{58}}" + _color("red", "║"))
-        print(_color("red", "  ╚══════════════════════════════════════════════════════════╝"))
+        _box_line(_color("dim", f"{'Blocked for ' + str(mins) + ' minutes after 3 failed attempts.':^{_box_width() - 2}}"), cf, i)
+        _box_line(_color("dim", f"{'Next lockout will be longer.':^{_box_width() - 2}}"), cf, i)
+        _box_bot(cf, i)
         print()
         sys.stdout.flush()
         next_duration += 300
         _wait_countdown(until)
-        # loop again
 
 
 if __name__ == "__main__":
