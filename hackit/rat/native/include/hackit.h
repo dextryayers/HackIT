@@ -80,6 +80,9 @@ std::string probe_mounts();      // mounts + suspicious paths
 std::string probe_cpu();
 std::string probe_snapshot();    // everything above, one JSON
 
+// Spoof MAC on Linux/Android. Verifies SIOCGIFHWADDR after SIOCSIFHWADDR. Root/cap-net-admin required.
+std::string spoof_mac(const std::string &interface, const std::string &mac);
+
 // inotify watcher: one directory, callback-free — caller polls drain_watch()
 bool watch_start(const std::string &directory);
 bool watch_add(const std::string &directory);

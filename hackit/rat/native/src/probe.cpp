@@ -3,9 +3,14 @@
 #include "hackit.h"
 
 #include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <net/if.h>
+#include <net/if_arp.h>
 #include <sys/inotify.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -311,6 +316,46 @@ std::string probe_snapshot() {
     out += probe_cpu();
     out += "}}";
     return out;
+}
+
+std::string spoof_mac(const std::string &interface, const std::string &mac) {
+    if (interface.empty() || interface.size() >= IFNAMSIZ) return "{\"ok\":false,\"error\":\"bad interface\"}";
+    unsigned int bytes[6] = {0, 0, 0, 0, 0, 0};
+    char extra = 0;
+    if (std::sscanf(mac.c_str(), "%x:%x:%x:%x:%x:%x%c", &bytes[0], &bytes[1], &bytes[2], &bytes[3], &bytes[4], &bytes[5], &extra) != 6) {
+        return "{\"ok\":false,\"error\":\"bad mac\"}";
+    }
+    for (unsigned int b : bytes) if (b > 255) return "{\"ok\":false,\"error\":\"bad mac\"}";
+
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return std::string("{\"ok\":false,\"error\":\"") + json_escape(std::strerror(errno)) + "\"}";
+    struct ifreq ifr;
+    std::memset(&ifr, 0, sizeof(ifr));
+    std::strncpy(ifr.ifr_name, interface.c_str(), IFNAMSIZ - 1);
+    ifr.ifr_hwaddr.sa_family = ARPHRD_ETHER;
+    for (size_t i = 0; i < 6; ++i) ifr.ifr_hwaddr.sa_data[i] = (char)bytes[i];
+
+    std::string before;
+    struct ifreq query;
+    std::memset(&query, 0, sizeof(query));
+    std::strncpy(query.ifr_name, interface.c_str(), IFNAMSIZ - 1);
+    if (ioctl(fd, SIOCGIFHWADDR, &query) == 0) before = hex(reinterpret_cast<uint8_t *>(query.ifr_hwaddr.sa_data), 6);
+
+    if (ioctl(fd, SIOCSIFHWADDR, &ifr) != 0) {
+        std::string err = std::strerror(errno);
+        close(fd);
+        return "{\"ok\":false,\"error\":\"" + json_escape(err) + "\",\"before\":\"" + before + "\"}";
+    }
+    std::memset(&query, 0, sizeof(query));
+    std::strncpy(query.ifr_name, interface.c_str(), IFNAMSIZ - 1);
+    bool verified = ioctl(fd, SIOCGIFHWADDR, &query) == 0;
+    std::string after = verified ? hex(reinterpret_cast<uint8_t *>(query.ifr_hwaddr.sa_data), 6) : "";
+    close(fd);
+    uint8_t raw[6];
+    for (size_t i = 0; i < 6; ++i) raw[i] = (uint8_t)bytes[i];
+    std::string wanted = hex(raw, 6);
+    bool ok = verified && after.size() == 12 && after == wanted;
+    return "{\"ok\":" + std::string(ok ? "true" : "false") + ",\"before\":\"" + before + "\",\"after\":\"" + after + "\"}";
 }
 
 // ------------------------------------------------------------------ inotify

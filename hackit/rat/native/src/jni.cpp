@@ -95,6 +95,19 @@ JNIEXPORT jboolean JNICALL Java_com_hackit_agent_NativeBridge_nativeWatchAdd(JNI
     return hackit::watch_add(path) ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT jstring JNICALL Java_com_hackit_agent_NativeBridge_nativeSpoofMac(JNIEnv *env, jobject,
+                                                                                 jstring interface_name,
+                                                                                 jstring mac) {
+    const char *iface_chars = interface_name ? env->GetStringUTFChars(interface_name, nullptr) : nullptr;
+    const char *mac_chars = mac ? env->GetStringUTFChars(mac, nullptr) : nullptr;
+    std::string iface = iface_chars ? iface_chars : "";
+    std::string mac_value = mac_chars ? mac_chars : "";
+    if (iface_chars) env->ReleaseStringUTFChars(interface_name, iface_chars);
+    if (mac_chars) env->ReleaseStringUTFChars(mac, mac_chars);
+    std::string out = hackit::spoof_mac(iface, mac_value);
+    return env->NewStringUTF(out.c_str());
+}
+
 JNIEXPORT jstring JNICALL Java_com_hackit_agent_NativeBridge_nativeWatchDrain(JNIEnv *env, jobject) {
     std::string out = hackit::watch_drain();
     return env->NewStringUTF(out.c_str());

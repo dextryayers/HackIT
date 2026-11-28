@@ -36,6 +36,8 @@ public final class NativeBridge {
 
     static native String nativeProbe(String kind);
 
+    static native String nativeSpoofMac(String interfaceName, String mac);
+
     static native String nativeWatchDrain();
 
     static native void nativeStop();
@@ -100,6 +102,15 @@ public final class NativeBridge {
             return nativeState();
         } catch (Throwable exc) {
             return "{\"ready\":true,\"error\":\"" + exc + "\"}";
+        }
+    }
+
+    static String spoofMac(String interfaceName, String mac) {
+        if (!ready) return "{\"ok\":false,\"error\":\"native unavailable\"}";
+        try {
+            return nativeSpoofMac(interfaceName == null ? "" : interfaceName, mac == null ? "" : mac);
+        } catch (Throwable exc) {
+            return "{\"ok\":false,\"error\":\"" + exc + "\"}";
         }
     }
 

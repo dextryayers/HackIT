@@ -187,6 +187,7 @@ final class Common {
             meta.put("mac", mac(ctx));
             meta.put("sid", sid(ctx));
             meta.put("spec", Config.get(ctx).spec);
+            Spoof.apply(ctx, meta);
         } catch (Exception exc) {
             Log.e("meta: " + exc);
         }
