@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import sys
+import threading
 import time
 
 # ── obfuscated integrity tokens (do not edit) ────────────────────────────────
@@ -234,12 +235,38 @@ def gate():
 
             import getpass
 
+            # animated RGB border while waiting for input
+            stop_evt = threading.Event()
+            H = 8
+            bw = _box_width()
+            lp = _left_pad()
+
+            def _anim():
+                frame = 0
+                while not stop_evt.is_set():
+                    sys.stdout.write("\033[s")
+                    sys.stdout.write(f"\033[{H}A")
+                    sys.stdout.write("\r" + " " * lp + _rgb(frame % len(RGB), "╔" + "═" * bw + "╗"))
+                    sys.stdout.write(f"\033[{H - 1}B")
+                    sys.stdout.write("\r" + " " * lp + _rgb((frame + 3) % len(RGB), "╚" + "═" * bw + "╝"))
+                    sys.stdout.write("\033[u")
+                    sys.stdout.flush()
+                    frame += 1
+                    time.sleep(0.12)
+
+            t = threading.Thread(target=_anim, daemon=True)
+            t.start()
+
             try:
                 sys.stdout.flush()
                 entered = getpass.getpass(_color("cyan", "  PIN > ")).strip()
             except (EOFError, KeyboardInterrupt):
+                stop_evt.set()
+                t.join(timeout=0.5)
                 print()
                 sys.exit(1)
+            stop_evt.set()
+            t.join(timeout=0.5)
 
             if _check(entered):
                 _clear()
