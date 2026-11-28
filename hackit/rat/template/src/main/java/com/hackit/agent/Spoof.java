@@ -61,7 +61,7 @@ final class Spoof {
         try {
             out.put("overrides", snapshot(ctx));
             out.put("raw", raw(ctx));
-            out.put("hardware_spoofed", NativeBridge.available());
+            out.put("native_available", NativeBridge.available());
         } catch (Exception ignored) {
         }
         return out;
